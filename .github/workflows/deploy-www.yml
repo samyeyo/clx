@@ -26,14 +26,11 @@ jobs:
           find www -name '*.html' -type f | while IFS= read -r f; do
             html-minifier-terser \
               --collapse-whitespace \
-              --remove-comments \
               --remove-redundant-attributes \
               --remove-script-type-attributes \
               --remove-style-link-type-attributes \
               --use-short-doctype \
-              --minify-css true \
-              --minify-js true \
-              -o "$f" "$f"
+              -o "$f" "$f" 2>/dev/null || true
           done
 
       - name: Deploy to GitHub Pages
