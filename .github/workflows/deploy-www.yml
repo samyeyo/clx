@@ -14,24 +14,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Install minifier
-        run: npm install -g html-minifier-terser
-
-      - name: Minify all HTML files
+      - name: Minify HTML files
         run: |
-          find www -name '*.html' -type f | while IFS= read -r f; do
-            html-minifier-terser \
-              --collapse-whitespace \
-              --remove-redundant-attributes \
-              --remove-script-type-attributes \
-              --remove-style-link-type-attributes \
-              --use-short-doctype \
-              -o "$f" "$f" 2>/dev/null || true
-          done
+          find www -name '*.html' -type f -exec python3 .github/workflows/minify_html.py {} \; 2>/dev/null || true
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
