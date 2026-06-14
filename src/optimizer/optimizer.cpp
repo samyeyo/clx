@@ -1,0 +1,1044 @@
+// ┌─────────────────────────────────────────────┐
+// │  clx — Lua to C++ Native Compiler           │
+// │  Copyright (c) 2026 Tine Samir. MIT License.│
+// ├─────────────────────────────────────────────┤
+// │  optimizer.cpp · AST Optimizer              │
+// └─────────────────────────────────────────────┘
+
+#include "optimizer.h"
+#include "../codegen/codegen.h"
+#include <algorithm>
+#include <map>
+#include <set>
+#include <unordered_set>
+
+namespace clx {
+
+//------------------ Optimizer constructor
+Optimizer::Optimizer(ASTContext& context) : ctx(&context) {}
+
+
+//------------------ get_ast_string — convert AST node to string for analysis
+static std::string get_ast_string(const ASTContext& ctx, uint32_t node_idx) {
+    if (node_idx == 0xFFFFFFFF || node_idx >= ctx.nodes.size()) return "";
+    const auto& n = ctx.nodes[node_idx];
+    if (n.type == NodeType::Identifier) return std::string(n.as.ident.name, n.as.ident.length);
+    if (n.type == NodeType::TableAccess) {
+        std::string t = get_ast_string(ctx, n.as.table_access.table);
+        std::string k = get_ast_string(ctx, n.as.table_access.key);
+        if (t.empty() || k.empty()) return "";
+        return t + "[" + k + "]";
+    }
+    if (n.type == NodeType::BinaryOp) {
+        std::string l = get_ast_string(ctx, n.as.bin_op.left);
+        std::string r = get_ast_string(ctx, n.as.bin_op.right);
+        if (l.empty() || r.empty()) return "";
+        if (n.as.bin_op.op == static_cast<int>(BinaryOp::Add)) return l + " + " + r;
+        if (n.as.bin_op.op == static_cast<int>(BinaryOp::Sub)) return l + " - " + r;
+    }
+    return "";
+}
+
+//------------------ function_returns_native — check if function always returns native number
+static bool function_returns_native(const ASTContext& ctx, uint32_t func_idx,
+                             std::string_view self_name,
+                             const std::set<std::string_view>* known_numbers) {
+    if (func_idx >= ctx.nodes.size()) return false;
+    const auto& fn = ctx.nodes[func_idx];
+    if (fn.type != NodeType::FunctionDef) return false;
+
+    std::set<std::string_view> param_numbers;
+    if (!self_name.empty() && CodeEmitter::g_func_param_native.count(self_name)) {
+        for (size_t p = 0; p < fn.as.func_def.param_count; ++p) {
+            if (p < CodeEmitter::g_func_param_native[self_name].size() && CodeEmitter::g_func_param_native[self_name][p]) {
+                uint32_t p_idx = ctx.block_statements[fn.as.func_def.first_param + p];
+                std::string_view pname(ctx.nodes[p_idx].as.ident.name, ctx.nodes[p_idx].as.ident.length);
+                param_numbers.insert(pname);
+            }
+        }
+    }
+
+    bool has_return = false;
+    bool all_returns_native = true;
+
+    auto check_block = [&](auto& self, uint32_t block_idx) -> void {
+        if (block_idx == 0xFFFFFFFF || block_idx >= ctx.nodes.size()) return;
+        const auto& block = ctx.nodes[block_idx];
+        if (block.type != NodeType::Block) return;
+
+        for (uint32_t i = 0; i < block.as.block.count; ++i) {
+            uint32_t si = ctx.block_statements[block.as.block.first_statement + i];
+            if (si >= ctx.nodes.size()) continue;
+
+            const auto& stmt = ctx.nodes[si];
+            if (stmt.type == NodeType::ReturnStatement) {
+                has_return = true;
+                if (stmt.as.return_stmt.value_count != 1) {
+                    all_returns_native = false;
+                } else {
+                    uint32_t vi = ctx.block_statements[stmt.as.return_stmt.first_value];
+                    if (!yields_number(ctx, vi, known_numbers, self_name, &param_numbers)) {
+                        all_returns_native = false;
+                    }
+                }
+            } else if (stmt.type == NodeType::IfStatement) {
+                self(self, stmt.as.if_stmt.then_block);
+                if (stmt.as.if_stmt.else_block != 0xFFFFFFFF) {
+                    if (ctx.nodes[stmt.as.if_stmt.else_block].type == NodeType::IfStatement) {
+                        uint32_t dummy_block = stmt.as.if_stmt.else_block;
+                        while (dummy_block != 0xFFFFFFFF && ctx.nodes[dummy_block].type == NodeType::IfStatement) {
+                            self(self, ctx.nodes[dummy_block].as.if_stmt.then_block);
+                            dummy_block = ctx.nodes[dummy_block].as.if_stmt.else_block;
+                        }
+                        if (dummy_block != 0xFFFFFFFF) self(self, dummy_block);
+                    } else {
+                        self(self, stmt.as.if_stmt.else_block);
+                    }
+                }
+            } else if (stmt.type == NodeType::WhileStatement) {
+                self(self, stmt.as.while_stmt.body_block);
+            } else if (stmt.type == NodeType::RepeatStatement) {
+                self(self, stmt.as.repeat_stmt.body_block);
+            } else if (stmt.type == NodeType::ForStatement) {
+                self(self, stmt.as.for_stmt.body_block);
+            } else if (stmt.type == NodeType::GenericForStatement) {
+                self(self, stmt.as.generic_for.body_block);
+            } else if (stmt.type == NodeType::DoStatement) {
+                self(self, stmt.as.do_stmt.body_block);
+            }
+        }
+    };
+
+    check_block(check_block, fn.as.func_def.body_block);
+    return has_return && all_returns_native;
+}
+
+
+//------------------ is_literal_number — check if node is a literal integer or number
+static bool is_literal_number(const ASTContext& ctx, uint32_t node_idx, double& out_d, int64_t& out_i, bool& out_is_int) {
+    if (node_idx == 0xFFFFFFFF || node_idx >= ctx.nodes.size()) return false;
+    const auto& n = ctx.nodes[node_idx];
+    if (n.type == NodeType::Integer) {
+        out_i = n.as.integer.val;
+        out_d = static_cast<double>(out_i);
+        out_is_int = true;
+        return true;
+    }
+    if (n.type == NodeType::Number) {
+        out_d = n.as.number.val;
+        out_i = static_cast<int64_t>(out_d);
+        out_is_int = false;
+        return true;
+    }
+    return false;
+}
+
+
+//------------------ Optimizer::run — main optimization entry point
+void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
+
+    CodeEmitter::g_native_numbers.clear();
+    CodeEmitter::g_string_pool.clear();
+    CodeEmitter::g_table_presize.clear();
+    CodeEmitter::g_global_constants.clear();
+    CodeEmitter::g_bce_safe_nodes.clear();
+    CodeEmitter::g_direct_callables.clear();
+    CodeEmitter::g_fast_callables.clear();
+    CodeEmitter::g_native_return_funcs.clear();
+    CodeEmitter::g_func_param_counts.clear();
+    CodeEmitter::g_func_param_native.clear();
+
+    std::set<std::string_view> known_numbers;
+    std::set<std::string_view> disqualified;
+
+    std::map<std::string, uint32_t> g_array_bounds;
+    std::map<std::string, uint32_t> g_loop_limits;
+    std::map<std::string, bool> g_loop_limit_conflicts;
+
+    CodeEmitter::g_goto_targets.clear();
+    auto resolve_labels = [&](auto& self, uint32_t n_idx, std::map<std::string_view, uint32_t> visible) -> void {
+        if (n_idx == 0xFFFFFFFF || n_idx >= ctx.nodes.size()) return;
+        const auto& n = ctx.nodes[n_idx];
+
+        if (n.type == NodeType::Block) {
+            for (uint32_t i = 0; i < n.as.block.count; ++i) {
+                uint32_t stmt_idx = ctx.block_statements[n.as.block.first_statement + i];
+                if (stmt_idx >= ctx.nodes.size()) continue;
+                if (ctx.nodes[stmt_idx].type == NodeType::LabelStatement) {
+                    uint32_t name_idx = ctx.nodes[stmt_idx].as.label_stmt.name_ident;
+                    std::string_view lname(ctx.nodes[name_idx].as.ident.name, ctx.nodes[name_idx].as.ident.length);
+                    visible[lname] = stmt_idx;
+                }
+            }
+            for (uint32_t i = 0; i < n.as.block.count; ++i) {
+                uint32_t stmt_idx = ctx.block_statements[n.as.block.first_statement + i];
+                if (stmt_idx >= ctx.nodes.size()) continue;
+                const auto& stmt = ctx.nodes[stmt_idx];
+                if (stmt.type == NodeType::GotoStatement) {
+                    uint32_t name_idx = stmt.as.goto_stmt.name_ident;
+                    std::string_view lname(ctx.nodes[name_idx].as.ident.name, ctx.nodes[name_idx].as.ident.length);
+                    if (visible.count(lname)) {
+                        CodeEmitter::g_goto_targets[stmt_idx] = visible[lname];
+                    } else {
+                        throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(stmt.line) + ": no visible label '" + std::string(lname) + "' for <goto>");
+                    }
+                } else {
+                    self(self, stmt_idx, visible);
+                }
+            }
+        } else if (n.type == NodeType::FunctionDef) {
+            std::map<std::string_view, uint32_t> empty;
+            self(self, n.as.func_def.body_block, empty);
+        } else if (n.type == NodeType::IfStatement) {
+            self(self, n.as.if_stmt.then_block, visible); self(self, n.as.if_stmt.else_block, visible);
+        } else if (n.type == NodeType::WhileStatement) { self(self, n.as.while_stmt.body_block, visible);
+        } else if (n.type == NodeType::RepeatStatement) { self(self, n.as.repeat_stmt.body_block, visible);
+        } else if (n.type == NodeType::ForStatement) { self(self, n.as.for_stmt.body_block, visible);
+        } else if (n.type == NodeType::GenericForStatement) { self(self, n.as.generic_for.body_block, visible);
+        } else if (n.type == NodeType::DoStatement) { self(self, n.as.do_stmt.body_block, visible);
+        } else if (n.type == NodeType::LocalDecl || n.type == NodeType::Assignment || n.type == NodeType::GlobalDeclStatement) {
+            uint32_t v_count = (n.type == NodeType::LocalDecl) ? n.as.local_decl.value_count :
+                ((n.type == NodeType::GlobalDeclStatement) ? n.as.global_decl.value_count : n.as.assign.value_count);
+            uint32_t first_v = (n.type == NodeType::LocalDecl) ? n.as.local_decl.first_value :
+                ((n.type == NodeType::GlobalDeclStatement) ? n.as.global_decl.first_value : n.as.assign.first_value);
+            for (uint32_t i = 0; i < v_count; ++i) self(self, ctx.block_statements[first_v + i], visible);
+        } else if (n.type == NodeType::ReturnStatement) {
+            for (uint32_t i = 0; i < n.as.return_stmt.value_count; ++i) self(self, ctx.block_statements[n.as.return_stmt.first_value + i], visible);
+        } else if (n.type == NodeType::CallExpression) {
+            self(self, n.as.call_expr.target, visible);
+            for (uint32_t i = 0; i < n.as.call_expr.arg_count; ++i) self(self, ctx.block_statements[n.as.call_expr.first_arg + i], visible);
+        } else if (n.type == NodeType::TableConstructor) {
+            for (uint32_t i = 0; i < n.as.table_cons.count; ++i) {
+                self(self, ctx.block_statements[n.as.table_cons.first_item + i * 2], visible);
+                self(self, ctx.block_statements[n.as.table_cons.first_item + i * 2 + 1], visible);
+            }
+        } else if (n.type == NodeType::BinaryOp) { self(self, n.as.bin_op.left, visible); self(self, n.as.bin_op.right, visible);
+        } else if (n.type == NodeType::UnaryOp) { self(self, n.as.unary_op.expr, visible);
+        } else if (n.type == NodeType::ParenExpression) { self(self, n.as.paren_expr.expr, visible); }
+    };
+    std::map<std::string_view, uint32_t> root_lbls;
+    resolve_labels(resolve_labels, root_node, root_lbls);
+
+    
+    CodeEmitter::g_reassigned_vars.clear();
+    std::map<std::string_view, uint32_t> var_assign_counts;
+    for (const auto& node : ctx.nodes) {
+        if (node.type == NodeType::LocalDecl || node.type == NodeType::GlobalDeclStatement || node.type == NodeType::Assignment) {
+            uint32_t t_count = (node.type == NodeType::LocalDecl) ? node.as.local_decl.ident_count :
+                (node.type == NodeType::GlobalDeclStatement ? node.as.global_decl.ident_count : node.as.assign.target_count);
+            uint32_t first_t = (node.type == NodeType::LocalDecl) ? node.as.local_decl.first_ident :
+                (node.type == NodeType::GlobalDeclStatement ? node.as.global_decl.first_ident : node.as.assign.first_target);
+            for (uint32_t i = 0; i < t_count; ++i) {
+                uint32_t t_idx = ctx.block_statements[first_t + i];
+                if (ctx.nodes[t_idx].type == NodeType::Identifier) {
+                    std::string_view name(ctx.nodes[t_idx].as.ident.name, ctx.nodes[t_idx].as.ident.length);
+                    var_assign_counts[name]++;
+                }
+            }
+        }
+    }
+    for (const auto& pair : var_assign_counts) {
+        if (pair.second > 1) CodeEmitter::g_reassigned_vars.insert(pair.first);
+    }
+
+    std::set<std::string_view> for_vars;
+    for (const auto& node : ctx.nodes) {
+        if (node.type == NodeType::ForStatement && node.as.for_stmt.var_ident < ctx.nodes.size()) {
+            const auto& vn = ctx.nodes[node.as.for_stmt.var_ident];
+            if (vn.type == NodeType::Identifier)
+                for_vars.insert(std::string_view(vn.as.ident.name, vn.as.ident.length));
+        }
+    }
+    CodeEmitter::g_constant_upvalues.clear();
+    for (const auto& node : ctx.nodes) {
+        if (node.type == NodeType::Identifier && node.as.ident.is_captured) {
+            std::string_view name(node.as.ident.name, node.as.ident.length);
+            if (CodeEmitter::g_reassigned_vars.count(name) == 0 && for_vars.count(name) == 0)
+                CodeEmitter::g_constant_upvalues.insert(name);
+        }
+    }
+
+    for (const auto& node : ctx.nodes) {
+        if (node.type == NodeType::Identifier && (node.as.ident.is_captured || node.as.ident.is_global)) {
+            disqualified.insert(std::string_view(node.as.ident.name, node.as.ident.length));
+        }
+    }
+
+    
+    if (root_node < ctx.nodes.size() && ctx.nodes[root_node].type == NodeType::Block) {
+        const ASTNode& root_block = ctx.nodes[root_node];
+        for (uint32_t i = 0; i < root_block.as.block.count; ++i) {
+            uint32_t stmt_idx = ctx.block_statements[root_block.as.block.first_statement + i];
+            const ASTNode& stmt = ctx.nodes[stmt_idx];
+
+            if (stmt.type == NodeType::GlobalDeclStatement && !stmt.as.global_decl.is_wildcard) {
+                if (stmt.as.global_decl.ident_count == 1 && stmt.as.global_decl.value_count == 1) {
+                    uint32_t id_idx = ctx.block_statements[stmt.as.global_decl.first_ident];
+                    uint32_t val_idx = ctx.block_statements[stmt.as.global_decl.first_value];
+                    double out_d; int64_t out_i; bool is_int;
+                    if (is_literal_number(ctx, val_idx, out_d, out_i, is_int)) {
+                        std::string_view name(ctx.nodes[id_idx].as.ident.name, ctx.nodes[id_idx].as.ident.length);
+                        CodeEmitter::g_global_constants[name] = out_d;
+                    }
+                }
+            } else if (stmt.type == NodeType::Assignment) {
+                if (stmt.as.assign.target_count == 1 && stmt.as.assign.value_count == 1) {
+                    uint32_t t_idx = ctx.block_statements[stmt.as.assign.first_target];
+                    uint32_t val_idx = ctx.block_statements[stmt.as.assign.first_value];
+                    if (ctx.nodes[t_idx].type == NodeType::Identifier && ctx.nodes[t_idx].as.ident.is_global) {
+                        double out_d; int64_t out_i; bool is_int;
+                        if (is_literal_number(ctx, val_idx, out_d, out_i, is_int)) {
+                            std::string_view name(ctx.nodes[t_idx].as.ident.name, ctx.nodes[t_idx].as.ident.length);
+                            CodeEmitter::g_global_constants[name] = out_d;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    
+    for (const auto& node : ctx.nodes) {
+        if (node.type == NodeType::Block) {
+            std::map<uint32_t, uint32_t> pending_tables;
+
+            for (uint32_t i = 0; i < node.as.block.count; ++i) {
+                uint32_t stmt_idx = ctx.block_statements[node.as.block.first_statement + i];
+                const ASTNode& stmt = ctx.nodes[stmt_idx];
+
+                if (stmt.type == NodeType::LocalDecl && stmt.as.local_decl.value_count == 1) {
+                    uint32_t val_idx = ctx.block_statements[stmt.as.local_decl.first_value];
+                    if (ctx.nodes[val_idx].type == NodeType::TableConstructor && ctx.nodes[val_idx].as.table_cons.count == 0) {
+                        pending_tables[ctx.block_statements[stmt.as.local_decl.first_ident]] = val_idx;
+                    }
+                } else if (stmt.type == NodeType::Assignment && stmt.as.assign.value_count == 1) {
+                    uint32_t val_idx = ctx.block_statements[stmt.as.assign.first_value];
+                    if (ctx.nodes[val_idx].type == NodeType::TableConstructor && ctx.nodes[val_idx].as.table_cons.count == 0) {
+                        pending_tables[ctx.block_statements[stmt.as.assign.first_target]] = val_idx;
+                    }
+                 } else if (stmt.type == NodeType::ForStatement) {
+                     auto has_forward_ref = [&](uint32_t expr_node, const std::vector<std::string>& pending_names) -> bool {
+                         std::vector<uint32_t> stack = {expr_node};
+                         while (!stack.empty()) {
+                             uint32_t nid = stack.back(); stack.pop_back();
+                             const auto& n = ctx.nodes[nid];
+                             if (n.type == NodeType::Identifier && !n.as.ident.is_global) {
+                                 std::string_view nm(n.as.ident.name, n.as.ident.length);
+                                 for (auto& pn : pending_names) {
+                                     if (nm == pn) return true;
+                                 }
+                                 continue;
+                             }
+                             auto push = [&](uint32_t child) { if (child != 0xFFFFFFFF && child < ctx.nodes.size()) stack.push_back(child); };
+                              switch (n.type) {
+                                  //------------------ BinaryOp — traverse binary operation operands
+                                  case NodeType::BinaryOp: push(n.as.bin_op.left); push(n.as.bin_op.right); break;
+                                  //------------------ UnaryOp — traverse unary operation expression
+                                  case NodeType::UnaryOp: push(n.as.unary_op.expr); break;
+                                  //------------------ ParenExpression — traverse parenthesized expression
+                                  case NodeType::ParenExpression: push(n.as.paren_expr.expr); break;
+                                  //------------------ CallExpression — traverse call target and arguments
+                                  case NodeType::CallExpression: { for (uint32_t i = 0; i < n.as.call_expr.arg_count; ++i) push(ctx.block_statements[n.as.call_expr.first_arg + i]); push(n.as.call_expr.target); break; }
+                                  //------------------ TableAccess — traverse table and key expressions
+                                  case NodeType::TableAccess: push(n.as.table_access.table); push(n.as.table_access.key); break;
+                                  //------------------ IntrinsicCall — traverse intrinsic call arguments
+                                  case NodeType::IntrinsicCall: { for (uint32_t i = 0; i < n.as.intrinsic_call.arg_count; ++i) push(ctx.block_statements[n.as.intrinsic_call.first_arg + i]); break; }
+                                 default: break;
+                             }
+                         }
+                         return false;
+                     };
+                     std::vector<std::string> _pending_names;
+                     for (auto& _pp : pending_tables) {
+                         _pending_names.push_back(get_ast_string(ctx, _pp.first));
+                     }
+                     for (auto& pair : pending_tables) {
+                         uint32_t table_node = pair.second;
+                         if (CodeEmitter::g_table_presize.find(table_node) == CodeEmitter::g_table_presize.end()) {
+                             if (!has_forward_ref(stmt.as.for_stmt.limit_expr, _pending_names)) {
+                                 CodeEmitter::g_table_presize[table_node] = stmt.as.for_stmt.limit_expr;
+                                 std::string t_str = get_ast_string(ctx, pair.first);
+                                 if (!t_str.empty()) g_array_bounds[t_str] = stmt.as.for_stmt.limit_expr;
+                             }
+                         }
+                     }
+                     pending_tables.clear();
+                 }
+            }
+        }
+
+        if (node.type == NodeType::ForStatement) {
+            std::string_view name(ctx.nodes[node.as.for_stmt.var_ident].as.ident.name, ctx.nodes[node.as.for_stmt.var_ident].as.ident.length);
+            known_numbers.insert(name);
+
+            std::string vname = get_ast_string(ctx, node.as.for_stmt.var_ident);
+            if (!vname.empty()) {
+                if (g_loop_limits.count(vname) && g_loop_limits[vname] != node.as.for_stmt.limit_expr) {
+                    std::string l1 = get_ast_string(ctx, g_loop_limits[vname]);
+                    std::string l2 = get_ast_string(ctx, node.as.for_stmt.limit_expr);
+                    if (l1 != l2) g_loop_limit_conflicts[vname] = true;
+                }
+                g_loop_limits[vname] = node.as.for_stmt.limit_expr;
+            }
+        }
+    }
+
+    
+    std::vector<std::pair<std::string_view, uint32_t>> func_defs;
+    for (const auto& node : ctx.nodes) {
+        if (node.type == NodeType::LocalDecl || node.type == NodeType::GlobalDeclStatement) {
+            uint32_t i_count = (node.type == NodeType::LocalDecl) ? node.as.local_decl.ident_count : node.as.global_decl.ident_count;
+            uint32_t f_ident = (node.type == NodeType::LocalDecl) ? node.as.local_decl.first_ident : node.as.global_decl.first_ident;
+            uint32_t f_value = (node.type == NodeType::LocalDecl) ? node.as.local_decl.first_value : node.as.global_decl.first_value;
+            uint32_t v_count = (node.type == NodeType::LocalDecl) ? node.as.local_decl.value_count : node.as.global_decl.value_count;
+
+            if (i_count == 1 && v_count == 1) {
+                uint32_t t_idx = ctx.block_statements[f_ident];
+                uint32_t v_idx = ctx.block_statements[f_value];
+                if (ctx.nodes[t_idx].type == NodeType::Identifier && ctx.nodes[v_idx].type == NodeType::FunctionDef) {
+                    std::string_view fname(ctx.nodes[t_idx].as.ident.name, ctx.nodes[t_idx].as.ident.length);
+                    if (CodeEmitter::g_reassigned_vars.count(fname) == 0) {
+                        CodeEmitter::g_func_param_counts[fname] = ctx.nodes[v_idx].as.func_def.param_count;
+                        CodeEmitter::g_func_param_native[fname] = std::vector<bool>(ctx.nodes[v_idx].as.func_def.param_count, true);
+                        func_defs.push_back({fname, v_idx});
+                    }
+                }
+            }
+        } else if (node.type == NodeType::Assignment) {
+            if (node.as.assign.target_count == 1 && node.as.assign.value_count == 1) {
+                uint32_t t_idx = ctx.block_statements[node.as.assign.first_target];
+                uint32_t v_idx = ctx.block_statements[node.as.assign.first_value];
+                if (ctx.nodes[t_idx].type == NodeType::Identifier && ctx.nodes[v_idx].type == NodeType::FunctionDef) {
+                    std::string_view fname(ctx.nodes[t_idx].as.ident.name, ctx.nodes[t_idx].as.ident.length);
+                    if (CodeEmitter::g_reassigned_vars.count(fname) == 0) {
+                        CodeEmitter::g_func_param_counts[fname] = ctx.nodes[v_idx].as.func_def.param_count;
+                        CodeEmitter::g_func_param_native[fname] = std::vector<bool>(ctx.nodes[v_idx].as.func_def.param_count, true);
+                        func_defs.push_back({fname, v_idx});
+                    }
+                }
+            }
+        }
+    }
+
+    auto traverse_node = [&](auto& self, uint32_t node_idx, auto& cb) -> void {
+        if (node_idx == 0xFFFFFFFF || node_idx >= ctx.nodes.size()) return;
+        cb(node_idx);
+        const auto& n = ctx.nodes[node_idx];
+        if (n.type == NodeType::Block) {
+            for (uint32_t i = 0; i < n.as.block.count; ++i) self(self, ctx.block_statements[n.as.block.first_statement + i], cb);
+        } else if (n.type == NodeType::LocalDecl || n.type == NodeType::GlobalDeclStatement || n.type == NodeType::Assignment) {
+            uint32_t v_count = (n.type == NodeType::LocalDecl) ? n.as.local_decl.value_count :
+                ((n.type == NodeType::GlobalDeclStatement) ? n.as.global_decl.value_count : n.as.assign.value_count);
+            uint32_t f_value = (n.type == NodeType::LocalDecl) ? n.as.local_decl.first_value :
+                ((n.type == NodeType::GlobalDeclStatement) ? n.as.global_decl.first_value : n.as.assign.first_value);
+            for (uint32_t i = 0; i < v_count; ++i) self(self, ctx.block_statements[f_value + i], cb);
+        } else if (n.type == NodeType::BinaryOp) {
+            self(self, n.as.bin_op.left, cb); self(self, n.as.bin_op.right, cb);
+        } else if (n.type == NodeType::UnaryOp) {
+            self(self, n.as.unary_op.expr, cb);
+        } else if (n.type == NodeType::CallExpression) {
+            self(self, n.as.call_expr.target, cb);
+            for (uint32_t i = 0; i < n.as.call_expr.arg_count; ++i) self(self, ctx.block_statements[n.as.call_expr.first_arg + i], cb);
+        } else if (n.type == NodeType::IfStatement) {
+            self(self, n.as.if_stmt.condition, cb); self(self, n.as.if_stmt.then_block, cb); self(self, n.as.if_stmt.else_block, cb);
+        } else if (n.type == NodeType::WhileStatement) {
+            self(self, n.as.while_stmt.condition, cb); self(self, n.as.while_stmt.body_block, cb);
+        } else if (n.type == NodeType::RepeatStatement) {
+            self(self, n.as.repeat_stmt.body_block, cb); self(self, n.as.repeat_stmt.condition, cb);
+        } else if (n.type == NodeType::ForStatement) {
+            self(self, n.as.for_stmt.start_expr, cb); self(self, n.as.for_stmt.limit_expr, cb);
+            self(self, n.as.for_stmt.step_expr, cb); self(self, n.as.for_stmt.body_block, cb);
+        } else if (n.type == NodeType::GenericForStatement) {
+            for (uint32_t i = 0; i < n.as.generic_for.iter_count; ++i)
+                self(self, ctx.block_statements[n.as.generic_for.first_iter + i], cb);
+            self(self, n.as.generic_for.body_block, cb);
+        } else if (n.type == NodeType::DoStatement) {
+            self(self, n.as.do_stmt.body_block, cb);
+        } else if (n.type == NodeType::TableConstructor) {
+            for (uint32_t i = 0; i < n.as.table_cons.count; ++i) {
+                self(self, ctx.block_statements[n.as.table_cons.first_item + i * 2], cb);
+                self(self, ctx.block_statements[n.as.table_cons.first_item + i * 2 + 1], cb);
+            }
+        } else if (n.type == NodeType::TableAccess) {
+            self(self, n.as.table_access.table, cb); self(self, n.as.table_access.key, cb);
+        } else if (n.type == NodeType::ReturnStatement) {
+            for (uint32_t i = 0; i < n.as.return_stmt.value_count; ++i)
+                self(self, ctx.block_statements[n.as.return_stmt.first_value + i], cb);
+        } else if (n.type == NodeType::FunctionDef) {
+            self(self, n.as.func_def.body_block, cb);
+        } else if (n.type == NodeType::ParenExpression) {
+            self(self, n.as.paren_expr.expr, cb);
+        }
+    };
+
+    std::map<uint32_t, std::string_view> call_to_func;
+    for (const auto& fdef : func_defs) {
+        auto cb = [&](uint32_t idx) {
+            if (ctx.nodes[idx].type == NodeType::CallExpression) call_to_func[idx] = fdef.first;
+        };
+        traverse_node(traverse_node, ctx.nodes[fdef.second].as.func_def.body_block, cb);
+    }
+
+    std::set<std::string_view> escaped_funcs;
+    for (uint32_t i = 0; i < ctx.nodes.size(); ++i) {
+        const auto& n = ctx.nodes[i];
+
+        auto check_escape = [&](uint32_t idx) {
+            while (idx != 0xFFFFFFFF && idx < ctx.nodes.size() && ctx.nodes[idx].type == NodeType::ParenExpression) {
+                idx = ctx.nodes[idx].as.paren_expr.expr;
+            }
+            if (idx != 0xFFFFFFFF && idx < ctx.nodes.size() && ctx.nodes[idx].type == NodeType::Identifier) {
+                escaped_funcs.insert(std::string_view(ctx.nodes[idx].as.ident.name, ctx.nodes[idx].as.ident.length));
+            }
+        };
+
+        if (n.type == NodeType::CallExpression) {
+            for (uint32_t a = 0; a < n.as.call_expr.arg_count; ++a) check_escape(ctx.block_statements[n.as.call_expr.first_arg + a]);
+        } else if (n.type == NodeType::ReturnStatement) {
+            for (uint32_t a = 0; a < n.as.return_stmt.value_count; ++a) check_escape(ctx.block_statements[n.as.return_stmt.first_value + a]);
+        } else if (n.type == NodeType::TableConstructor) {
+            for (uint32_t a = 0; a < n.as.table_cons.count; ++a) check_escape(ctx.block_statements[n.as.table_cons.first_item + a * 2 + 1]);
+        } else if (n.type == NodeType::Assignment) {
+            for (uint32_t a = 0; a < n.as.assign.value_count; ++a) check_escape(ctx.block_statements[n.as.assign.first_value + a]);
+        } else if (n.type == NodeType::LocalDecl) {
+            for (uint32_t a = 0; a < n.as.local_decl.value_count; ++a) check_escape(ctx.block_statements[n.as.local_decl.first_value + a]);
+        } else if (n.type == NodeType::GenericForStatement) {
+            for (uint32_t i = 0; i < n.as.generic_for.iter_count; ++i)
+                check_escape(ctx.block_statements[n.as.generic_for.first_iter + i]);
+        } else if (n.type == NodeType::TableAccess) {
+            check_escape(n.as.table_access.key);
+        } else if (n.type == NodeType::BinaryOp) {
+            check_escape(n.as.bin_op.left);
+            check_escape(n.as.bin_op.right);
+        } else if (n.type == NodeType::UnaryOp) {
+            check_escape(n.as.unary_op.expr);
+        }
+    }
+
+    for (auto fname : escaped_funcs) {
+        if (CodeEmitter::g_func_param_native.count(fname)) {
+            for (size_t p = 0; p < CodeEmitter::g_func_param_native[fname].size(); ++p) {
+                CodeEmitter::g_func_param_native[fname][p] = false;
+            }
+        }
+    }
+
+    for (auto fname : escaped_funcs) {
+        for (const auto& fdef : func_defs) {
+            if (fdef.first == fname) {
+                uint32_t f_idx = fdef.second;
+                const auto& fn = ctx.nodes[f_idx];
+                for (size_t p = 0; p < fn.as.func_def.param_count; ++p) {
+                    uint32_t p_idx = ctx.block_statements[fn.as.func_def.first_param + p];
+                    std::string_view pname(ctx.nodes[p_idx].as.ident.name, ctx.nodes[p_idx].as.ident.length);
+                    disqualified.insert(pname);
+                    known_numbers.erase(pname);
+                }
+            }
+        }
+    }
+
+    
+    bool changed;
+    int safety_limit = 100;
+    do {
+        changed = false;
+        if (--safety_limit <= 0) break;
+
+        for (const auto& node : ctx.nodes) {
+            if (node.type == NodeType::LocalDecl || node.type == NodeType::GlobalDeclStatement) {
+                if (node.type == NodeType::GlobalDeclStatement && node.as.global_decl.is_wildcard) continue;
+                uint32_t i_count = (node.type == NodeType::LocalDecl) ? node.as.local_decl.ident_count : node.as.global_decl.ident_count;
+                uint32_t f_ident = (node.type == NodeType::LocalDecl) ? node.as.local_decl.first_ident : node.as.global_decl.first_ident;
+                uint32_t f_value = (node.type == NodeType::LocalDecl) ? node.as.local_decl.first_value : node.as.global_decl.first_value;
+                uint32_t v_count = (node.type == NodeType::LocalDecl) ? node.as.local_decl.value_count : node.as.global_decl.value_count;
+
+                for (uint32_t i = 0; i < i_count; ++i) {
+                    uint32_t id_idx = ctx.block_statements[f_ident + i];
+                    std::string_view name(ctx.nodes[id_idx].as.ident.name, ctx.nodes[id_idx].as.ident.length);
+                    uint32_t val_idx = (i < v_count) ? ctx.block_statements[f_value + i] : 0xFFFFFFFF;
+
+                    if (disqualified.count(name)) {
+                        if (known_numbers.erase(name)) changed = true;
+                    } else if (ctx.nodes[id_idx].as.ident.is_captured || ctx.nodes[id_idx].as.ident.is_global) {
+                        disqualified.insert(name);
+                        if (known_numbers.erase(name)) changed = true;
+                    } else if (yields_number(ctx, val_idx, &known_numbers)) {
+                        if (known_numbers.insert(name).second) changed = true;
+                    } else {
+                        disqualified.insert(name);
+                        if (known_numbers.erase(name)) changed = true;
+                    }
+                }
+            } else if (node.type == NodeType::Assignment) {
+                for (uint32_t i = 0; i < node.as.assign.target_count; ++i) {
+                    uint32_t t_idx = ctx.block_statements[node.as.assign.first_target + i];
+                    const auto& t_node = ctx.nodes[t_idx];
+                    if (t_node.type == NodeType::Identifier) {
+                        std::string_view name(t_node.as.ident.name, t_node.as.ident.length);
+                        uint32_t val_idx = (i < node.as.assign.value_count) ? ctx.block_statements[node.as.assign.first_value + i] : 0xFFFFFFFF;
+
+                        if (disqualified.count(name)) {
+                            if (known_numbers.erase(name)) changed = true;
+                        } else if (t_node.as.ident.is_global) {
+                            disqualified.insert(name);
+                            if (known_numbers.erase(name)) changed = true;
+                        } else if (yields_number(ctx, val_idx, &known_numbers)) {
+                            if (!disqualified.count(name) && known_numbers.insert(name).second) changed = true;
+                        } else {
+                            disqualified.insert(name);
+                            if (known_numbers.erase(name)) changed = true;
+                        }
+                    }
+                }
+            } else if (node.type == NodeType::GenericForStatement) {
+                for (uint32_t i = 0; i < node.as.generic_for.var_count; ++i) {
+                    uint32_t v_idx = ctx.block_statements[node.as.generic_for.first_var + i];
+                    if (ctx.nodes[v_idx].type == NodeType::Identifier) {
+                        std::string_view name(ctx.nodes[v_idx].as.ident.name, ctx.nodes[v_idx].as.ident.length);
+                        if (disqualified.insert(name).second) {
+                            known_numbers.erase(name);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+    } while (changed);
+
+    for (auto& [fname, is_native_vec] : CodeEmitter::g_func_param_native) {
+        for (const auto& fdef : func_defs) {
+            if (fdef.first == fname) {
+                uint32_t f_idx = fdef.second;
+                const auto& fn = ctx.nodes[f_idx];
+                for (size_t p = 0; p < fn.as.func_def.param_count && p < is_native_vec.size(); ++p) {
+                    uint32_t p_idx = ctx.block_statements[fn.as.func_def.first_param + p];
+                    if (ctx.nodes[p_idx].type == NodeType::Identifier) {
+                        std::string_view pname(ctx.nodes[p_idx].as.ident.name, ctx.nodes[p_idx].as.ident.length);
+                        if (disqualified.find(pname) != disqualified.end()) {
+                            is_native_vec[p] = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    bool params_changed;
+    do {
+        params_changed = false;
+        for (uint32_t n_idx = 0; n_idx < ctx.nodes.size(); ++n_idx) {
+            const auto& node = ctx.nodes[n_idx];
+            if (node.type == NodeType::CallExpression) {
+                uint32_t tgt = node.as.call_expr.target;
+                if (ctx.nodes[tgt].type == NodeType::Identifier && !ctx.nodes[tgt].as.ident.is_global) {
+                    std::string_view fname(ctx.nodes[tgt].as.ident.name, ctx.nodes[tgt].as.ident.length);
+                    if (CodeEmitter::g_func_param_native.count(fname)) {
+                        std::string_view current_func = call_to_func.count(n_idx) ? call_to_func[n_idx] : "";
+                        std::set<std::string_view> current_params;
+                        if (!current_func.empty() && CodeEmitter::g_func_param_native.count(current_func)) {
+                            uint32_t c_fdef_idx = 0xFFFFFFFF;
+                            for (auto fd : func_defs) if (fd.first == current_func) c_fdef_idx = fd.second;
+                            if (c_fdef_idx != 0xFFFFFFFF) {
+                                const auto& fn = ctx.nodes[c_fdef_idx];
+                                for (size_t p = 0; p < fn.as.func_def.param_count; ++p) {
+                                    if (CodeEmitter::g_func_param_native[current_func][p]) {
+                                        uint32_t p_idx = ctx.block_statements[fn.as.func_def.first_param + p];
+                                        current_params.insert(std::string_view(ctx.nodes[p_idx].as.ident.name, ctx.nodes[p_idx].as.ident.length));
+                                    }
+                                }
+                            }
+                        }
+
+                        for (size_t p = 0; p < CodeEmitter::g_func_param_counts[fname]; ++p) {
+                            if (CodeEmitter::g_func_param_native[fname][p]) {
+                                if (p < node.as.call_expr.arg_count) {
+                                    uint32_t arg_idx = ctx.block_statements[node.as.call_expr.first_arg + p];
+                                    if (!yields_number(ctx, arg_idx, &known_numbers, current_func, &current_params)) {
+                                        CodeEmitter::g_func_param_native[fname][p] = false;
+                                        params_changed = true;
+                                    }
+                                } else {
+                                    CodeEmitter::g_func_param_native[fname][p] = false;
+                                    params_changed = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } while (params_changed);
+
+    for (const auto& fdef : func_defs) {
+        if (function_returns_native(ctx, fdef.second, fdef.first, &known_numbers)) {
+            CodeEmitter::g_native_return_funcs.insert(fdef.first);
+        }
+        if (CodeEmitter::g_func_param_native.count(fdef.first)) {
+            const auto& fn = ctx.nodes[fdef.second].as.func_def;
+            for (size_t p = 0; p < fn.param_count; ++p) {
+                if (CodeEmitter::g_func_param_native[fdef.first][p]) {
+                    uint32_t p_idx = ctx.block_statements[fn.first_param + p];
+                    std::string_view pname(ctx.nodes[p_idx].as.ident.name, ctx.nodes[p_idx].as.ident.length);
+                    if (!ctx.nodes[p_idx].as.ident.is_captured) {
+                        known_numbers.insert(pname);
+                    }
+                }
+            }
+        }
+    }
+
+    
+    for (uint32_t i = 0; i < ctx.nodes.size(); ++i) {
+        if (ctx.nodes[i].type == NodeType::TableAccess) {
+            std::string t_str = get_ast_string(ctx, ctx.nodes[i].as.table_access.table);
+            uint32_t base_k_idx = ctx.nodes[i].as.table_access.key;
+            if (ctx.nodes[base_k_idx].type == NodeType::BinaryOp) {
+                int op = ctx.nodes[base_k_idx].as.bin_op.op;
+                if (op == static_cast<int>(BinaryOp::Add) || op == static_cast<int>(BinaryOp::Sub)) {
+                    base_k_idx = ctx.nodes[base_k_idx].as.bin_op.left;
+                }
+            }
+            std::string k_str = get_ast_string(ctx, base_k_idx);
+
+            if (!t_str.empty() && !k_str.empty() && g_array_bounds.count(t_str) && g_loop_limits.count(k_str) && !g_loop_limit_conflicts[k_str]) {
+                uint32_t bound_expr = g_array_bounds[t_str];
+                uint32_t loop_expr = g_loop_limits[k_str];
+
+                if (bound_expr == loop_expr) {
+                    CodeEmitter::g_bce_safe_nodes.insert(i);
+                } else {
+                    std::string b_str = get_ast_string(ctx, bound_expr);
+                    std::string l_str = get_ast_string(ctx, loop_expr);
+                    if (!b_str.empty() && !l_str.empty()) {
+                        if (b_str == l_str) CodeEmitter::g_bce_safe_nodes.insert(i);
+                        else if (l_str.find(b_str + " -") == 0) CodeEmitter::g_bce_safe_nodes.insert(i);
+                    } else {
+                        double bd=0, ld=0; int64_t bi=0, li=0; bool bint, lint;
+                        if (is_literal_number(ctx, bound_expr, bd, bi, bint) && is_literal_number(ctx, loop_expr, ld, li, lint)) {
+                            if (bd >= ld) CodeEmitter::g_bce_safe_nodes.insert(i);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    
+    for (const auto& node : ctx.nodes) {
+        if (node.type == NodeType::String) {
+            std::string_view s(node.as.string.text, node.as.string.length);
+            if (std::find(CodeEmitter::g_string_pool.begin(), CodeEmitter::g_string_pool.end(), s) == CodeEmitter::g_string_pool.end()) CodeEmitter::g_string_pool.push_back(s);
+        }
+        if (node.type == NodeType::Identifier) {
+            std::string_view s(node.as.ident.name, node.as.ident.length);
+            if (std::find(CodeEmitter::g_string_pool.begin(), CodeEmitter::g_string_pool.end(), s) == CodeEmitter::g_string_pool.end()) CodeEmitter::g_string_pool.push_back(s);
+        }
+    }
+
+    
+    CodeEmitter::g_pure_numeric_arrays.clear();
+    std::set<std::string_view> pure_candidates;
+    std::set<std::string_view> disqualified_arrays;
+
+    auto purity_cb = [&](uint32_t idx) {
+        if (idx == 0xFFFFFFFF || idx >= ctx.nodes.size()) return;
+        const auto& n = ctx.nodes[idx];
+        if (n.type == NodeType::LocalDecl) {
+            if (n.as.local_decl.ident_count == 1 && n.as.local_decl.value_count == 1) {
+                uint32_t t_idx = ctx.block_statements[n.as.local_decl.first_ident];
+                uint32_t v_idx = ctx.block_statements[n.as.local_decl.first_value];
+                if (ctx.nodes[t_idx].type == NodeType::Identifier && ctx.nodes[v_idx].type == NodeType::TableConstructor) {
+                    std::string_view name(ctx.nodes[t_idx].as.ident.name, ctx.nodes[t_idx].as.ident.length);
+                    if (ctx.nodes[v_idx].as.table_cons.count > 0) {
+                        disqualified_arrays.insert(name);
+                    } else {
+                        pure_candidates.insert(name);
+                    }
+                }
+            }
+            for (uint32_t i = 0; i < n.as.local_decl.value_count; ++i) {
+                uint32_t v = ctx.block_statements[n.as.local_decl.first_value + i];
+                if (v < ctx.nodes.size() && ctx.nodes[v].type == NodeType::Identifier && !yields_number(ctx, v, &known_numbers)) {
+                    std::string_view name(ctx.nodes[v].as.ident.name, ctx.nodes[v].as.ident.length);
+                    disqualified_arrays.insert(name);
+                }
+            }
+        } else if (n.type == NodeType::Assignment) {
+            for (uint32_t i = 0; i < n.as.assign.value_count; ++i) {
+                uint32_t v = ctx.block_statements[n.as.assign.first_value + i];
+                if (v < ctx.nodes.size() && ctx.nodes[v].type == NodeType::Identifier && !yields_number(ctx, v, &known_numbers)) {
+                    std::string_view name(ctx.nodes[v].as.ident.name, ctx.nodes[v].as.ident.length);
+                    disqualified_arrays.insert(name);
+                }
+            }
+            if (n.as.assign.target_count == 1) {
+                uint32_t t_idx = ctx.block_statements[n.as.assign.first_target];
+                if (ctx.nodes[t_idx].type == NodeType::TableAccess) {
+                    uint32_t tb_idx = ctx.nodes[t_idx].as.table_access.table;
+                    if (ctx.nodes[tb_idx].type == NodeType::Identifier) {
+                        std::string_view tname(ctx.nodes[tb_idx].as.ident.name, ctx.nodes[tb_idx].as.ident.length);
+                        
+                        uint32_t k_idx = ctx.nodes[t_idx].as.table_access.key;
+                        bool key_ok = yields_number(ctx, k_idx, &known_numbers);
+                        
+                        
+                        
+                        if (!key_ok) {
+                            
+                            
+                            std::unordered_set<uint32_t> _opt_visited;
+                            auto key_depends_on_self = [&](auto& self, uint32_t nid) -> bool {
+                                if (nid >= ctx.nodes.size() || _opt_visited.count(nid)) return false;
+                                _opt_visited.insert(nid);
+                                const auto& nn = ctx.nodes[nid];
+                                if (nn.type == NodeType::TableAccess) {
+                                    uint32_t stbl = nn.as.table_access.table;
+                                    if (stbl < ctx.nodes.size() && ctx.nodes[stbl].type == NodeType::Identifier &&
+                                        std::string_view(ctx.nodes[stbl].as.ident.name, ctx.nodes[stbl].as.ident.length) == tname)
+                                        return true;
+                                }
+                                if (nn.type == NodeType::Identifier) {
+                                    
+                                    std::string_view vn(nn.as.ident.name, nn.as.ident.length);
+                                    for (const auto& nd : ctx.nodes) {
+                                        if (nd.type != NodeType::Assignment) continue;
+                                        if (nd.as.assign.target_count != 1) continue;
+                                        uint32_t ti = ctx.block_statements[nd.as.assign.first_target];
+                                        if (ctx.nodes[ti].type != NodeType::Identifier) continue;
+                                        if (std::string_view(ctx.nodes[ti].as.ident.name, ctx.nodes[ti].as.ident.length) != vn) continue;
+                                        uint32_t vi = ctx.block_statements[nd.as.assign.first_value];
+                                        return self(self, vi);
+                                    }
+                                    for (const auto& nd : ctx.nodes) {
+                                        if (nd.type != NodeType::LocalDecl) continue;
+                                        for (uint32_t ii = 0; ii < nd.as.local_decl.ident_count; ++ii) {
+                                            uint32_t idi = ctx.block_statements[nd.as.local_decl.first_ident + ii];
+                                            if (ctx.nodes[idi].type != NodeType::Identifier) continue;
+                                            if (std::string_view(ctx.nodes[idi].as.ident.name, ctx.nodes[idi].as.ident.length) != vn) continue;
+                                            uint32_t vi = (ii < nd.as.local_decl.value_count)
+                                                ? ctx.block_statements[nd.as.local_decl.first_value + ii] : 0xFFFFFFFF;
+                                            if (vi != 0xFFFFFFFF) return self(self, vi);
+                                            break;
+                                        }
+                                    }
+                                    return false;
+                                }
+                                if (nn.type == NodeType::BinaryOp)
+                                    return self(self, nn.as.bin_op.left) || self(self, nn.as.bin_op.right);
+                                if (nn.type == NodeType::UnaryOp)
+                                    return self(self, nn.as.unary_op.expr);
+                                return false;
+                            };
+                            if (!key_depends_on_self(key_depends_on_self, k_idx)) {
+                                disqualified_arrays.insert(tname);
+                            }
+                        } else {
+                            uint32_t v_idx = ctx.block_statements[n.as.assign.first_value];
+                        if (!yields_number(ctx, v_idx, &known_numbers) && ctx.nodes[v_idx].type != NodeType::TrueLiteral &&
+                            ctx.nodes[v_idx].type != NodeType::FalseLiteral && ctx.nodes[v_idx].type != NodeType::TableAccess) {
+                            disqualified_arrays.insert(tname);
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (n.type == NodeType::CallExpression) {
+            for (uint32_t i = 0; i < n.as.call_expr.arg_count; ++i) {
+                uint32_t v = ctx.block_statements[n.as.call_expr.first_arg + i];
+                if (v < ctx.nodes.size()) {
+                    if (ctx.nodes[v].type == NodeType::Identifier) {
+                        std::string_view name(ctx.nodes[v].as.ident.name, ctx.nodes[v].as.ident.length);
+                        disqualified_arrays.insert(name);
+                    } else if (ctx.nodes[v].type == NodeType::TableConstructor) {
+                        const auto& tc = ctx.nodes[v].as.table_cons;
+                        for (uint32_t ei = 0; ei < tc.count; ++ei) {
+                            uint32_t ev = ctx.block_statements[tc.first_item + ei * 2 + 1];
+                            if (ev < ctx.nodes.size() && ctx.nodes[ev].type == NodeType::Identifier) {
+                                std::string_view name(ctx.nodes[ev].as.ident.name, ctx.nodes[ev].as.ident.length);
+                                disqualified_arrays.insert(name);
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (n.type == NodeType::ReturnStatement) {
+            for (uint32_t i = 0; i < n.as.return_stmt.value_count; ++i) {
+                uint32_t v = ctx.block_statements[n.as.return_stmt.first_value + i];
+                if (v < ctx.nodes.size() && ctx.nodes[v].type == NodeType::Identifier) {
+                    std::string_view name(ctx.nodes[v].as.ident.name, ctx.nodes[v].as.ident.length);
+                    disqualified_arrays.insert(name);
+                }
+            }
+        } else if (n.type == NodeType::GenericForStatement) {
+            for (uint32_t i = 0; i < n.as.generic_for.var_count; ++i) {
+                uint32_t v_idx = ctx.block_statements[n.as.generic_for.first_var + i];
+                if (v_idx < ctx.nodes.size() && ctx.nodes[v_idx].type == NodeType::Identifier) {
+                    std::string_view name(ctx.nodes[v_idx].as.ident.name, ctx.nodes[v_idx].as.ident.length);
+                    disqualified_arrays.insert(name);
+                }
+            }
+        } else if (n.type == NodeType::TableAccess) {
+            uint32_t k_idx = n.as.table_access.key;
+            if (k_idx < ctx.nodes.size() && ctx.nodes[k_idx].type == NodeType::Identifier) {
+                std::string_view name(ctx.nodes[k_idx].as.ident.name, ctx.nodes[k_idx].as.ident.length);
+                disqualified_arrays.insert(name);
+            }
+        } else if (n.type == NodeType::UnaryOp) {
+            if (n.as.unary_op.op == static_cast<int>(UnaryOp::Len)) {
+                uint32_t v = n.as.unary_op.expr;
+                if (v < ctx.nodes.size() && ctx.nodes[v].type == NodeType::Identifier) {
+                    std::string_view name(ctx.nodes[v].as.ident.name, ctx.nodes[v].as.ident.length);
+                    disqualified_arrays.insert(name);
+                }
+            }
+        }
+    };
+    traverse_node(traverse_node, root_node, purity_cb);
+
+    for (auto name : pure_candidates) {
+        if (disqualified_arrays.find(name) == disqualified_arrays.end()) {
+            CodeEmitter::g_pure_numeric_arrays.insert(name);
+        }
+    }
+
+    
+    
+    
+    CodeEmitter::g_numeric_table_fields.clear();
+    for (const auto& node : ctx.nodes) {
+        if (node.type != NodeType::LocalDecl) continue;
+        if (node.as.local_decl.ident_count != 1 || node.as.local_decl.value_count != 1) continue;
+        uint32_t id_idx = ctx.block_statements[node.as.local_decl.first_ident];
+        uint32_t val_idx = ctx.block_statements[node.as.local_decl.first_value];
+        if (ctx.nodes[id_idx].type != NodeType::Identifier) continue;
+        std::string_view nm(ctx.nodes[id_idx].as.ident.name, ctx.nodes[id_idx].as.ident.length);
+        if (ctx.nodes[val_idx].type != NodeType::TableConstructor) continue;
+        const auto& tc = ctx.nodes[val_idx].as.table_cons;
+        if (tc.count == 0) continue;
+
+        
+        std::map<std::string_view, bool> field_numeric;
+        std::set<std::string_view> all_fields;
+        bool first = true;
+        bool valid = true;
+        for (uint32_t ei = 0; ei < tc.count && valid; ++ei) {
+            uint32_t ev = ctx.block_statements[tc.first_item + ei * 2 + 1];
+            if (ctx.nodes[ev].type != NodeType::TableConstructor) { valid = false; break; }
+            const auto& inner = ctx.nodes[ev].as.table_cons;
+            std::set<std::string_view> entry_fields;
+            for (uint32_t fi = 0; fi < inner.count; ++fi) {
+                uint32_t fk = ctx.block_statements[inner.first_item + fi * 2];
+                uint32_t fv = ctx.block_statements[inner.first_item + fi * 2 + 1];
+                if (fk >= ctx.nodes.size() || ctx.nodes[fk].type != NodeType::String) continue;
+                std::string_view fname(ctx.nodes[fk].as.string.text, ctx.nodes[fk].as.string.length);
+                entry_fields.insert(fname);
+                bool is_num = yields_number(ctx, fv, nullptr);
+                if (!is_num && ctx.nodes[fv].type == NodeType::Identifier) {
+                    
+                    
+                    std::string_view vname(ctx.nodes[fv].as.ident.name, ctx.nodes[fv].as.ident.length);
+                    for (const auto& nd : ctx.nodes) {
+                        if (nd.type != NodeType::LocalDecl) continue;
+                        for (uint32_t ii = 0; ii < nd.as.local_decl.ident_count; ++ii) {
+                            uint32_t idi = ctx.block_statements[nd.as.local_decl.first_ident + ii];
+                            if (ctx.nodes[idi].type != NodeType::Identifier) continue;
+                            if (std::string_view(ctx.nodes[idi].as.ident.name, ctx.nodes[idi].as.ident.length) != vname) continue;
+                            uint32_t vi = (ii < nd.as.local_decl.value_count)
+                                ? ctx.block_statements[nd.as.local_decl.first_value + ii] : 0xFFFFFFFF;
+                            if (vi != 0xFFFFFFFF && yields_number(ctx, vi, &known_numbers)) { is_num = true; break; }
+                        }
+                        if (is_num) break;
+                    }
+                }
+                if (first) field_numeric[fname] = is_num;
+                else if (field_numeric.count(fname) && field_numeric[fname] && !is_num)
+                    field_numeric[fname] = false;
+            }
+            if (first) all_fields = entry_fields;
+            else {
+                std::set<std::string_view> intersect;
+                for (auto& f : all_fields) if (entry_fields.count(f)) intersect.insert(f);
+                all_fields = intersect;
+            }
+            first = false;
+        }
+        if (valid && !all_fields.empty()) {
+            std::set<std::string_view> numeric_fields;
+            for (auto& f : all_fields) {
+                auto it = field_numeric.find(f);
+                if (it != field_numeric.end() && it->second) numeric_fields.insert(it->first);
+            }
+            if (!numeric_fields.empty()) {
+                CodeEmitter::g_numeric_table_fields[nm] = numeric_fields;
+                
+                for (auto& fld : numeric_fields) {
+                    if (std::find(CodeEmitter::g_string_pool.begin(), CodeEmitter::g_string_pool.end(), fld) == CodeEmitter::g_string_pool.end())
+                        CodeEmitter::g_string_pool.push_back(fld);
+                }
+            }
+        }
+    }
+
+    
+    
+    
+    {
+        int safety2 = 100;
+        bool changed2;
+        do {
+            changed2 = false;
+            if (--safety2 <= 0) break;
+            for (const auto& node : ctx.nodes) {
+                if (node.type == NodeType::LocalDecl || node.type == NodeType::GlobalDeclStatement) {
+                    if (node.type == NodeType::GlobalDeclStatement && node.as.global_decl.is_wildcard) continue;
+                    uint32_t ic = (node.type == NodeType::LocalDecl) ? node.as.local_decl.ident_count : node.as.global_decl.ident_count;
+                    uint32_t fi = (node.type == NodeType::LocalDecl) ? node.as.local_decl.first_ident : node.as.global_decl.first_ident;
+                    uint32_t fv = (node.type == NodeType::LocalDecl) ? node.as.local_decl.first_value : node.as.global_decl.first_value;
+                    uint32_t vc = (node.type == NodeType::LocalDecl) ? node.as.local_decl.value_count : node.as.global_decl.value_count;
+                    for (uint32_t ii = 0; ii < ic; ++ii) {
+                        uint32_t idi = ctx.block_statements[fi + ii];
+                        std::string_view nm(ctx.nodes[idi].as.ident.name, ctx.nodes[idi].as.ident.length);
+                        uint32_t vi = (ii < vc) ? ctx.block_statements[fv + ii] : 0xFFFFFFFF;
+                        if (disqualified.count(nm)) { if (known_numbers.erase(nm)) changed2 = true; }
+                        else if (ctx.nodes[idi].as.ident.is_captured || ctx.nodes[idi].as.ident.is_global) { disqualified.insert(nm); if (known_numbers.erase(nm)) changed2 = true; }
+                        else if (yields_number(ctx, vi, &known_numbers)) { if (known_numbers.insert(nm).second) changed2 = true; }
+                        else { disqualified.insert(nm); if (known_numbers.erase(nm)) changed2 = true; }
+                    }
+                } else if (node.type == NodeType::Assignment) {
+                    for (uint32_t ii = 0; ii < node.as.assign.target_count; ++ii) {
+                        uint32_t ti = ctx.block_statements[node.as.assign.first_target + ii];
+                        const auto& tn = ctx.nodes[ti];
+                        if (tn.type == NodeType::Identifier) {
+                            std::string_view nm(tn.as.ident.name, tn.as.ident.length);
+                            uint32_t vi = (ii < node.as.assign.value_count) ? ctx.block_statements[node.as.assign.first_value + ii] : 0xFFFFFFFF;
+                            if (disqualified.count(nm)) { if (known_numbers.erase(nm)) changed2 = true; }
+                            else if (tn.as.ident.is_global) { disqualified.insert(nm); if (known_numbers.erase(nm)) changed2 = true; }
+                            else if (yields_number(ctx, vi, &known_numbers)) { if (!disqualified.count(nm) && known_numbers.insert(nm).second) changed2 = true; }
+                            else { disqualified.insert(nm); if (known_numbers.erase(nm)) changed2 = true; }
+                        }
+                    }
+                } else if (node.type == NodeType::GenericForStatement) {
+                    for (uint32_t ii = 0; ii < node.as.generic_for.var_count; ++ii) {
+                        uint32_t vi = ctx.block_statements[node.as.generic_for.first_var + ii];
+                        if (vi < ctx.nodes.size() && ctx.nodes[vi].type == NodeType::Identifier) {
+                            std::string_view nm(ctx.nodes[vi].as.ident.name, ctx.nodes[vi].as.ident.length);
+                            disqualified.insert(nm);
+                            if (known_numbers.erase(nm)) changed2 = true;
+                        }
+                    }
+                }
+            }
+        } while (changed2);
+    }
+
+    
+    CodeEmitter::g_native_numbers.clear();
+    for (auto name : known_numbers) {
+        if (disqualified.find(name) == disqualified.end()) {
+            CodeEmitter::g_native_numbers.push_back(name);
+        }
+    }
+}
+
+}

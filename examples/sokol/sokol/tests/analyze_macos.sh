@@ -1,0 +1,8 @@
+set -e
+source test_common.sh
+
+build macos_gl_analyze macos_gl_analyze
+build macos_metal_analyze macos_metal_analyze
+
+build macos_arc_gl_analyze macos_arc_gl_analyze
+build macos_arc_metal_analyze macos_arc_metal_analyze

@@ -1,0 +1,63 @@
+name: ⚡Edge Case
+description: Unusual input that produces unexpected output or crashes
+title: "⚡ "
+labels:
+  - edge-case
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for edge cases involving rare or extreme inputs.
+  - type: input
+    id: clx_version
+    attributes:
+      label: 🔢 clx version
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: 🚦 Severity
+      options:
+        - Compiler crash
+        - Runtime crash
+        - Wrong output
+        - Compiler hang
+        - Other
+  - type: dropdown
+    id: category
+    attributes:
+      label: 📂 Category
+      options:
+        - Extremely large input
+        - Extremely deep recursion
+        - Empty / nil edge
+        - Type boundary (min/max int, NaN, etc.)
+        - UTF-8 / Unicode in strings
+        - Multiple returns
+        - Vararg edge
+        - Tail call edge
+        - Other
+  - type: textarea
+    id: source
+    attributes:
+      label: 📃 Minimal Lua reproduction script
+      render: lua
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 📃 Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 📃 Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional Notes

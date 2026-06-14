@@ -1,0 +1,44 @@
+name: ⚠️Lua Compatibility Issue
+description: Lua behavior differs from standard Lua 5.5
+title: "⚠️ "
+labels:
+  - compatibility
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template when clx behaves differently from Lua.
+  - type: textarea
+    id: source
+    attributes:
+      label: 📃 Lua script that reproduces the issue
+      render: lua
+    validations:
+      required: true
+  - type: textarea
+    id: lua_output
+    attributes:
+      label: 🎦 Output from Lua 5.5
+    validations:
+      required: true
+  - type: textarea
+    id: clx_output
+    attributes:
+      label: 🎦 Output from clx compiled executable
+    validations:
+      required: true
+  - type: dropdown
+    id: lua_feature
+    attributes:
+      label: 🔧 Lua feature area
+      options:
+        - Standard library
+        - Language semantics
+        - Metatables / metamethods
+        - Coroutines
+        - GC / memory
+        - Other
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional Notes

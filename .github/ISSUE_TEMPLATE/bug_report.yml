@@ -1,0 +1,46 @@
+name: 🐞 Bug Report
+description: Report a clx compiler/runtime bug
+title: "🐞 "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please fill this form to report a bug
+  - type: input
+    id: clx_version
+    attributes:
+      label: 🔢 clx version
+  - type: dropdown
+    id: architecture
+    attributes:
+      label: 𒁈 CPU architecture
+      options:
+        - x86_64
+        - ARM64
+        - x86
+        - ARM32
+        - Other  
+  - type: dropdown
+    id: os
+    attributes:
+      label: 💻 Operating system
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Other  
+  - type: dropdown
+    id: cpp_compiler
+    attributes:
+      label: ⚙️ C++ Compiler
+      options:
+        - GCC
+        - CLang
+        - MSVC
+        - Other  
+  - type: textarea
+    id: expected
+    attributes:
+      label: 📃 Bug description

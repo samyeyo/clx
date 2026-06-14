@@ -1,0 +1,11 @@
+set -e
+source test_common.sh
+build macos_gl_debug macos_gl_debug
+build macos_gl_release macos_gl_release
+build macos_metal_debug macos_metal_debug
+build macos_metal_release macos_metal_release
+build macos_arc_gl_debug macos_arc_gl_debug
+build macos_arc_gl_release macos_arc_gl_release
+build macos_arc_metal_debug macos_arc_metal_debug
+build macos_arc_metal_release macos_arc_metal_release
+runtest macos_gl_debug

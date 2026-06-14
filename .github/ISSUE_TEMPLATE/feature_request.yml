@@ -1,0 +1,58 @@
+name: 💡Feature Request
+description: Suggest an idea or enhancement for clx
+title: "💡 "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template to propose a new feature or improvement.
+  - type: input
+    id: clx_version
+    attributes:
+      label: 🔢 clx version
+  - type: dropdown
+    id: area
+    attributes:
+      label: 📂 Area
+      options:
+        - Compiler / codegen
+        - Runtime
+        - Standard library
+        - CLI / build system
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: ❓ What problem does this solve?
+      placeholder: Describe the use case or pain point...
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: 💭 Proposed solution
+      placeholder: Describe the feature or change you want...
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 🔄 Alternatives considered
+      placeholder: Any workarounds or alternative approaches?
+  - type: dropdown
+    id: breaking
+    attributes:
+      label: ⚠️ Breaking change?
+      options:
+        - "No"
+        - "Yes"
+        - Unsure
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional Notes

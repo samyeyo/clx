@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+    paths: ["src/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            artifact: clx-linux-x86_64
+            binary: clx
+          - name: windows-x86_64
+            os: windows-latest
+            artifact: clx-windows-x86_64
+            binary: clx.exe
+          - name: macos-arm64
+            os: macos-latest
+            artifact: clx-macos-arm64
+            binary: clx
+
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Configure
+        run: cmake -S . -B build ${{ matrix.os == 'windows-latest' && '' || '-DCMAKE_BUILD_TYPE=Release' }}
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Archive (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p staging/bin staging/include staging/lib
+          tar cf - --exclude=./build --exclude=./.git --exclude=./staging . | tar xf - -C staging/
+          cp bin/${{ matrix.binary }} staging/bin/ 2>/dev/null || true
+          cp -f lib/libclx.a lib/libclx_size.a staging/lib/ 2>/dev/null || true
+          tar czf ${{ matrix.artifact }}.tar.gz -C staging .
+
+      - name: Archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path staging/bin,staging/include,staging/lib -Force | Out-Null
+          Get-ChildItem -Path . -Exclude build,.git,staging | Copy-Item -Recurse -Destination staging -Force
+          Copy-Item bin/clx.exe staging/bin/
+          Copy-Item include/clx.h,include/clx_runtime.h staging/include/
+          if (Test-Path "lib/clx.lib") { Copy-Item "lib/clx.lib" staging/lib/ }
+          if (Test-Path "lib/clx_size.lib") { Copy-Item "lib/clx_size.lib" staging/lib/ }
+          Compress-Archive -Path staging/* -DestinationPath ${{ matrix.artifact }}.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}.tar.gz
+            ${{ matrix.artifact }}.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v3
+        with:
+          draft: true
+          files: |
+            artifacts/*.zip
+            artifacts/*.tar.gz
+          generate_release_notes: true

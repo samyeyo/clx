@@ -1,0 +1,2852 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>clx — Native Compiler for Lua</title>
+    <meta name="description" content="clx is a cross-platform ahead-of-time Lua compiler and runtime that generates standalone native executables through modern C++ toolchains.">
+    <meta name="keywords" content="lua compiler, native compilation, aot compiler, lua performance, clx, lua native, ahead of time">
+    <meta name="author" content="clx">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://samyeyo.github.io/clx">
+    <meta name="theme-color" content="#171717">
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com">
+    <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com">
+    <meta name="color-scheme" content="light dark">
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-lua.min.js"></script>
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-c.min.js"></script>
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-cpp.min.js"></script>
+    <meta property="og:title" content="clx — Native Compiler for Lua">
+    <meta property="og:description" content="A cross-platform ahead-of-time Lua compiler and runtime that generates standalone native executables through modern C++ toolchains.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://samyeyo.github.io/clx">
+    <meta property="og:site_name" content="clx">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="clx — Native Compiler for Lua">
+    <meta name="twitter:description" content="A cross-platform ahead-of-time Lua compiler and runtime that generates standalone native executables through modern C++ toolchains.">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23171717'/><text x='5' y='23' font-family='Segoe UI,sans-serif' font-size='16' font-weight='700'><tspan fill='%23fafafa'>cl</tspan><tspan fill='%231A2FB7'>x</tspan></text></svg>">
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "clx",
+        "applicationCategory": "DeveloperApplication",
+        "description": "A cross-platform ahead-of-time Lua compiler and runtime that generates standalone native executables through modern C++ toolchains.",
+        "programmingLanguage": "Lua",
+        "operatingSystem": "Linux, macOS, Windows",
+        "license": "https://opensource.org/licenses/MIT",
+        "offers": {
+            "@type": "Offer",
+            "price": "0",
+            "priceCurrency": "USD"
+        }
+    }
+    </script>
+    <style>
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --bg: #111114;
+            --card: #1c1c20;
+            --sidebar: #16161a;
+            --border: #2e2e34;
+            --border-hover: #3a3a42;
+            --accent: #2b73df;
+            --accent-soft: rgba(100, 116, 224, 0.1);
+            --accent-medium: rgba(100, 116, 224, 0.15);
+            --accent-strong: rgba(100, 116, 224, 0.25);
+            --text: #e5e5e5;
+            --text-bright: #fafafa;
+            --text-muted: #8a8a8a;
+            --text-dim: #525252;
+            --icon-color: #8a8a8a;
+            --icon-active: #2b73df;
+            --code-bg: #131316;
+            --code-header-bg: rgba(255,255,255,0.02);
+            --nav-hover: rgba(255,255,255,0.04);
+            --bar-track: rgba(255,255,255,0.06);
+            --row-border: rgba(255,255,255,0.03);
+            --shadow-card: 0 8px 40px -8px rgba(0,0,0,0.6), 0 0 80px -20px var(--accent-soft);
+            --shadow-card-hover: 0 8px 40px -8px rgba(0,0,0,0.6), 0 0 80px -10px var(--accent-medium);
+        }
+
+        @media (prefers-color-scheme: light) {
+            :root {
+                --bg: #f0f2f5;
+                --card: #ffffff;
+                --sidebar: #f8f9fa;
+                --border: #e5e7eb;
+                --border-hover: #d1d5db;
+                --accent: #1A2FB7;
+                --accent-soft: rgba(26, 47, 183, 0.08);
+                --accent-medium: rgba(26, 47, 183, 0.12);
+                --accent-strong: rgba(26, 47, 183, 0.2);
+                --text: #1f2937;
+                --text-bright: #111827;
+                --text-muted: #6b7280;
+                --text-dim: #9ca3af;
+                --icon-color: #6b7280;
+                --icon-active: #1A2FB7;
+                --code-bg: #f9fafb;
+                --code-header-bg: rgba(0,0,0,0.02);
+                --nav-hover: rgba(0,0,0,0.04);
+                --bar-track: rgba(0,0,0,0.06);
+                --row-border: rgba(0,0,0,0.04);
+                --shadow-card: 0 8px 40px -8px rgba(0,0,0,0.08), 0 0 0 1px rgba(0,0,0,0.03);
+                --shadow-card-hover: 0 8px 40px -8px rgba(0,0,0,0.12), 0 0 0 1px rgba(0,0,0,0.04), 0 0 20px -5px var(--accent-soft);
+            }
+        }
+
+        html {
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            min-height: 100dvh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1.5rem;
+        }
+
+        ::selection { background: var(--accent); color: #fff; }
+
+        .card {
+            width: 100%;
+            max-width: 1100px;
+            height: 720px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            overflow: hidden;
+            display: flex;
+            box-shadow: var(--shadow-card);
+            animation: cardIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            opacity: 0;
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+
+        .card:hover {
+            border-color: var(--border-hover);
+            box-shadow: var(--shadow-card-hover);
+        }
+
+        @keyframes cardIn {
+            from { opacity: 0; transform: translateY(16px) scale(0.98); }
+            to   { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        .sidebar {
+            width: 220px;
+            min-width: 220px;
+            background: var(--sidebar);
+            border-right: 1px solid var(--border);
+            padding: 20px 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .sidebar-brand {
+            padding: 4px 14px 20px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 14px;
+        }
+
+        .sidebar-brand h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        .sidebar-brand h1 .clr-main { color: var(--text-bright); }
+        .sidebar-brand h1 .clr-x { color: #1A2FB7; }
+
+        .sidebar-brand .version {
+            font-size: 0.6875rem;
+            color: var(--text-dim);
+            margin-top: 2px;
+        }
+
+        .nav-item {
+            font-family: inherit;
+            font-size: 0.8125rem;
+            font-weight: 500;
+            padding: 9px 14px;
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            text-align: left;
+            border-radius: 6px;
+            transition: all 0.15s ease;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            text-decoration: none;
+        }
+
+        .nav-item .icon, .section-title-icon, .feature-title .icon, .doc-section h3 .icon {
+            width: 18px;
+            height: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .section-title-icon {
+            width: 24px;
+            height: 24px;
+        }
+
+        .nav-item .icon svg, .section-title-icon svg {
+            width: 100%;
+            height: 100%;
+            color: var(--icon-color);
+            transition: color 0.15s;
+        }
+
+        .feature-title .icon svg, .doc-section h3 .icon svg {
+            width: 100%;
+            height: 100%;
+            transition: color 0.15s;
+        }
+
+        .nav-item:hover {
+            color: var(--text);
+            background: var(--nav-hover);
+        }
+        .nav-item:hover .icon svg { color: var(--text); }
+
+        .nav-item.active {
+            color: var(--accent);
+            background: var(--accent-soft);
+            font-weight: 600;
+        }
+        .nav-item.active .icon svg { color: var(--icon-active); }
+
+        .nav-item:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: -2px;
+        }
+
+        .nav-link-external { margin-top: 4px; }
+        .nav-link-external::after {
+            content: '↗';
+            font-size: 0.7em;
+            margin-left: auto;
+            opacity: 0.5;
+        }
+
+        .sidebar-footer {
+            margin-top: auto;
+            padding: 16px 14px 4px;
+            border-top: 1px solid var(--border);
+            font-size: 0.75rem;
+            color: var(--text-dim);
+        }
+
+        .sidebar-footer a {
+            font-size: 0.75rem;
+            margin-top: 0.75rem;
+            color: var(--text-dim);
+            text-decoration: none;
+            transition: color 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .sidebar-footer a:hover { color: var(--accent); }
+        .sidebar-footer a svg { width: 14px; height: 14px; }
+
+        .content {
+            flex: 1;
+            padding: 36px 40px;
+            overflow-y: auto;
+            overflow-x: hidden;
+            position: relative;
+            min-height: 0;
+        }
+
+        .content::-webkit-scrollbar { width: 4px; }
+        .content::-webkit-scrollbar-track { background: transparent; }
+        .content::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+        .content::-webkit-scrollbar-thumb:hover { background: var(--border-hover); }
+
+        .section { display: none; }
+        .section.active {
+            display: block;
+            animation: sectionIn 0.25s ease forwards;
+        }
+
+        @keyframes sectionIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        .section h2 {
+            font-size: 1.75rem;
+            font-weight: 500;
+            color: var(--accent);
+            margin-bottom: 3rem;
+            letter-spacing: -0.02em;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .section h2 .section-title-icon svg {
+            color: var(--accent);
+        }
+
+        .section p {
+            font-size: 1rem;
+            line-height: 1.75;
+            color: var(--text-muted);
+            margin-bottom: 14px;
+        }
+        .section p .bright { color: var(--text); font-weight: 500; }
+
+        .tagline {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--accent);
+            margin-bottom: 24px;
+            letter-spacing: -0.03em;
+            line-height: 1.2;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .tagline .section-title-icon svg {
+            color: var(--accent);
+        }
+
+        .subtitle {
+            font-size: 0.9375rem;
+            color: var(--text-dim);
+            margin-bottom: 32px;
+            font-weight: 400;
+        }
+
+        .about-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 2.5rem;
+        }
+
+        .about-stat {
+            padding: 18px;
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+        .about-stat:hover {
+            border-color: rgba(26, 47, 183, 0.3);
+            box-shadow: 0 0 24px -6px var(--accent-medium);
+        }
+
+        .about-stat .value {
+            font-size: 1.5rem;
+            font-weight: 400;
+            color: var(--accent);
+            line-height: 1.1;
+        }
+        .about-stat .label {
+            font-size: 0.6875rem;
+            color: var(--text-dim);
+            margin-top: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+
+        .feature-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .feature-card {
+            padding: 18px;
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            transition: all 0.2s ease;
+        }
+        .feature-card:hover {
+            border-color: rgba(26, 47, 183, 0.3);
+            box-shadow: 0 0 20px -4px var(--accent-medium);
+            transform: translateY(-1px);
+        }
+
+        .feature-title {
+            font-size: 0.8125rem;
+            font-weight: 600;
+            color: var(--text-bright);
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .feature-desc {
+            font-size: 0.8125rem;
+            color: var(--text-muted);
+            line-height: 1.6;
+        }
+
+        .code-block {
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 20px 0;
+            transition: border-color 0.3s;
+        }
+        .code-block:hover { border-color: var(--border-hover); }
+
+        .code-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 16px;
+            background: var(--code-header-bg);
+            border-bottom: 1px solid var(--border);
+            font-family: inherit;
+            font-size: 0.6875rem;
+            color: var(--text-dim);
+        }
+        .code-header .lang {
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            font-weight: 600;
+        }
+
+        .code-body {
+            padding: 14px 18px;
+            font-family: 'Cascadia Code', 'SF Mono', 'Consolas', 'Courier New', monospace;
+            font-size: 0.8125rem;
+            line-height: 1.8;
+            color: var(--text);
+            overflow-x: auto;
+            white-space: pre-wrap;
+        }
+        .code-body pre { margin: 0; white-space: pre; font: inherit; }
+
+
+        .prompt  { color: var(--accent); user-select: none; }
+        .comment { color: var(--text-dim); }
+        .flag    { color: #04682e; }
+        .output  { color: var(--text-muted); }
+
+        .key     { color: var(--accent); }
+
+        .bench-wrap {
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            overflow: hidden;
+            margin-top: 20px;
+        }
+
+        .bench-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8125rem;
+            table-layout: fixed;
+        }
+
+        .bench-table th:nth-child(1), .bench-table td:nth-child(1) { width: 15%; }
+        .bench-table th:nth-child(2), .bench-table td:nth-child(2) { width: 15%; }
+        .bench-table th:nth-child(3), .bench-table td:nth-child(3) { width: 15%; }
+        .bench-table th:nth-child(4), .bench-table td:nth-child(4) { width: 55%; }
+
+        .bench-table th {
+            text-align: left;
+            padding: 10px 16px;
+            font-size: 0.6875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-dim);
+            border-bottom: 1px solid var(--border);
+            font-weight: 500;
+        }
+
+        .bench-table td {
+            padding: 10px 16px;
+            border-bottom: 1px solid var(--row-border);
+            color: var(--text-muted);
+            vertical-align: middle;
+        }
+        .bench-table tr:last-child td { border-bottom: none; }
+        .bench-table .winner { color: var(--accent); font-weight: 600; }
+        .bench-table .name   { color: var(--text-bright); font-weight: 600; }
+
+        .bar-track {
+            width: 100%;
+            height: 6px;
+            background: var(--bar-track);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .bar {
+            height: 100%;
+            border-radius: 3px;
+            width: 0%;
+            transition: width 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .bar.accent  { background: var(--accent); }
+        .bar.yellow { background: #fbbf24; }
+        .bar.red    { background: #f87171; }
+
+        .bench-note {
+            margin-top: 12px;
+            font-size: 0.6875rem;
+            color: var(--text-dim);
+        }
+
+        .doc-section { margin-bottom: 24px; }
+
+        .doc-section h3 {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--accent);
+            margin-top: 32px;
+            margin-bottom: 12px;
+        }
+        .doc-section p {
+            margin: 14px 0;
+        }
+        .doc-section ol, .doc-section ul {
+            margin: 12px 0;
+            padding-left: 24px;
+        }
+        .doc-section li {
+            margin: 6px 0;
+        }
+        .doc-section h4 {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text-bright);
+            margin-top: 28px;
+            margin-bottom: 10px;
+            color: var(--text-bright);
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #8651cc;
+        }
+
+        .inline-code {
+            font-family: 'Cascadia Code', 'SF Mono', 'Consolas', 'Courier New', monospace;
+            font-size: 0.8125rem;
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            padding: 2px 7px;
+            border-radius: 4px;
+            color: var(--accent);
+        }
+
+        @media (max-width: 960px) {
+            .card {
+                height: 80vh;
+                max-height: 720px;
+                min-height: 480px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            body { 
+                padding: 0; 
+                display: block;
+                overflow-x: hidden; 
+                width: 100vw;
+            }
+            main {
+                display: block;
+                width: 100%;
+            }
+            .card {
+                border-radius: 0;
+                border-left: none;
+                border-right: none;
+                max-width: 100%;
+                width: 100%;
+                height: 100vh;
+                height: 100dvh;
+                max-height: none;
+                min-height: none;
+                flex-direction: column;
+                display: flex;
+            }
+            .sidebar {
+                width: 100%;
+                min-width: 0;
+                flex-direction: row;
+                border-right: none;
+                border-bottom: 1px solid var(--border);
+                padding: 6px 8px;
+                gap: 2px;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                scrollbar-width: none;
+                box-sizing: border-box;
+            }
+            .sidebar::-webkit-scrollbar { display: none; }
+            .sidebar-brand { display: none; }
+            .sidebar-footer { display: none; }
+            .nav-link-external { display: none; }
+            .nav-item {
+                white-space: nowrap;
+                padding: 10px 14px;
+                font-size: 0.8125rem;
+                min-height: 44px;
+                flex-shrink: 0;
+            }
+            .nav-item .icon { display: none; }
+            .content {
+                flex: 1;
+                padding: 20px 16px;
+                width: 100%;
+                min-width: 0;
+                box-sizing: border-box;
+                overflow-x: hidden;
+            }
+            .about-grid, .feature-grid { grid-template-columns: 1fr; }
+            .tagline { font-size: 1.3rem; white-space: normal; word-break: break-word; }
+            .section-title-icon { display: none; }
+            #bench-select { max-width: none; width: 100%; }
+            .bench-table th:last-child, .bench-table td:last-child { min-width: 0; }
+            .code-block, .bench-wrap { width: 100%; max-width: 100%; box-sizing: border-box; }
+            .code-body { max-width: 100%; overflow-x: auto; }
+        }
+
+        @media (max-width: 480px) {
+            .bench-table { font-size: 0.75rem; }
+            .bench-table th, .bench-table td { padding: 8px 10px; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.01ms !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
+    </style>
+    <style>
+        .code-body pre { all: unset; display: block; white-space: pre; font-family: inherit; font-size: inherit; line-height: inherit; }
+        .code-body code[class*="language-"] { all: unset; display: inline; white-space: pre; font-family: inherit; font-size: inherit; line-height: inherit; color: var(--text); }
+        .token.comment  { color: var(--text-muted); }
+        .token.keyword  { color: var(--accent); }
+        .token.string   { color: #be185d; }
+        .token.number   { color: #16a34a; }
+        .token.function { color: #6d28d9; }
+        .token.operator { color: var(--text); }
+        .token.builtin  { color: var(--accent); }
+        .token.class-name { color: #0f766e; }
+        .token.punctuation { color: var(--text); }
+        .token.boolean  { color: var(--accent); }
+        .token.nil      { color: var(--accent); }
+        .token.symbol   { color: var(--text); }
+        .token.constant { color: #075985; }
+        .token.regex    { color: #be185d; }
+        .token.selector { color: #6d28d9; }
+        .token.atrule   { color: var(--accent); }
+        .token.url      { color: #be185d; }
+        .token.important { color: var(--accent); font-weight: bold; }
+        .token.bold     { font-weight: bold; }
+        .token.italic   { font-style: italic; }
+        .token.entity   { cursor: help; }
+        .token.inserted { color: #16a34a; }
+        .token.deleted  { color: #be185d; }
+        .token.tag      { color: #6d28d9; }
+        .token.attr-name { color: #075985; }
+        .token.attr-value { color: #be185d; }
+        .token.property { color: #075985; }
+        .token.prolog   { color: var(--text-muted); }
+        .token.doctype  { color: var(--text-muted); }
+        .token.cdata    { color: var(--text-muted); }
+    </style>
+</head>
+<body>
+
+<main role="main">
+    <article class="card">
+        <nav class="sidebar" role="tablist" aria-label="Section navigation">
+            <div class="sidebar-brand">
+                <h1><span class="clr-main">cl</span><span class="clr-x">x</span></h1>
+            </div>
+
+            <button class="nav-item active" data-section="overview" role="tab" aria-selected="true" aria-controls="overview">
+                <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg></span> Overview
+            </button>
+            <button class="nav-item" data-section="features" role="tab" aria-selected="false" aria-controls="features">
+                <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3" y2="6"></line><line x1="3" y1="12" x2="3" y2="12"></line><line x1="3" y1="18" x2="3" y2="18"></line></svg></span> Features
+            </button>
+            <button class="nav-item" data-section="install" role="tab" aria-selected="false" aria-controls="install">
+                <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></span> Installation
+            </button>
+            <button class="nav-item" data-section="benchmarks" role="tab" aria-selected="false" aria-controls="benchmarks">
+                <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg></span> Benchmarks
+            </button>
+            <button class="nav-item" data-section="doc-getting-started" role="tab">
+                <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg></span> Getting Started
+            </button>
+            <button class="nav-item" data-section="doc-cli" role="tab">
+                <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg></span> CLI Reference
+            </button>
+            <button class="nav-item" data-section="doc-architecture" role="tab">
+                <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg></span> Architecture
+            </button>
+            <button class="nav-item" data-section="doc-optimizations" role="tab">
+                <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></span> Optimizations
+            </button>
+            <button class="nav-item" data-section="doc-runtime" role="tab">
+                <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg></span> Runtime
+            </button>
+            <button class="nav-item" data-section="doc-modules" role="tab">
+                <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg></span> Modules
+            </button>
+            <button class="nav-item" data-section="doc-api" role="tab">
+                <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg></span> C++ API
+            </button>
+            <button class="nav-item" data-section="doc-compatibility" role="tab">
+                <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg></span> Compatibility
+            </button>
+            <button class="nav-item" data-section="doc-migration" role="tab">
+                <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg></span> Migration Guide
+            </button>
+            
+            <div class="sidebar-footer">
+                Copyright © 2026 - Tine Samir
+                <a href="https://github.com/clx-lang/clx" target="_blank" rel="noopener noreferrer">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+                    GitHub
+                </a>
+            </div>
+        </nav>
+
+        <div class="content">
+            <!-- ═══ Overview ═══ -->
+            <section id="overview" class="section active" role="tabpanel" aria-labelledby="overview">
+                <h2 class="tagline">
+                    High performance native Lua compiler
+                </h2>
+                <p>
+                    <span class="bright">clx</span> is an ahead-of-time (AOT) native compiler that compiles Lua 5.5 source code into optimized machine code. By eliminating the need for a runtime interpreter or bytecode virtual machine, <span class="bright">clx</span> provides predictable execution time, minimal latency, and a reduced resource footprint.
+                </p>
+                <p>
+                    <span class="bright">clx</span> transpiles Lua source code into optimized C++ code, which is then compiled using the system's C++ compiler to produce native machine code. This architecture provides performance up to 60x faster than standard Lua interpreters, thanks to static analysis and high performance optimizations.
+                </p>
+                <p>
+                    <span class="bright">clx</span> generates standalone binaries with zero external dependencies. The entire toolchain is fully open source and released under the permissive MIT License.
+                </p>
+                <p>
+                    Due to the static compilation model inherent to an AOT compiler, <span class="inline-code">load()</span>, <span class="inline-code">dofile()</span>, <span class="inline-code">loadfile()</span>, <span class="inline-code">string.dump()</span>, and the , <span class="inline-code">debug</span> library are not available. Dynamic code loading requires a runtime interpreter, and debug introspection requires runtime metadata that AOT compilation does not preserve.
+                </p>
+                <div class="about-grid">
+                    <div class="about-stat">
+                        <div class="value">Multiplatform</div>
+                        <div class="label">Lua compiler</div>
+                    </div>
+                    <div class="about-stat">
+                        <div class="value">C++20</div>
+                        <div class="label">Backend</div>
+                    </div>
+                    <div class="about-stat">
+                        <div class="value">MIT</div>
+                        <div class="label">Open Source License</div>
+                    </div>
+                    <div class="about-stat">
+                        <div class="value">Lua 5.5</div>
+                        <div class="label">Compatibility</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ═══ Features ═══ -->
+            <section id="features" class="section" role="tabpanel" aria-labelledby="features">
+                <h2>
+                    <span class="section-title-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3" y2="6"></line><line x1="3" y1="12" x2="3" y2="12"></line><line x1="3" y1="18" x2="3" y2="18"></line></svg></span>
+                    Features
+                </h2>
+                <div class="feature-grid">
+                    <div class="feature-card">
+                        <div class="feature-title">
+                            <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16 10 8"></polygon></svg></span> Native AOT
+                        </div>
+                        <div class="feature-desc">Compile Lua directly to optimized C++20 code. No interpreter layer, no bytecode overhead.</div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title">
+                            <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line></svg></span> Zero Dependencies
+                        </div>
+                        <div class="feature-desc">Binaries with no runtime requirements. Ship a single file, run anywhere.</div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title">
+                            <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="#eab308" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg></span> Lua 5.5 runtime
+                        </div>
+                        <div class="feature-desc">Lua 5.5 syntax and standard modules. <span style="color: var(--text-dim);">(load/dofile/loadfile and debug lib excluded — AOT limitations)</span></div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title">
+                            <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></span> Modern garbage collector
+                        </div>
+                        <div class="feature-desc">Incremental, shadow-stack-based Mark-and-Sweep collector.</div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title">
+                            <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="#06b6d4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg></span> Cross-Platform
+                        </div>
+                        <div class="feature-desc">Available on Linux, macOS, and Windows.</div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title">
+                            <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg></span> Optimizations
+                        </div>
+                        <div class="feature-desc">Optimizer using static analysis to speedup program execution.</div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title">
+                            <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg></span> C++20 Backend
+                        </div>
+                        <div class="feature-desc">SROA, SIMD vectorization, CPU cache friendly optimizations...</div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-title">
+                            <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="#d946ef" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="8" height="8" rx="1" ry="1"></rect><rect x="14" y="14" width="8" height="8" rx="1" ry="1"></rect><line x1="6" y1="18" x2="6" y2="10"></line><line x1="18" y1="14" x2="18" y2="6"></line><path d="M6 6h6"></path><path d="M18 18h-6"></path></svg></span> Extendable C++ API
+                        </div>
+                        <div class="feature-desc">Build third party modules using the clx C++ library</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ═══ Install ═══ -->
+            <section id="install" class="section" role="tabpanel" aria-labelledby="install">
+                <h2>
+                    <span class="section-title-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></span>
+                    Installation
+                </h2>
+                <p><span class="bright">clx</span> is available as source code (build from any platform) and as pre-built binaries for <strong>Linux (x86_64)</strong>, <strong>macOS (ARM64)</strong>, and <strong>Windows (x86_64)</strong> from <a href="https://github.com/clx-lang/clx/releases" target="_blank" rel="noopener noreferrer">GitHub Releases</a>, built automatically via CI. Linux binaries require glibc ≥ 2.39. This page explains how to build and install the <span class="bright">clx</span> binary and runtime library.</p>
+                <div class="code-block">
+                    <div class="code-header"><span class="lang">sh</span><span>macOS / Linux</span></div>
+                    <div class="code-body"><span class="prompt">$</span> git clone https://github.com/clx-lang/clx
+<span class="prompt">$</span> cd clx
+<span class="prompt">$</span> ./build.sh install
+<span class="comment"># clx compiler installed to /usr/local/bin</span>
+<span class="comment"># libclx.a library installed to /usr/local/lib</span></div>
+                </div>
+                <div class="code-block">
+                    <div class="code-header"><span class="lang">CMD</span><span>Windows</span></div>
+                    <div class="code-body"><span class="prompt">&gt;</span> git clone https://github.com/clx-lang/clx
+<span class="prompt">&gt;</span> cd clx
+<span class="prompt">&gt;</span> build.bat install
+<span class="comment"># clx.exe compiler installed to clx\bin</span>
+<span class="comment"># clx.lib and clx_size.lib installed to clx\lib</span></div>
+                </div>
+                <p style="margin-top:16px">Verify your installation:</p>
+                <div class="code-block">
+                    <div class="code-header"><span class="lang">sh</span><span>Verify</span></div>
+                    <div class="code-body"><span class="prompt">$</span> clx --version
+<span class="output">clx 0.1.0</span>
+<span class="output">MIT License - Copyright (c) 2026 Tine Samir</span></div>
+                </div>
+            </section>
+
+            <!-- ═══ Benchmarks ═══ -->
+            <section id="benchmarks" class="section" role="tabpanel" aria-labelledby="benchmarks">
+                <h2>
+                    <span class="section-title-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg></span>
+                    Benchmarks
+                </h2>
+                <p>Performance comparison against popular Lua runtimes. The <i>speedup</i> is relative to Lua 5.5 interpreter. Benchmarks may vary depending on the C++ toolchain and environment.</p>
+                
+                <div style="margin-bottom: 20px;">
+                    <label for="bench-select" style="font-size: 0.8125rem; color: var(--text-dim); margin-bottom: 8px; display: block;">Select a benchmark:</label>
+                    <select id="bench-select" style="width: 100%; max-width: 320px; padding: 10px; background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: inherit; font-size: 0.875rem; cursor: pointer; outline: none;">
+                        <option value="fib">fib (Recursive Fibonacci)</option>
+                        <option value="ackermann">ackermann (Deep Recursion)</option>
+                        <option value="spectralnorm">spectralnorm (Spectral Norm)</option>
+                        <option value="arraysum">arraysum (Iteration & Sum)</option>
+                        <option value="pi">pi (Numeric Calculation)</option>
+                        <option value="bubble">bubble (Sort Algorithm)</option>
+                        <option value="json">json (JSON Parsing)</option>
+                        <option value="life">life (Conway's Game of Life)</option>
+                        <option value="mandelbrot">mandelbrot (Fractal Generation)</option>
+                        <option value="fasta">fasta (Sequence Generation)</option>
+                        <option value="coro">coro (Coroutine Overhead)</option>
+                        <option value="knucleotide">knucleotide (Nucleotide Count)</option>
+                        <option value="sieve">sieve (Sieve of Eratosthenes)</option>
+                        <option value="binarytrees">binarytrees (Tree Allocation)</option>
+                        <option value="nbody">nbody (Physics Simulation)</option>
+                        <option value="fannkuchredux">fannkuchredux (Permutations)</option>
+                        <option value="hashtable">hashtable (Memory Access)</option>
+                        <option value="3ddist">3ddist (3D Geometry)</option>
+                        <option value="canada">canada (GeoJSON Parsing)</option>
+                        <option value="warmup">warmup (Startup Overhead)</option>
+                    </select>
+                </div>
+
+                <div class="bench-wrap">
+                    <table class="bench-table">
+                        <thead>
+                            <tr>
+                                <th>Runtime</th>
+                                <th>Time</th>
+                                <th>Speedup</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="bench-body">
+                            </tbody>
+                    </table>
+                </div>
+                <p id="bench-desc" style="font-size: 0.8125rem; color: var(--text-dim); line-height: 1.6; margin: 16px 0 8px 0; padding: 0 2px;"></p>
+                <label for="bench-select" style="font-size: 0.8125rem; color: var(--text-dim); margin-bottom: 8px; display: block;"><br>Intel® Core™ i5 Ultra 125U CPU @ 4.30GHz · Linux · GCC 13.3.0 · Avg of 10 runs · lower time is better</label>
+            </section>
+
+            <!-- ═══ Doc: Getting Started ═══ -->
+            <section id="doc-getting-started" class="section doc-section" role="tabpanel">
+                <h2>
+                    <span class="section-title-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg></span>
+                    Getting Started
+                </h2>
+                <div class="doc-section">
+                    <h3>Build clx</h3>
+                    <p>Clone the repository and build from source:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">sh</span><span>Build</span></div>
+                        <div class="code-body"><span class="prompt">$</span> git clone https://github.com/clx-lang/clx
+<span class="prompt">$</span> cd clx
+<span class="prompt">$</span> ./build.sh
+<span class="comment"># Debug build: ./build.sh debug</span>
+<span class="comment"># Install: ./build.sh install</span></div>
+                    </div>
+                    <p>Alternatively, build manually with CMake:</p>
+                    <div class="code-block">
+                        <div class="code-body"><span class="prompt">$</span> mkdir build
+<span class="prompt">$</span> cd build
+<span class="prompt">$</span> cmake .. -DCMAKE_BUILD_TYPE=Release
+<span class="prompt">$</span> cmake --build .</div>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Compile Your First Program</h3>
+                    <p>Create <span class="inline-code">hello.lua</span>:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span><span>hello.lua</span></div>
+                        <div class="code-body">print("Hello, World!")</div>
+                    </div>
+                    <p>Compile and run:</p>
+                    <div class="code-block">
+                        <div class="code-body"><span class="prompt">$</span> ./build/clx hello.lua
+<span class="prompt">$</span> ./hello
+<span class="output">Hello, World!</span></div>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Your Second Program</h3>
+                    <p>Let's try something more interesting:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span><span>fib.lua</span></div>
+                        <div class="code-body">-- fib.lua
+function fib(n)
+    if n <= 1 then return n end
+    return fib(n - 1) + fib(n - 2)
+end
+
+print("Fibonacci(20) = " .. fib(20))</div>
+                    </div>
+                    <p>Compile it with <span class="inline-code">--fast</span> flag for better performances:</p>
+                    <div class="code-block">
+                        <div class="code-body"><span class="prompt">$</span> ./build/clx --fast fib.lua
+<span class="prompt">$</span> ./fib
+<span class="output">Fibonacci(20) = 6765</span></div>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Language Features</h3>
+                    <p>clx supports most Lua 5.5 features including variables, control flow, functions, tables, metatables, coroutines, standard libraries, and bitwise operations. Due to the AOT compilation model, <span class="inline-code">load()</span>, <span class="inline-code">dofile()</span>, <span class="inline-code">loadfile()</span>, <span class="inline-code">string.dump()</span>, and the <span class="inline-code">debug</span> library are not available.</p>
+                    <h4>Variables and Types</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span></div>
+                        <div class="code-body">-- Numbers
+local x = 42
+local pi = 3.14159
+
+-- Strings
+local greeting = "Hello"
+local name = 'World'
+
+-- Booleans
+local flag = true
+
+-- Tables
+local t = { a = 1, b = 2 }
+local arr = { 1, 2, 3 }
+
+-- Functions
+local function add(a, b)
+    return a + b
+end
+
+-- Closures
+local function counter()
+    local n = 0
+    return function()
+        n = n + 1
+        return n
+    end
+end</div>
+                    </div>
+                    <h4>Control Flow</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span></div>
+                        <div class="code-body">-- If/else
+if x > 10 then
+    print("big")
+elseif x > 5 then
+    print("medium")
+else
+    print("small")
+end
+
+-- While loop
+while x > 0 do
+    print(x)
+    x = x - 1
+end
+
+-- For loop (numeric)
+for i = 1, 10 do
+    print(i)
+end
+
+-- For loop (generic)
+for k, v in pairs(t) do
+    print(k, v)
+end
+
+-- Repeat/until
+repeat
+    x = x - 1
+until x == 0</div>
+                    </div>
+                    <h4>Functions</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span></div>
+                        <div class="code-body">-- Basic function
+function greet(name)
+    return "Hello, " .. name
+end
+
+-- Multiple return values
+function divmod(a, b)
+    return math.floor(a / b), a % b
+end
+
+-- Variadic
+function sum(...)
+    local total = 0
+    for i = 1, select("#", ...) do
+        total = total + select(i, ...)
+    end
+    return total
+end
+
+-- Method syntax
+local obj = { value = 10 }
+function obj:double()
+    self.value = self.value * 2
+end</div>
+                    </div>
+                    <h4>Tables and Metatables</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span></div>
+                        <div class="code-body">-- Table with methods
+local vector = {
+    x = 0, y = 0,
+
+    add = function(self, other)
+        return { x = self.x + other.x, y = self.y + other.y }
+    end,
+
+    __tostring = function(self)
+        return "(" .. self.x .. "," .. self.y .. ")"
+    end
+}
+
+-- Metatable for operator overloading
+setmetatable(vector, {
+    __add = function(a, b)
+        return a:add(b)
+    end
+})
+
+local v1 = { x = 1, y = 2 }
+local v2 = { x = 3, y = 4 }
+local v3 = v1 + v2  -- Uses __add</div>
+                    </div>
+                    <h4>Coroutines</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span></div>
+                        <div class="code-body">-- Producer/consumer with coroutines
+local function producer(max)
+    for i = 1, max do
+        coroutine.yield(i)
+    end
+end
+
+local function consumer()
+    local co = coroutine.create(producer)
+    while true do
+        local status, value = coroutine.resume(co)
+        if not status or value == nil then break end
+        print("Received: " .. value)
+    end
+end
+
+consumer()</div>
+                    </div>
+                    <h4>String Module</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span></div>
+                        <div class="code-body">-- Basic operations
+local s = "Hello, World!"
+print(string.len(s))          -- 13
+print(string.sub(s, 1, 5))    -- Hello
+print(string.upper(s))        -- HELLO, WORLD!
+print(string.lower(s))        -- hello, world!
+print(string.reverse(s))      -- !dlroW ,olleH
+
+-- Character conversion
+print(string.byte("A"))       -- 65
+print(string.char(65, 66, 67)) -- ABC
+
+-- Repetition
+print(string.rep("ab", 3))    -- ababab
+print(string.rep("x", 5, "-")) -- x-x-x-x-x
+
+-- Format
+print(string.format("Pi: %.2f", 3.14159))  -- Pi: 3.14
+
+-- Pattern matching
+local start, finish = string.find("hello world", "world")
+print(start, finish)  -- 7 11
+
+local match = string.match("hello world", "(%a+)")
+print(match)  -- hello
+
+for word in string.gmatch("hello world from lua", "%a+") do
+    print(word)
+end
+
+local result, count = string.gsub("hello world", "world", "lua")
+print(result, count)  -- hello lua, 1</div>
+                    </div>
+                    <h4>Bitwise Operations</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span></div>
+                        <div class="code-body">-- Bitwise AND, OR, XOR
+print(0xFF & 0x0F)    -- 15
+print(0xF0 | 0x0F)    -- 255
+print(0xFF ~ 0xF0)    -- 15
+
+-- Bitwise shifts
+print(1 << 8)         -- 256
+print(256 >> 4)       -- 16
+
+-- Bitwise NOT
+print(~0)             -- -1</div>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Performance Tips</h3>
+                    <p>Use local variables, prefer numeric for loops, and avoid mixing types for optimal performance.</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span><span>Tips</span></div>
+                        <div class="code-body">-- Good: local variables are faster
+local function compute()
+    local result = 0
+    for i = 1, 1000 do
+        local temp = i * 2
+        result = result + temp
+    end
+    return result
+end
+
+-- Prefer numeric for loops
+for i = 1, 1000000 do
+    -- body
+end
+
+-- Avoid mixed types: 1 + "2" is slower than 1 + 2</div>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Common Issues</h3>
+                    <h4>Debugging Compilation Errors</h4>
+                    <p>If you get a C++ compilation error, you can see the generated code:</p>
+                    <div class="code-block">
+                        <div class="code-body"><span class="prompt">$</span> clx script.lua --cpp
+<span class="comment"># This creates script.cpp — examine it to see what's being generated</span></div>
+                    </div>
+                    <h4>Understanding Runtime Errors</h4>
+                    <p>Runtime errors show the Lua line where the error occurred:</p>
+                    <div class="code-block">
+                        <div class="code-body">Error: script.lua:10: attempt to perform arithmetic on a number value</div>
+                    </div>
+                    <p>The format is <span class="inline-code">filename:line: message</span>.</p>
+                </div>
+                <div class="doc-section">
+                    <h3>Next Steps</h3>
+                    <p>Read the <a href="#doc-architecture">Architecture</a>, <a href="#doc-optimizations">Optimizations</a>, <a href="#doc-runtime">Runtime</a>, and <a href="#doc-cli">CLI</a> documentation.</p>
+                </div>
+            </section>
+
+            <!-- ═══ Doc: CLI Reference ═══ -->
+            <section id="doc-cli" class="section doc-section" role="tabpanel">
+                <h2>
+                    <span class="section-title-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg></span>
+                    CLI Reference
+                </h2>
+                <div class="doc-section">
+                    <h3>Usage</h3>
+                    <div class="code-block">
+                        <div class="code-body"><span class="prompt">$</span> clx [options] &lt;file.lua&gt; [&lt;compiler-options&gt;]</div>
+                    </div>
+                    <p>Options starting with <span class="inline-code">-</span> that are not recognized by clx are automatically passed through to the C++ compiler.</p>
+                </div>
+                <div class="doc-section">
+                    <h3>Build Mode</h3>
+                    <div class="code-block">
+                        <div class="code-body"><span class="flag">--executable</span>    Compile to executable (default)
+<span class="flag">--object</span>        Compile to object file (.o/.obj)
+<span class="flag">--static</span>        Compile to static module (.a/.lib)
+</div>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Output Options</h3>
+                    <div class="code-block">
+                        <div class="code-body"><span class="flag">--output</span> &lt;name&gt;   Specify output file name</div>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Compilation Options</h3>
+                    <div class="code-block">
+                        <div class="code-body"><span class="flag">--debug</span>       Enable debug symbols, disable optimizations; <span class="inline-code">#line</span> directives map debugger views to Lua source
+<span class="flag">--size</span>        Optimize for size (default)
+<span class="flag">--fast</span>        Optimize for speed
+<span class="flag">--cpp</span>         Generate C++ source files, don't compile
+<span class="flag">--minimal</span>   Exclude non-essential modules (string, table, io, os, math, utf8, coroutine); keeps base + package
+<span class="flag">--modules</span> &lt;list&gt;  Precompiled modules to link (comma-separated)</div>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Optimization Flags</h3>
+                    <p>Default flags are only applied when no compiler options are provided by the user.</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">Size Mode (--size, default)</span></div>
+                        <div class="code-body"><span class="comment"># gcc/clang:</span>
+-Os -flto=auto -fno-rtti -fvisibility=hidden -ffunction-sections -fdata-sections -Wl,--gc-sections -s
+<span class="comment"># MSVC:</span>
+/O1 /GL /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy /link /OPT:REF /OPT:ICF</div>
+                    </div>
+                    <p style="font-size:0.8125rem;color:var(--text-dim);margin-top:8px">DCE flags (<span class="inline-code">-ffunction-sections -fdata-sections -Wl,--gc-sections</span>) are added only for executables.</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">Fast Mode (--fast)</span></div>
+                        <div class="code-body"><span class="comment"># gcc/clang:</span>
+-O3 -flto=auto -fno-rtti -fvisibility=hidden -ffunction-sections -fdata-sections -Wl,--gc-sections -s
+<span class="comment"># MSVC:</span>
+/O2 /Ot /GL /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy /link /OPT:REF /OPT:ICF</div>
+                    </div>
+                    <p style="font-size:0.8125rem;color:var(--text-dim);margin-top:8px"><span class="inline-code">--size</span> (default) links against <span class="inline-code">libclx_size.a</span> and reduces binary size by <strong>36–40%</strong> vs <span class="inline-code">--fast</span>. Compute-heavy code can be 80–320% slower; table/IO-heavy code sees negligible difference. Use <span class="inline-code">--fast</span> when throughput matters more than size.</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">Debug Mode (--debug)</span></div>
+                        <div class="code-body"><span class="comment"># gcc/clang:</span>
+-O0 -g
+<span class="comment"># MSVC:</span>
+/Od /Zi /MDd /EHsc</div>
+                    </div>
+                    <p>If you provide any compiler options, no default flags are added — you get full control.</p>
+                </div>
+                <div class="doc-section">
+                    <h3>Platform-Specific</h3>
+                    <div class="code-block">
+                        <div class="code-body"><span class="comment"># Linux/macOS:</span>
+  Compiler: clang++ (falls back to g++)
+  Executable: &lt;name&gt; (no extension)
+  Object: &lt;name&gt;.o  |  Static: &lt;name&gt;.a  |  Dynmod: &lt;name&gt;.so
+
+<span class="comment"># Windows:</span>
+  Compiler: clang++ (falls back to g++, then cl MSVC)
+  Executable: &lt;name&gt;.exe
+  Object: &lt;name&gt;.obj  |  Static: &lt;name&gt;.lib  |  Dynmod: &lt;name&gt;.dll</div>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Examples</h3>
+                    <div class="code-block">
+                        <div class="code-body"><span class="prompt">$</span> clx script.lua
+<span class="comment"># Compile to executable</span>
+<span class="prompt">$</span> clx script.lua --output myapp
+<span class="comment"># Custom output name</span>
+<span class="prompt">$</span> clx script.lua --size
+<span class="comment"># Optimize for size (default)</span>
+<span class="prompt">$</span> clx script.lua --fast
+<span class="comment"># Optimize for speed</span>
+<span class="prompt">$</span> clx script.lua --debug
+<span class="comment"># Debug build — Lua source lines mapped via #line directives (GDB/LLDB)</span>
+<span class="prompt">$</span> clx script.lua --cpp
+<span class="comment"># Keep generated C++ source</span>
+<span class="prompt">$</span> clx script.lua -O2
+<span class="comment"># Custom optimization flags</span>
+<span class="prompt">$</span> clx script.lua --object
+<span class="comment"># Object file output</span>
+<span class="prompt">$</span> clx script.lua --static
+<span class="comment"># Static library</span>
+</div>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Environment Variables</h3>
+                    <p>clx respects these environment variables:</p>
+                    <div class="code-block">
+                        <div class="code-body"><span class="flag">CXX</span>  (Not currently read — compiler auto-detected)</div>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Exit Codes</h3>
+                    <div class="code-block">
+                        <div class="code-body"> 0   Success
+ 1   Usage or compilation error
+ 2   No C++ compiler found</div>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Build with CMake</h3>
+                    <p>If building from source:</p>
+                    <div class="code-block">
+                        <div class="code-body"><span class="prompt">$</span> mkdir build
+<span class="prompt">$</span> cd build
+<span class="prompt">$</span> cmake ..
+<span class="prompt">$</span> make
+<span class="prompt">$</span> ./clx --help</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ═══ Doc: Architecture ═══ -->
+            <section id="doc-architecture" class="section doc-section" role="tabpanel">
+                <h2>
+                    <span class="section-title-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg></span>
+                    Architecture
+                </h2>
+                <div class="doc-section">
+                    <h3>Overview</h3>
+                    <p>clx transpiles Lua source code into optimized C++, then compiles with the system C++ compiler to produce native machine code. This architecture provides performance up to 60x faster than standard Lua interpreters.</p>
+                </div>
+                <div class="doc-section">
+                    <h3>Compiler Pipeline</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">Pipeline</span><span>Compilation Stages</span></div>
+                        <div style="padding: 24px; display: flex; flex-direction: column; align-items: center; gap: 12px; background: var(--code-bg);">
+                            <div style="padding: 8px 16px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.8125rem; font-weight: 600; color: var(--text-bright);">Lua Source</div>
+                            <div style="color: var(--text-dim); font-size: 1rem;">▼</div>
+                            <div style="padding: 10px 20px; border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 6px; font-size: 0.8125rem; font-weight: 600; color: var(--accent); text-align: center; min-width: 140px;">Lexer</div>
+                            <div style="color: var(--text-dim); font-size: 0.75rem;">Token Stream ▼</div>
+                            <div style="padding: 10px 20px; border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 6px; font-size: 0.8125rem; font-weight: 600; color: var(--accent); text-align: center; min-width: 140px;">Parser</div>
+                            <div style="color: var(--text-dim); font-size: 0.75rem;">Abstract Syntax Tree ▼</div>
+                            <div style="padding: 10px 20px; border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 6px; font-size: 0.8125rem; font-weight: 600; color: var(--accent); text-align: center; min-width: 140px;">Optimizer</div>
+                            <div style="color: var(--text-dim); font-size: 0.75rem;">Annotated AST ▼</div>
+                            <div style="padding: 10px 20px; border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 6px; font-size: 0.8125rem; font-weight: 600; color: var(--accent); text-align: center; min-width: 140px;">Codegen</div>
+                            <div style="color: var(--text-dim); font-size: 0.75rem;">C++ Source ▼</div>
+                            <div style="display: flex; align-items: center; gap: 16px; position: relative;">
+                                <div style="padding: 10px 20px; border: 1px solid var(--border-hover); background: var(--card); border-radius: 6px; font-size: 0.8125rem; font-weight: 600; color: var(--text-bright); text-align: center; min-width: 140px; z-index: 2;">C++ Compiler<br><span style="font-size: 0.6875rem; font-weight: 400; color: var(--text-muted);">(gcc / clang / cl)</span></div>
+                                <div style="position: absolute; left: -100px; display: flex; align-items: center; gap: 6px;">
+                                    <div style="padding: 6px 12px; border: 1px solid var(--border); background: var(--sidebar); border-radius: 4px; font-size: 0.75rem; color: var(--text-muted);">Runtime (libclx.a)</div>
+                                    <div style="color: var(--text-dim);">➔</div>
+                                </div>
+                            </div>
+                            <div style="color: var(--text-dim); font-size: 1rem;">▼</div>
+                            <div style="padding: 8px 16px; border: 1px solid var(--border); background: var(--accent-strong); border-radius: 6px; font-size: 0.8125rem; font-weight: 600; color: var(--text-bright);">Native Binary</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Components</h3>
+                    <p><span class="bright">CLI</span> — Handles argument parsing, file I/O, and invokes the C++ compiler. Auto-detects gcc, clang, or MSVC. Enables DCE via <span class="inline-code">-ffunction-sections -Wl,--gc-sections</span> (gcc/clang) or <span class="inline-code">/Gy /link /OPT:REF /OPT:ICF</span> (MSVC).</p>
+                    <p><span class="bright">Lexer</span> — Converts source to token stream (keywords, identifiers, literals, operators, delimiters).</p>
+                    <p><span class="bright">Parser</span> — Recursive descent parser builds an AST with statement, expression, block, and function nodes.</p>
+                    <p><span class="bright">AST Nodes</span> — Core node types: Block, Identifier, BinaryOp, UnaryOp, FunctionDef, TableConstructor, ForStatement, WhileStatement, IfStatement, CallExpression.</p>
+                    <p><span class="bright">Optimizer</span> — Analyzes the AST and annotates nodes with optimization hints: Numeric fast-path (direct C++ arithmetic), variable scope resolution, table purity analysis, constant folding preparation, shape version tracking for inline cache invalidation, <span class="inline-code">yields_number</span> analysis for numeric for loops.</p>
+                    <p><span class="bright">Code Generator</span> — Produces C++ code with fast-path for numeric operations, slow-path for dynamic operations, loop transformation, <span class="inline-code">[[likely]]</span> branch prediction hints, per-call-site <span class="inline-code">CacheSlot</span> inline caching, StringBuilder-based concatenation, and wyhash-based string hashing.</p>
+                    <p><span class="bright">Runtime Library</span> — Implements Lua semantics: core VM (GC, tables, metamethods, arithmetic, bitwise ops), base library, math library, coroutines, module loading, and string library.</p>
+                </div>
+                <div class="doc-section">
+                    <h3>Project Layout</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">Directory</span><span>clx Source Tree</span></div>
+                        <div class="code-body">clx/
+├── CMakeLists.txt              # Build configuration
+├── build.sh / build.bat        # Convenience build scripts
+├── include/
+│   ├── clx.h                   # Public C++ API (value ctors, type queries, helpers)
+│   └── clx_runtime.h           # Internal runtime (types, GC, tables, inline ops)
+├── src/
+│   ├── clx.cpp                  # Compiler driver / CLI
+│   ├── syntax/
+│   │   ├── lexer.h/cpp          # Tokenizer/scanner
+│   │   ├── parser.h/cpp         # Recursive descent parser
+│   │   ├── nodes.h              # AST node definitions
+│   │   └── visitor.h/cpp        # AST visitor pattern
+│   ├── optimizer/
+│   │   ├── optimizer.h           # Optimization passes
+│   │   └── optimizer.cpp         # Optimization implementation
+│   ├── codegen/
+│   │   ├── codegen.h             # Code generator interface
+│   │   └── codegen.cpp           # C++ code emission (calls optimizer internally)
+│   └── runtime/                  # Runtime library (libclx.a)
+│       ├── runtime.cpp           # VM core (GC, types, state, metamethods)
+│       ├── base.cpp              # Base module (print, error, type, pcall, etc.)
+│       ├── table.cpp             # Table module (insert, remove, concat, sort, etc.)
+│       ├── math.cpp              # Math module
+│       ├── strings.cpp           # String module
+│       ├── coroutine.cpp         # Coroutine module
+│       ├── io.cpp                # I/O module
+│       ├── os.cpp                # OS module
+│       ├── utf8.cpp              # UTF-8 module
+│       ├── package.cpp           # Package/module system
+│       └── openlibs.cpp          # Standard modules loader
+├── tests/                       # End-to-end test suite
+├── examples/                    # Example clx projects using the C++ embedding API
+│   ├── mandelbrot/              # Mandelbrot viewer
+│   ├── pong/                    # Pong game
+│   └── sokol/                   # Sokol graphics module for clx
+├── benchmarks/                  # Performance benchmarks with comparisons
+└── doc/                         # Comprehensive documentation</div>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Data Flow</h3>
+                    <p><span class="bright">Compilation:</span> Lua source → Lexing → Parsing → AST → Optimization → Annotated AST → Codegen → C++ source → Compilation → Native binary</p>
+                    <p><span class="bright">Runtime:</span> Initialization (LState, standard libraries) → Execution (compiled code with Numeric fast-path) → Fallback (Lua value representation for dynamic types) → Cleanup (GC)</p>
+                </div>
+                <div class="doc-section">
+                    <h3>Key Runtime Components</h3>
+                    <h4>StringPool</h4>
+                    <p>Open-addressed hash map for string interning. Each slot owns a baked allocation: <span class="inline-code">[uint32_t hash][uint32_t len][char data...\0]</span>. LValue stores a pointer to the char data (8 bytes past alloc start). One probe on hit, no <span class="inline-code">std::string</span>, no side map, no double lookup. Supports <span class="inline-code">intern_preallocated()</span> for zero-allocation string concatenation.</p>
+                    <h4>wyhash</h4>
+                    <p>Fast, high-quality hash function used for table keys and string interning. Uses compile-time constant secrets with 128-bit multiply for excellent avalanche. For interned strings, the hash is baked into the allocation header, making <span class="inline-code">lvalue_hash()</span> a single 4-byte load.</p>
+                    <p>For strings ≤8 bytes, <span class="inline-code">swar_hash_8()</span> replaces <span class="inline-code">wyhash_str</span> — loads all bytes into one register with a single <span class="inline-code">memcpy</span> and mixes via <span class="inline-code">wyhash64</span>. Used consistently for both TAG_ISTR inline strings and short interned strings so cross-type hash compatibility is maintained.</p>
+                    <h4>CacheSlot Inline Caching</h4>
+                    <p>Per-call-site cache slots for string-keyed table access. Each access site in the source gets one <span class="inline-code">CacheSlot</span> that caches the last table pointer and value. Uses <span class="inline-code">shape_version</span> to detect stale cached values after table writes. Only caches non-GC values to avoid dangling pointers after collection. States: valid/invalid based on table pointer and shape version match.</p>
+                    <h4>StringBuilder</h4>
+                    <p>O(n) string concatenation that avoids the O(n²) quadratic blow-up of repeated <span class="inline-code">s = s .. part</span> patterns. Uses inline storage for up to 8 parts, grows to heap allocation when needed. Produces a single interned string with baked hash on <span class="inline-code">to_string()</span>.</p>
+                    <h4>Shape Version Tracking</h4>
+                    <p>Tables track a <span class="inline-code">shape_version</span> that increments on every write. CacheSlots check the version to detect stale cached values, preventing incorrect reads after table mutations.</p>
+                </div>
+            </section>
+
+            <!-- ═══ Doc: Optimizations ═══ -->
+            <section id="doc-optimizations" class="section doc-section" role="tabpanel">
+                <h2>
+                    <span class="section-title-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></span>
+                    Optimizations
+                </h2>
+                <div class="doc-section">
+                    <h3>Constant Folding</h3>
+                    <p>clx emits arithmetic expressions and delegates to the C++ compiler, which performs constant folding at compile time:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span></div>
+                        <div class="code-body">local x = 1 + 2 + 3  <span class="comment">-- Compiled as: local x = 6</span>
+local y = "hello" .. " " .. "world"  <span class="comment">-- Compiled as: "hello world"</span></div>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Numeric Fast-Path</h3>
+                    <p>clx distinguishes between Integer and Number types in its nan-boxed value representation. The runtime LValue arithmetic functions dispatch to native double or int64 operations internally.</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span></div>
+                        <div class="code-body">-- Numeric literal:
+local i = 1 + 2  <span class="comment">-- Compiled as: double arithmetic via LValue</span>
+
+-- Float literal:
+local f = 1.5 + 2.3  <span class="comment">-- Same LValue arithmetic path</span>
+
+-- Mixed (promotes to double):
+local m = 1 + 2.5  <span class="comment">-- Integer converted to double</span></div>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Direct Arithmetic Fast-Path</h3>
+                    <p>When all operands are known to be numeric, clx generates direct C++ arithmetic instead of dynamic LValue dispatch:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span></div>
+                        <div class="code-body">-- Slow path (dynamic):
+local result = a + b  <span class="comment">-- Uses clx::LValue arithmetic with type checks</span>
+
+-- Fast path (numeric):
+local result = a + b  <span class="comment">-- When known numeric, uses clx_add directly</span></div>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Local Variable Optimization</h3>
+                    <p>Local variables that hold numbers are stored as unboxed C++ doubles:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span></div>
+                        <div class="code-body">local function sum(n)
+    local total = 0  <span class="comment">-- Stored as double, not LValue</span>
+    for i = 1, n do
+        total = total + i  <span class="comment">-- Direct double arithmetic</span>
+    end
+    return total
+end</div>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Inline Caching</h3>
+                    <p>Each string-keyed table access site gets a dedicated <span class="inline-code">CacheSlot</span>. On repeated access to the same table key, the cache skips the hash probe entirely. Shape version guards detect stale cached values after table mutations. Only non-GC values are cached to avoid dangling pointers.</p>
+                </div>
+                <div class="doc-section">
+                    <h3>String Optimizations</h3>
+                    <p><span class="bright">StringPool</span> — Open-addressed hash map for string interning with one-probe-on-hit, baked hashes, and no <span class="inline-code">std::string</span> overhead.</p>
+                    <p><span class="bright">Baked Hashes</span> — For interned strings, the wyhash is baked into the allocation header. Reading the hash costs a single 4-byte load.</p>
+                    <p><span class="bright">StringBuilder</span> — O(n) string concatenation that avoids O(n²) quadratic blow-up. Produces a single interned string with baked hash.</p>
+                    <p><span class="bright">wyhash</span> — Fast, high-quality hash with compile-time constant secrets and 128-bit multiply (<span class="inline-code">__uint128_t</span> or <span class="inline-code">_umul128</span> on MSVC).</p>
+                    <p><span class="bright">Pre-Allocated Interning</span> — <span class="inline-code">intern_preallocated()</span> adopts a pre-formatted buffer directly into the StringPool, cutting string concat from 3 heap allocations to 1 (or 0 on pool hit).</p>
+                </div>
+                <div class="doc-section">
+                    <h3>Code Generation Optimizations</h3>
+                    <p><span class="bright">Loop Transformations</span> — Numeric for loops transform to C++ for loops. Generic for loops emit direct <span class="inline-code">LCFunction</span> pointer calls.</p>
+                    <p><span class="bright">Branch Prediction Hints</span> — Fast paths annotated with <span class="inline-code">[[likely]]</span> attributes.</p>
+                    <p><span class="bright">Inlining</span> — Small functions inlined at compile time. All arithmetic operators are <span class="inline-code">CLX_INLINE</span> with <span class="inline-code">always_inline</span>.</p>
+                    <p><span class="bright">SIMD Vectorization</span> — C++ compiler can vectorize simple loops with <span class="inline-code">-O3 -march=native</span>. Add <span class="inline-code">-mavx2</span> manually for AVX2-specific builds.</p>
+                    <p><span class="bright">Dead Code Elimination</span> — <span class="inline-code">-ffunction-sections -fdata-sections -Wl,--gc-sections</span> (gcc/clang) or <span class="inline-code">/Gy /link /OPT:REF /OPT:ICF</span> (MSVC).</p>
+                </div>
+                <div class="doc-section">
+                    <h3>Link-Time Optimizations</h3>
+                    <p>When using <span class="inline-code">-flto</span> (gcc/clang) or <span class="inline-code">/GL</span> (MSVC), the compiler can inline across translation units, eliminate dead code across the entire program, and perform whole-program analysis. Enabled by default in release mode.</p>
+                </div>
+                <div class="doc-section">
+                    <h3>Runtime Optimizations</h3>
+                    <p><span class="bright">Table Pre-sizing</span> — Tables with known structure are pre-allocated to the correct size.</p>
+                    <p><span class="bright">Table Layout</span> — Cache-line-optimized layout: all gettable fields fit in one 64-byte cache line.</p>
+                    <p><span class="bright">Upvalue Fast-Path</span> — Closure variables that aren't captured are stored directly, avoiding heap allocation.</p>
+                    <p><span class="bright">Metamethod Caching</span> — Frequently used metamethod strings are pre-interned at initialization.</p>
+                    <p><span class="bright">Length Operator</span> — String length read from baked header, avoiding <span class="inline-code">strlen</span>.</p>
+                </div>
+                <div class="doc-section">
+                    <h3>Optimization Levels</h3>
+                    <p>Lua source-level debugging. The generated C++ contains <span class="inline-code">#line</span> directives mapping each statement to the original <span class="inline-code">.lua</span> file and line, so GDB, LLDB, or MSVC debugger can step through the script.</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">Debug Mode (--debug)</span></div>
+                        <div class="code-body"><span class="comment"># gcc/clang:</span> -O0 -g
+<span class="comment"># MSVC:</span> /Od /Zi /MDd /EHsc</div>
+                    </div>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">Release Mode (default)</span></div>
+                        <div class="code-body"><span class="comment"># gcc/clang:</span> -O3 -flto=auto -fno-rtti -fvisibility=hidden
+<span class="comment"># MSVC:</span> /O2 /Ot /GL /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy</div>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Compiler Remarks</h3>
+                    <h4>GCC/Clang (Linux/macOS)</h4>
+                    <p>Default release flags:</p>
+                    <div class="code-block">
+                        <div class="code-body">-O3 -flto=auto -fno-rtti -fvisibility=hidden -ffunction-sections -fdata-sections
+-Wl,--gc-sections -s -ldl</div>
+                    </div>
+                    <h4>MSVC (Windows)</h4>
+                    <p>Default release flags:</p>
+                    <div class="code-block">
+                        <div class="code-body">/O2 /Ot /GL /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy
+/link /OPT:REF /OPT:ICF</div>
+                    </div>
+                    <p>Key MSVC optimizations: <span class="inline-code">/GL</span> (Whole program optimization / LTO), <span class="inline-code">/OPT:REF</span> (Remove unused functions), <span class="inline-code">/OPT:ICF</span> (Identical COMDAT folding), <span class="inline-code">/Gy</span> (Function-level linking), <span class="inline-code">/fp:fast</span> (Fast floating-point semantics).</p>
+                    <h4>Cross-Platform Tips</h4>
+                    <p>Use <span class="inline-code">-O3 -march=native -flto=auto</span> on gcc/clang for maximum performance. On MSVC, <span class="inline-code">/O2</span> is the primary optimization flag; <span class="inline-code">/GL</span> enables link-time optimization. Both compilers support SIMD vectorization when loops are simple enough. Dead code elimination requires function-level linking on both platforms.</p>
+                </div>
+            </section>
+
+            <!-- ═══ Doc: Runtime ═══ -->
+            <section id="doc-runtime" class="section doc-section" role="tabpanel">
+                <h2>
+                    <span class="section-title-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg></span>
+                    Runtime
+                </h2>
+                <div class="doc-section">
+                    <h3>Value System</h3>
+                    <p>clx uses nan-boxing to represent all Lua values in 64 bits with distinct types for Number (double), Integer (native int64), TAG_ISTR inline strings (&le;5 bytes, no heap allocation), and pointers for tables, functions, threads, and userdata.</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">Value Layout</span><span>64-bit NAN-Boxed Representation</span></div>
+                        <div style="padding: 16px; display: flex; flex-direction: column; gap: 8px; background: var(--code-bg);">
+                            <div style="display: flex; flex-direction: column; padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--card);">
+                                <span style="font-size: 0.8125rem; font-weight: 600; color: var(--accent);">Double (Numbers)</span>
+                                <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">64-bit IEEE 754 floating-point format</span>
+                            </div>
+                            <div style="display: flex; flex-direction: column; padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--card);">
+                                <span style="font-size: 0.8125rem; font-weight: 600; color: var(--accent);">Integer</span>
+                                <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">48-bit signed payload + type tag</span>
+                            </div>
+                            <div style="display: flex; flex-direction: column; padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--card);">
+                                <span style="font-size: 0.8125rem; font-weight: 600; color: var(--accent);">Pointer (GC Objects)</span>
+                                <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">62-bit heap address references + 2-bit object tag (tables, closures, threads)</span>
+                            </div>
+                            <div style="display: flex; flex-direction: column; padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--card);">
+                                <span style="font-size: 0.8125rem; font-weight: 600; color: var(--accent);">Inline String (TAG_ISTR)</span>
+                                <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">16-bit tag prefix (<code style="font-family: monospace; color: var(--accent);">0xFFF9 + len</code>) + 48-bit immediate character sequence (≤ 5 Bytes)</span>
+                            </div>
+                            <div style="display: flex; flex-direction: column; padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--card);">
+                                <span style="font-size: 0.8125rem; font-weight: 600; color: var(--accent);">Special System Literals</span>
+                                <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">Dedicated bit configurations representing <code style="font-family: monospace;">nil</code>, <code style="font-family: monospace;">true</code>, and <code style="font-family: monospace;">false</code></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Garbage Collection</h3>
+                    <p>Stop-the-world mark-and-sweep collector: mark phase traverses reachable objects from roots, sweep phase deallocates unreachable objects. Finalizers (<span class="inline-code">__gc</span>) are called before collection. Uses a reusable worklist vector to avoid repeated allocations.</p>
+                </div>
+                <div class="doc-section">
+                    <h3>Standard Libraries</h3>
+                    <p><span class="bright">Base Library</span> — print, error, assert, type, tostring, tonumber, pairs, ipairs, next, pcall, xpcall, select, collectgarbage, setmetatable, getmetatable, rawequal, rawget, rawset, rawlen, warn, _VERSION</p>
+                    <p><span class="bright">Math Library</span> — Uses <span class="inline-code">set_lazy_funcs</span> for lazy registration via <span class="inline-code">constexpr LazyReg[]</span>. Functions created as <span class="inline-code">LCFunction</span> closures on first access, then cached on the table.</p>
+                    <p><span class="bright">String Library</span> — len, sub, reverse, lower, upper, rep, byte, char, format, find, match, gmatch, gsub, pack, unpack, packsize with full pattern matching support.</p>
+                    <p><span class="bright">Coroutine Library</span> — create, resume, yield, status, wrap using OS-level fibers/ucontext.</p>
+                    <p><span class="bright">Table Library</span> — insert, remove, concat, sort, unpack, pack, move.</p>
+                </div>
+                <div class="doc-section">
+                    <h3>Metamethods</h3>
+                    <div class="code-block">
+                        <div class="code-body">__add  __sub  __mul  __div  __mod  __pow  __unm
+__len  __eq   __lt   __le   __concat
+__index  __newindex  __call  __tostring  __gc  __metatable</div>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>CacheSlot Inline Caching</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>CacheSlot structure</span></div>
+                        <div class="code-body">struct CacheSlot {
+    uint64_t table_val;     // Cached table pointer (raw bits)
+    uint32_t shape_version; // Table shape version for staleness detection
+    LValue    cached;       // Cached value (non-GC only)
+    bool      valid;        // Cache validity flag
+};</div>
+                    </div>
+                    <p>Per-call-site cache for string-keyed table access. Valid when table pointer matches, shape version hasn't changed, and cached value is not a GC object (avoiding dangling pointers). States: valid/invalid based on table pointer and shape version match.</p>
+                </div>
+                <div class="doc-section">
+                    <h3>Closures and Upvalues</h3>
+                    <p>clx supports lexical scoping with full closure capture:</p>
+                    <ul>
+                        <li>Local variables captured by inner functions become upvalues</li>
+                        <li>Shared upvalues (multiple closures sharing the same captured variable)</li>
+                        <li>Loop variable capture (closures created in a for loop each capture the correct iteration value)</li>
+                        <li>Triple nesting and arbitrary capture depth</li>
+                        <li>Tail call optimization (TCO) for recursive calls — no stack growth</li>
+                    </ul>
+                </div>
+                <div class="doc-section">
+                    <h3>Goto and Labels</h3>
+                    <p>Full <span class="inline-code">goto</span> / <span class="inline-code">::label::</span> support with proper lexical scoping:</p>
+                    <ul>
+                        <li>Forward and backward jumps</li>
+                        <li>Duplicate labels in different scopes resolve correctly</li>
+                        <li>Goto can create loops (backward jumps)</li>
+                    </ul>
+                </div>
+                <div class="doc-section">
+                    <h3>Bitwise Operations</h3>
+                    <p>clx implements bitwise operations via inline functions:</p>
+                    <div class="code-block">
+                        <div class="code-body">bit32.band ( &amp; )   bit32.bor ( | )   bit32.bxor ( ~ )
+bit32.shl ( &lt;&lt; )   bit32.shr ( &gt;&gt; )   bit32.bnot ( ~ )</div>
+                    </div>
+                    <p>Available as <span class="inline-code">clx_band</span>, <span class="inline-code">clx_bor</span>, <span class="inline-code">clx_bxor</span>, <span class="inline-code">clx_shl</span>, <span class="inline-code">clx_shr</span>, <span class="inline-code">clx_bnot</span> in the runtime.</p>
+                </div>
+                <div class="doc-section">
+                    <h3>Memory Layout</h3>
+                    <h4>Table Layout</h4>
+                    <div style="overflow-x:auto;margin-top:10px">
+                        <table class="bench-table" style="font-size:0.8125rem">
+                            <thead>
+                                <tr><th style="width:40%">Region</th><th style="width:60%">Contents</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td colspan="2" style="font-weight:600;color:var(--text-bright);padding:8px 16px;border-bottom:1px solid var(--border)">LHeader (metadata)</td></tr>
+                                <tr><td style="padding-left:32px">type, marked, next</td><td style="color:var(--text-muted)">GC metadata</td></tr>
+                                <tr><td colspan="2" style="font-weight:600;color:var(--text-bright);padding:8px 16px;border-bottom:1px solid var(--border)">Cache line 0 (64 bytes) — <span style="font-weight:400;color:var(--text-muted)">all gettable fields here</span></td></tr>
+                                <tr><td style="padding-left:32px">array pointer</td><td style="color:var(--text-muted)">8 bytes</td></tr>
+                                <tr><td style="padding-left:32px">array_size, array_cap</td><td style="color:var(--text-muted)">16 bytes</td></tr>
+                                <tr><td style="padding-left:32px">bucket, hash_size</td><td style="color:var(--text-muted)">24 bytes</td></tr>
+                                <tr><td style="padding-left:32px">metatable, hash_count</td><td style="color:var(--text-muted)">40 bytes</td></tr>
+                                <tr><td style="padding-left:32px">padding</td><td style="color:var(--text-muted)">56 bytes (to align next cache line)</td></tr>
+                                <tr><td colspan="2" style="font-weight:600;color:var(--text-bright);padding:8px 16px;border-bottom:1px solid var(--border)">Parallel arrays (cache-line optimized)</td></tr>
+                                <tr><td style="padding-left:32px">keys</td><td style="color:var(--text-muted)">hash_size &times; 8 bytes</td></tr>
+                                <tr><td style="padding-left:32px">vals</td><td style="color:var(--text-muted)">hash_size &times; 8 bytes</td></tr>
+                                <tr><td style="padding-left:32px">nexts</td><td style="color:var(--text-muted)">hash_size &times; 2 bytes</td></tr>
+                                <tr><td style="padding-left:32px">shape_version</td><td style="color:var(--text-muted)">4 bytes</td></tr>
+                                <tr><td style="padding-left:32px">free_head</td><td style="color:var(--text-muted)">2 bytes</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <h4>String Layout</h4>
+                    <p>Interned strings are stored as:</p>
+                    <div class="code-block">
+                        <div class="code-body">4 bytes: baked wyhash
+4 bytes: length
+char data: string content (null-terminated)</div>
+                    </div>
+                    <p>LValue stores a pointer to the char data (skipping the 8-byte header). Length at <span class="inline-code">ptr[-4..ptr[-1]</span> and hash at <span class="inline-code">ptr[-8..ptr[-5]]</span>.</p>
+                </div>
+                <div class="doc-section">
+                    <h3>Pre-interned Metamethods</h3>
+                    <p>To avoid repeated string interning on every metamethod dispatch, clx pre-interns common metamethod strings at LState initialization: <span class="inline-code">str_index</span>, <span class="inline-code">str_newindex</span>, <span class="inline-code">str_gc</span>, <span class="inline-code">str_call</span>, <span class="inline-code">str_close</span>, <span class="inline-code">str_pairs</span>, <span class="inline-code">str_tostring</span>. These are stored directly in LState and used for fast metamethod lookup.</p>
+                </div>
+                <div class="doc-section">
+                    <h3>GC Options</h3>
+                    <p>The <span class="inline-code">collectgarbage()</span> function accepts these options:</p>
+                    <div class="code-block">
+                        <div class="code-body">"collect"       Performs a full GC cycle (default)
+"stop"          Stops automatic GC — runs only on explicit calls
+"restart"       Restarts automatic GC
+"count"         Returns total memory in use (Kbytes, fractional)
+"step"          Performs a single GC sweep step; returns true if finished
+"isrunning"     Returns true if the collector is running
+"incremental"   Switches to incremental mode (already the default)
+"generational"  Not supported — stays incremental
+"param"         Gets/sets GC parameters (pause, stepmul, stepsize)</div>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Lazy Function Registration</h3>
+                    <p><span class="inline-code">set_lazy_funcs(L, table, lazy_regs, count)</span> attaches a <span class="inline-code">__index</span> metamethod that creates <span class="inline-code">LCFunction</span> closures lazily on first access and caches them on the table. Uses <span class="inline-code">constexpr</span>-friendly <span class="inline-code">LazyReg</span> arrays (raw function pointers, no <span class="inline-code">std::function</span>) so registration tables live in static read-only storage. Math library uses this pattern.</p>
+                </div>
+                <div class="doc-section">
+                    <h3>Performance Characteristics</h3>
+                    <div class="code-block">
+                        <div class="code-body">Table access (key known):  O(1) average
+Table access (cache hit):  O(1) single pointer check
+Table iteration:           O(n)
+String concatenation:      O(n) per operation
+Numeric for loop:          O(n) with SIMD
+Function call:             O(1) setup + body
+GC pause:                  Incremental, 512-byte step budget
+String interning:          O(1) average, one probe
+Pattern matching:          O(n*m) worst case</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ═══ Doc: C++ API ═══ -->
+            <section id="doc-api" class="section doc-section" role="tabpanel">
+                <h2>
+                    <span class="section-title-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg></span>
+                    C++ API
+                </h2>
+                <p>All functions are in <span class="inline-code">namespace clx</span>. Include <span class="inline-code">&lt;clx.h&gt;</span> to use the full API. Values are <span class="inline-code">LValue</span> objects, not stack indices.</p>
+
+                <div class="doc-section">
+                    <h3>Lifecycle</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Open and close a clx state</span></div>
+                        <div class="code-body">LState* L = clx_open(argc, argv);  <span class="comment">// Create a clx VM state</span>
+luastd_base(L);                      <span class="comment">// Register base lib (print, type, pcall, ...)</span>
+luastd_math(L);                      <span class="comment">// Register math lib (sin, cos, floor, ...)</span>
+luastd_string(L);                    <span class="comment">// Register string lib (sub, match, format, ...)</span>
+luastd_coroutine(L);                 <span class="comment">// Register coroutine lib (create, resume, yield)</span>
+clx_close(L);                           <span class="comment">// Free all memory — call exactly once</span></div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Value Constructors</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Factory functions for creating LValues</span></div>
+                        <div class="code-body">clx::nil();                          <span class="comment">// Returns LType::Nil</span>
+clx::boolean(b);                     <span class="comment">// Returns LType::Bool from bool b</span>
+clx::number(d);                      <span class="comment">// Returns LType::Number from double d</span>
+clx::integer(i);                     <span class="comment">// Returns LType::Integer from int64_t i</span>
+clx::string(L, s);                   <span class="comment">// Interned string; ≤5 bytes uses TAG_ISTR inline</span>
+clx::table(L, asize, hsize);         <span class="comment">// Creates a new table with pre-sized array/hash</span>
+clx::cfunction(L, func);             <span class="comment">// Wraps a CFunctionType as an LCFunction closure</span>
+clx::thread(LThread*);               <span class="comment">// Wraps an LThread pointer (coroutine)</span>
+clx::lightuserdata(ptr);             <span class="comment">// Wraps a void* as LType::Userdata</span></div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Type Queries</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Check LValue types</span></div>
+                        <div class="code-body">clx::type_of(v);                     <span class="comment">// Returns LType enum for value v</span>
+clx::is_nil(v);                      <span class="comment">// True if LType::Nil</span>
+clx::is_bool(v);                     <span class="comment">// True if LType::Bool</span>
+clx::is_number(v);                   <span class="comment">// True if LType::Number</span>
+clx::is_integer(v);                  <span class="comment">// True if LType::Integer</span>
+clx::is_string(v);                   <span class="comment">// True if string (inline or interned)</span>
+clx::is_table(v);                    <span class="comment">// True if LType::Table</span>
+clx::is_function(v);                 <span class="comment">// True if LType::Function</span>
+clx::is_thread(v);                   <span class="comment">// True if LType::Thread</span>
+clx::is_userdata(v);                 <span class="comment">// True if LType::Userdata</span>
+clx::is_none(v);                     <span class="comment">// Always false (no stack sentinel)</span>
+clx::is_noneornil(v);                <span class="comment">// True if v is nil</span></div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Type Names</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Get type name strings</span></div>
+                        <div class="code-body">clx::type_name(LType t);               <span class="comment">// e.g. "number", "string"</span>
+clx::type_name(<span class="kw">const</span> LValue&amp; v);       <span class="comment">// Overload — same lookup</span></div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>State Queries</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Query VM state</span></div>
+                        <div class="code-body">clx::isyieldable(L);                  <span class="comment">// True if current thread is not main</span>
+clx::status(t);                       <span class="comment">// THREAD_SUSPENDED(0), RUNNING(1), DEAD(2), NORMAL(3)</span></div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Lenient Conversions</h3>
+                    <p>Return a default value on failure (no exception):</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Safe conversions with defaults</span></div>
+                        <div class="code-body">clx::to_number(v, def);               <span class="comment">// Convert to double, def on failure</span>
+clx::to_integer(v, def);              <span class="comment">// Convert to int64, def on failure</span>
+clx::to_numberx(v, &amp;isnum);           <span class="comment">// double, *isnum = true/false</span>
+clx::to_integerx(v, &amp;isnum);          <span class="comment">// int64, *isnum = true/false</span>
+clx::to_boolean(v);                   <span class="comment">// Convert to bool</span>
+clx::to_string(L, v, def);            <span class="comment">// Convert to const char*, def on failure</span>
+clx::touserdata(v);                   <span class="comment">// Convert to void*</span>
+clx::tothread(v);                     <span class="comment">// Convert to LThread*</span>
+clx::topointer(v);                    <span class="comment">// Convert to const void*</span>
+clx::stringtonumber(L, s);            <span class="comment">// "3.14" → number(3.14), else nil</span></div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Strict Conversions</h3>
+                    <p>Throw <span class="inline-code">LRuntimeException</span> on type mismatch:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Checked conversions (throw on failure)</span></div>
+                        <div class="code-body">clx::check_number(L, v);              <span class="comment">// Throws if not a number</span>
+clx::check_integer(L, v);             <span class="comment">// Throws if not an integer</span>
+clx::check_string(L, v);              <span class="comment">// Throws if not a string</span>
+clx::check_table(L, v);               <span class="comment">// Throws if not a table</span>
+clx::check_function(L, v);            <span class="comment">// Throws if not a function</span></div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Checked Field Access</h3>
+                    <p>Validate that a field has the expected type:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Field type validation</span></div>
+                        <div class="code-body">clx::check_field_integer(L, v, <span class="str">"field"</span>); <span class="comment">// Throws on type mismatch</span>
+clx::check_field_number(L, v, <span class="str">"field"</span>);
+clx::check_field_string(L, v, <span class="str">"field"</span>);</div>
+                    </div>
+                    <p>These produce messages like <span class="inline-code">field 'x' (integer expected, got string)</span>.</p>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Optional Conversions</h3>
+                    <p>Return default on nil, throw on type mismatch:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Optional conversions (nil-safe)</span></div>
+                        <div class="code-body">clx::opt_number(L, v, def);           <span class="comment">// Returns def if nil, throws on mismatch</span>
+clx::opt_integer(L, v, def);          <span class="comment">// Returns def if nil, throws on mismatch</span>
+clx::opt_string(L, v, def);           <span class="comment">// Returns def if nil, throws on mismatch</span></div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>String Conversion (__tostring aware)</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>string conversion with __tostring support</span></div>
+                        <div class="code-body">clx::tolstring(L, v);                 <span class="comment">// Returns string LValue; respects __tostring</span></div>
+                    </div>
+                    <p>If <span class="inline-code">v</span> is already a string, returns <span class="inline-code">v</span> directly. If <span class="inline-code">v</span> has <span class="inline-code">__tostring</span>, calls it and returns the result. Otherwise falls back to <span class="inline-code">to_string</span> + intern.</p>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Argument Validation</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Argument checking helpers</span></div>
+                        <div class="code-body">clx::checktype(L, argnum, v, LType t);  <span class="comment">// Asserts v.type() == t</span>
+clx::checkany(L, v);                     <span class="comment">// No-op (accepts any type)</span>
+clx::argcheck(L, cond, argnum, msg);     <span class="comment">// Asserts cond</span>
+clx::argexpected(L, cond, argnum, v, wanted, msg); <span class="comment">// Reports actual type on fail</span></div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Table Operations</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Table read/write with and without metamethods</span></div>
+                        <div class="code-body">clx::get_field(L, table, "key");    <span class="comment">// table.key — respects __index metamethod</span>
+clx::set_field(L, table, "key", v); <span class="comment">// table.key = v — respects __newindex</span>
+
+clx::raw_get(L, table, key);        <span class="comment">// Bypasses __index — key: LValue, const char*, double, int64_t</span>
+clx::raw_set(L, table, key, v);     <span class="comment">// Bypasses __newindex — same key type overloads</span>
+clx::raw_get_i(L, table, idx);      <span class="comment">// Raw integer key access (1-based index)</span>
+clx::raw_set_i(L, table, idx, v);   <span class="comment">// Raw integer key write (1-based index)</span></div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Module Registration</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Register C functions and create Lua modules</span></div>
+                        <div class="code-body">clx::set_function(L, t, "name", f); <span class="comment">// Bind CFunctionType to table key</span>
+clx::set_value(L, t, "name", v);    <span class="comment">// Bind an LValue to table key</span>
+clx::set_functions(L, t, regs);     <span class="comment">// Bind array of LReg structs</span>
+clx::new_lib(L, regs);              <span class="comment">// Create table + bind LReg[] (nullptr-terminated)</span>
+
+clx::set_lazy_funcs(L, t, regs, n); <span class="comment">// Lazy __index: creates LCFunction on first access</span></div>
+                    </div>
+                    <h4>LReg struct</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span></div>
+                        <div class="code-body">struct LReg {
+    const char* name;
+    CFunctionType func;  // std::function&lt;MultiValue(LState*, const LValue*, size_t)&gt;
+};</div>
+                    </div>
+                    <h4>LazyReg struct</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span></div>
+                        <div class="code-body">struct LazyReg {
+    const char* name;
+    RawCFunction func;  // raw function pointer — constexpr-friendly
+};
+using RawCFunction = MultiValue(*)(LState*, const LValue*, size_t);</div>
+                    </div>
+                    <p><span class="inline-code">LazyReg</span> uses raw function pointers instead of <span class="inline-code">std::function</span>, making the array <span class="inline-code">constexpr</span>. <span class="inline-code">set_lazy_funcs</span> stores the <span class="inline-code">LazyReg*</span> as light userdata on the metatable; the array must persist in static storage.</p>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Globals &amp; Metatables</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Global access and metamethod helpers</span></div>
+                        <div class="code-body">clx::get_global(L, "name");         <span class="comment">// Read global variable _G["name"]</span>
+clx::set_global(L, "name", val);    <span class="comment">// Write global — LValue, double, int64_t, const char*</span>
+clx::set_global(L, <span class="str">"pi"</span>, 3.14);     <span class="comment">// convenience: double auto-wrapped</span>
+clx::set_global(L, <span class="str">"msg"</span>, <span class="str">"hi"</span>);   <span class="comment">// convenience: string auto-interned</span>
+
+clx::getmetatable(L, obj);          <span class="comment">// Returns metatable or nil (respects __metatable)</span>
+clx::setmetatable(L, obj, mt);      <span class="comment">// Sets metatable (nil or table)</span>
+clx::rawequal(a, b);                <span class="comment">// Equality without __eq metamethod</span>
+clx::next(L, table, key);           <span class="comment">// Iterator — call with nil to start</span>
+clx::getmetafield(L, obj, field);   <span class="comment">// Get metatable[field] or nil</span>
+clx::callmeta(L, obj, event);       <span class="comment">// Call metatable[event](obj), returns true if called</span>
+
+clx::len(L, v);                     <span class="comment">// # operator, respects __len metamethod</span>
+clx::rawlen(v);                     <span class="comment">// Raw #, bypasses __len (string/table only)</span>
+clx::concat(L, a, b);               <span class="comment">// .. operator, respects __concat metamethod</span></div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Table Iteration</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Range-style iteration over table entries</span></div>
+                        <div class="code-body"><span class="kw">for</span> (<span class="kw">auto</span> it = clx::iterate(L, table); it; ++it) {
+    <span class="kw">auto</span> [key, value] = *it;  <span class="comment">// structured binding (C++17)</span>
+    <span class="comment">// use key, value</span>
+}</div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Function Calls</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Direct and protected calls</span></div>
+                        <div class="code-body">clx::call(L, func, args, n);        <span class="comment">// Direct call, throws on Lua error</span>
+clx::call(L, func, arg1, arg2, ...);<span class="comment">// Variadic — accepts LValue and native C++ types</span>
+clx::pcall(L, func, args, n);       <span class="comment">// Protected call, returns {true, ...} or {false, err}</span>
+clx::pcall(L, func, arg1, arg2, ...);<span class="comment">// Variadic — accepts LValue and native C++ types</span></div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Error Helpers</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Error reporting (all [[noreturn]])</span></div>
+                        <div class="code-body">clx::error(L, msg);                  <span class="comment">// Throw LRuntimeException with message</span>
+clx::arg_error(L, n, expected);     <span class="comment">// "bad argument #N (expected expected)"</span>
+clx::type_error(L, n, expected);    <span class="comment">// "bad argument #N (expected expected, got nil)"</span></div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Coroutines</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Create, resume, and yield coroutines</span></div>
+                        <div class="code-body">clx::create_thread(L, func, 1<<20); <span class="comment">// Create coroutine with stack size</span>
+clx::resume(L, th, args, n);        <span class="comment">// Resume suspended coroutine</span>
+clx::yield(L, args, n);             <span class="comment">// Yield from current coroutine (non-main only)</span></div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Core Types</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Fundamental clx types</span></div>
+                        <div class="code-body">LType             <span class="comment">// Tagged type enum (Number, Integer, String, Table, ...)</span>
+LValue             <span class="comment">// 64-bit nan-boxed value (with TAG_ISTR for ≤5B strings)</span>
+MultiValue         <span class="comment">// Multi-return container (.count, operator[])</span>
+LState             <span class="comment">// VM state (opaque pointer)</span>
+LThread            <span class="comment">// Coroutine handle</span>
+LTable             <span class="comment">// Table (raw gettable/settable)</span>
+LCFunction         <span class="comment">// C function closure</span>
+LReg               <span class="comment">// {name, CFunctionType} for module registration</span>
+LazyReg            <span class="comment">// {name, RawCFunction} for constexpr lazy registration</span>
+RawCFunction       <span class="comment">// Raw C function pointer type</span>
+CFunctionType      <span class="comment">// std::function&lt;MultiValue(LState*, const LValue*, size_t)&gt;</span>
+LRuntimeException  <span class="comment">// Thrown on Lua errors; .error_obj holds error LValue</span></div>
+                    </div>
+                    <h4>LValue Raw Constructors</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span></div>
+                        <div class="code-body">LValue();                    <span class="comment">// nil</span>
+LValue(bool);
+LValue(double);
+LValue(int64_t);
+LValue(const char*);         <span class="comment">// raw interned string pointer</span>
+LValue(LType, LHeader*);     <span class="comment">// GC object</span>
+LValue::istr(s, len);        <span class="comment">// static — inline string (≤5 bytes, no interning)</span></div>
+                    </div>
+                    <h4>MultiValue</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span></div>
+                        <div class="code-body">struct MultiValue {
+    size_t count;
+    LValue  operator[](size_t i) const;  <span class="comment">// access by index</span>
+    <span class="comment">// construct from initializer list, single LValue, or array+size</span>
+};</div>
+                    </div>
+                    <h4>Thread Status Constants</h4>
+                    <div class="code-block">
+                        <div class="code-body">THREAD_SUSPENDED = 0
+THREAD_RUNNING   = 1
+THREAD_DEAD      = 2
+THREAD_NORMAL    = 3</div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Module Registration</h3>
+                    <p>Each standard module has a <span class="inline-code">luastd_*</span> function that creates and sets the global table:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Standard libraries</span></div>
+                        <div class="code-body"><span class="kw">void</span> luastd_base(LState* L);       <span class="comment">// registers _G, print, pcall, type, error, ...</span>
+<span class="kw">void</span> luastd_math(LState* L);       <span class="comment">// registers math table</span>
+<span class="kw">void</span> luastd_string(LState* L);     <span class="comment">// registers string table</span>
+<span class="kw">void</span> luastd_coroutine(LState* L);  <span class="comment">// registers coroutine table</span>
+
+<span class="kw">void</span> openlibs(LState* L);          <span class="comment">// registers all standard libraries at once</span></div>
+                    </div>
+                    <p>Call individual <span class="inline-code">luastd_*</span> functions or <span class="inline-code">openlibs(L)</span> after <span class="inline-code">clx_open()</span> before using Lua features.</p>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Coroutine Example</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Create, resume, and yield coroutines</span></div>
+                        <div class="code-body">clx::LValue co_func = clx::cfunction(L, [](clx::LState* L2, <span class="kw">const</span> clx::LValue* a, size_t n) {
+    <span class="kw">double</span> v = clx::check_number(L2, a[0]);
+    clx::LValue y = clx::number(v * 2);
+    <span class="kw">auto</span> resumed = clx::yield(L2, &amp;y, 1);          <span class="comment">// yield twice the input</span>
+    <span class="kw">double</span> r = clx::check_number(L2, &amp;resumed[0], 1);
+    <span class="kw">return</span> {clx::number(r * 3)};                    <span class="comment">// triple the resume value</span>
+});
+
+clx::LValue th = clx::create_thread(L, co_func);
+clx::LValue arg = clx::number(10);
+<span class="kw">auto</span> r = clx::resume(L, th, &amp;arg, 1);              <span class="comment">// {true, 20}</span>
+clx::LValue arg2 = clx::number(7);
+<span class="kw">auto</span> r2 = clx::resume(L, th, &amp;arg2, 1);            <span class="comment">// {true, 21}</span></div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Complete Module Example</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Full C++ module with lazy registration</span></div>
+                        <div class="code-body"><span class="comment">// Define a function that sums its arguments</span>
+static clx::MultiValue add(clx::LState* L, const clx::LValue* args, size_t n) {
+    double sum = 0;
+    for (size_t i = 0; i < n; i++)
+        sum += clx::check_number(L, args[i]);
+    return {clx::number(sum)};
+}
+
+<span class="comment">// LazyReg array — constexpr-friendly, no std::function overhead</span>
+static constexpr clx::LazyReg my_funcs[] = {
+    {"add", add},
+};
+
+CLX_API clx::LValue luaopen_mylib(clx::LState* L) {
+    clx::LValue t = clx::table(L);
+    clx::set_lazy_funcs(L, t, my_funcs, 1);  <span class="comment">// Lazy registration</span>
+    clx::set_global(L, "mylib", t);
+    <span class="kw">return</span> clx::LValue();
+}
+</div>
+                    </div>
+                    <p style="margin-top:8px">Compile into an object/library, then link with <span class="inline-code">clx main.lua --modules mylib</span>. clx's generated <span class="inline-code">main()</span> calls <span class="inline-code">register_module("mylib", luaopen_mylib)</span>. The module becomes available via <span class="inline-code">require("mylib")</span> at runtime.</p>
+                </div>
+            </section>
+
+            <!-- ═══ Modules ═══ -->
+            <section id="doc-modules" class="section doc-section" role="tabpanel">
+                <h2>
+                    <span class="section-title-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg></span>
+                    Modules
+                </h2>
+
+                <div class="doc-section">
+                    <p>clx supports two ways to organize and load modules: Lua source modules compiled alongside your entry point (static preload), and statically linked C++ modules with <span class="inline-code">--modules</span>. Both are consumed via Lua's <span class="inline-code">require()</span>.</p>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Lua Source Modules</h3>
+                    <p>Pass multiple <span class="inline-code">.lua</span> files to clx — the first is the entry point, the rest become modules loadable via <span class="inline-code">require</span>:</p>
+                    <div class="code-block">
+                        <div class="code-body"><span class="prompt">$</span> clx main.lua mymodule.lua utils.lua --output myapp</div>
+                    </div>
+                    <p>Inside <span class="inline-code">main.lua</span>, require them by name (filename without <span class="inline-code">.lua</span>):</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span><span>main.lua</span></div>
+                        <div class="code-body"><span class="kw">local</span> mymodule = <span class="fn">require</span>(<span class="str">"mymodule"</span>)
+<span class="kw">local</span> utils = <span class="fn">require</span>(<span class="str">"utils"</span>)
+
+mymodule.say_hello()
+utils.help()</div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h4>How it works</h4>
+                    <p>clx compiles each <span class="inline-code">.lua</span> file into a function <span class="inline-code">luaopen_&lt;module&gt;</span> with <span class="inline-code">extern</span> linkage. The generated <span class="inline-code">main()</span> calls <span class="inline-code">register_module()</span> for non-entry modules — this stores the function in <span class="inline-code">package.preload[name]</span> without calling it:</p>
+                    <div class="code-block">
+                        <div class="code-body"><span class="comment">// Generated main() — simplified</span>
+main() {
+    clx_open();
+
+    openlibs(L);
+
+    register_module(<span class="str">"mymodule"</span>, luaopen_mymodule); <span class="comment">// stored in preload, NOT called</span>
+    register_module(<span class="str">"utils"</span>,    luaopen_utils);    <span class="comment">// stored in preload, NOT called</span>
+
+    luaopen_main(L);                              <span class="comment">// entry point runs immediately</span>
+
+    clx_close(L);
+}</div>
+                    </div>
+                    <p>When Lua calls <span class="inline-code">require("mymodule")</span>:</p>
+                    <ol>
+                        <li>Checks <span class="inline-code">package.loaded["mymodule"]</span> — if present, returns it immediately</li>
+                        <li>Checks <span class="inline-code">package.preload["mymodule"]</span> — calls the registered function</li>
+                                                <li>Stores the result in <span class="inline-code">package.loaded["mymodule"]</span> and returns it</li>
+                        <li>Subsequent calls return the cached value without re-executing</li>
+                    </ol>
+                </div>
+
+                <div class="doc-section">
+                    <h4>Linking</h4>
+                    <p>All builds link statically against <span class="inline-code">libclx.a</span>. No shared library is needed at runtime.</p>
+                </div>
+                <div class="doc-section">
+                    <h4>Module convention</h4>
+                    <p>A Lua source module should return a table (or any value) that becomes the result of <span class="inline-code">require</span>:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span><span>mymodule.lua</span></div>
+                        <div class="code-body"><span class="kw">local</span> M = {}
+
+<span class="kw">function</span> M.say_hello()
+    <span class="fn">print</span>(<span class="str">"hello from mymodule"</span>)
+<span class="kw">end</span>
+
+<span class="kw">return</span> M</div>
+                    </div>
+                </div>
+
+
+
+                <div class="doc-section">
+                    <h3>C++ Native Modules (Statically Linked)</h3>
+                    <p>You can link precompiled C++ code using <span class="inline-code">--modules</span>:</p>
+                    <div class="code-block">
+                        <div class="code-body"><span class="prompt">$</span> clx main.lua --modules my_native_mod</div>
+                    </div>
+                    <p>The function must use <span class="inline-code">CLX_API</span> (which provides <span class="inline-code">extern</span> linkage and proper symbol visibility):</p>
+                    <div class="code-block">
+                        <div class="code-body"><span class="kw">CLX_API</span> <span class="kw">clx::LValue</span> luaopen_my_native_mod(<span class="kw">clx::LState</span>* L);</div>
+                    </div>
+                    <p>The generated <span class="inline-code">main()</span> calls <span class="inline-code">register_module</span>, which stores the wrapper in <span class="inline-code">package.preload</span> — the function runs only on first <span class="inline-code">require()</span>.</p>
+                </div>
+
+                <div class="doc-section">
+                    <h4>Writing a C++ native module</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>my_native_mod.cpp</span></div>
+                        <div class="code-body"><span class="pp">#include &lt;clx.h&gt;</span>
+
+<span class="kw">CLX_API</span> <span class="kw">clx::LValue</span> luaopen_my_native_mod(<span class="kw">clx::LState</span>* L) {
+    <span class="kw">clx::LValue</span> t = L->create_table();
+    <span class="kw">clx::LTable</span>* mod = <span class="kw">static_cast</span>&lt;<span class="kw">clx::LTable</span>*&gt;(t.as_pointer());
+
+    mod->bind(L, <span class="str">"add"</span>,
+        [](<span class="kw">clx::LState</span>* L, <span class="kw">const</span> <span class="kw">clx::LValue</span>* args, <span class="kw">size_t</span> n) -&gt; <span class="kw">clx::MultiValue</span> {
+            <span class="kw">double</span> a = args[0].as_number();
+            <span class="kw">double</span> b = args[1].as_number();
+            <span class="kw">return</span> <span class="kw">clx::MultiValue</span>(<span class="kw">clx::LValue</span>(a + b));
+        });
+
+    <span class="kw">return</span> t;
+}</div>
+                    </div>
+                    <p>Compile to an object file:</p>
+                    <div class="code-block">
+                        <div class="code-body"><span class="comment"># Linux/macOS (g++/clang++):</span>
+<span class="prompt">$</span> g++ -c -std=c++20 -I./include my_native_mod.cpp -o my_native_mod.o
+
+<span class="comment"># Windows (MSVC):</span>
+<span class="prompt">&gt;</span> cl /c /std:c++20 /I.\include my_native_mod.cpp /Fomy_native_mod.obj</div>
+                    </div>
+                    <p>Then link with your Lua script. clx looks for <span class="inline-code">my_native_mod.a</span> (or <span class="inline-code">.lib</span> on Windows) in the current directory, then in <span class="inline-code">&lt;clx-install-dir&gt;/lib/clx/</span>, and on POSIX also in <span class="inline-code">/usr/local/lib/clx/</span>:</p>
+                    <div class="code-block">
+                        <div class="code-body"><span class="prompt">$</span> clx main.lua --modules my_native_mod</div>
+                    </div>
+                    <p>If your module depends on external libraries, pass link flags directly:</p>
+                    <div class="code-block">
+                        <div class="code-body"><span class="prompt">$</span> clx main.lua --modules my_native_mod -lm -lz</div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Compiling Lua to Libraries</h3>
+
+                    <h4>Static Library</h4>
+                    <div class="code-block">
+                        <div class="code-body"><span class="prompt">$</span> clx mylib.lua --static --output mylib
+<span class="comment"># Produces libmylib.a (Linux/macOS) or mylib.lib (Windows)</span></div>
+                    </div>
+
+                    <h4>Object File</h4>
+                    <div class="code-block">
+                        <div class="code-body"><span class="prompt">$</span> clx mylib.lua --object --output mylib
+<span class="comment"># Produces mylib.o (Linux/macOS) or mylib.obj (Windows)</span></div>
+                    </div>
+
+                    <p>All export <span class="inline-code">luaopen_mylib</span>. A host C++ program links against the static library:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>host.cpp</span></div>
+                        <div class="code-body"><span class="pp">#include &lt;clx.h&gt;</span>
+
+<span class="kw">CLX_API</span> <span class="kw">clx::LValue</span> luaopen_mylib(<span class="kw">clx::LState</span>* L);
+
+<span class="kw">int</span> main() {
+    <span class="kw">clx::LState</span>* L = <span class="kw">clx::clx_open</span>();
+    <span class="kw">clx::openlibs</span>(L);
+    L->register_module(<span class="str">"mylib"</span>, luaopen_mylib);
+    <span class="kw">clx::clx_close</span>(L);
+    <span class="kw">return</span> 0;
+}</div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Combining All Approaches</h3>
+                    <div class="code-block">
+                        <div class="code-body"><span class="prompt">$</span> clx main.lua utils.lua --modules native_processor --output app</div>
+                    </div>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span><span>main.lua</span></div>
+                        <div class="code-body"><span class="kw">local</span> utils = <span class="fn">require</span>(<span class="str">"utils"</span>)             <span class="comment">-- Lua source module (preload)</span>
+<span class="kw">local</span> proc = <span class="fn">require</span>(<span class="str">"native_processor"</span>)   <span class="comment">-- C++ native module (preload)</span>
+<span class="kw">local</span> extra = <span class="fn">require</span>(<span class="str">"extra_plugin"</span>)      <span class="comment">-- Static module (preload)</span></div>
+                    </div>
+                    <p>All modules are registered in <span class="inline-code">package.preload</span> and loaded via <span class="inline-code">require</span>.</p>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Options Reference</h3>
+                    <div class="code-block">
+                        <div class="code-body"><span class="flag">--modules</span> &lt;list&gt;   Comma-separated list of precompiled C++ modules
+<span class="flag">--minimal</span>          Exclude non-essential modules (string, table, io, os, math, utf8, coroutine); keeps base + package
+<span class="flag">--static</span>            Compile to static library (exports <span class="fn">luaopen_</span>*)
+<span class="flag">--object</span>            Compile to object file (exports <span class="fn">luaopen_</span>*)</div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>API Reference</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Module registration</span></div>
+                        <div class="code-body"><span class="comment">// Register a native module for lazy loading via require()
+// Stores a wrapper in package.preload[name]; does NOT call luaopen_*</span>
+<span class="kw">void</span> LState::register_module(<span class="kw">const</span> std::string&amp; name, <span class="kw">LValue</span> (*func)(<span class="kw">LState</span>*));
+
+<span class="comment">// Initialize clx runtime</span>
+<span class="kw">LState</span>* clx_open(<span class="kw">int</span> argc = 0, <span class="kw">char</span>* argv[] = <span class="kw">nullptr</span>);
+
+<span class="comment">// Open optional standard libraries (string, table, io, os, math, utf8, coroutine)</span>
+<span class="kw">void</span> openlibs(<span class="kw">LState</span>* L);
+
+<span class="comment">// Destroy clx runtime</span>
+<span class="kw">void</span> clx_close(<span class="kw">LState</span>* L);</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ═══ Doc: Compatibility ═══ -->
+            <section id="doc-compatibility" class="section doc-section" role="tabpanel">
+                <h2>
+                    <span class="section-title-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg></span>
+                    Lua 5.5 Compatibility
+                </h2>
+                <div class="doc-section">
+                    <p>clx targets Lua 5.5 compatibility. The following table summarizes the current implementation status.</p>
+                    <div class="bench-wrap" style="margin-top:16px">
+                        <table class="bench-table">
+                            <thead><tr><th>Core Language</th><th>Status</th></tr></thead>
+                            <tbody>
+                                <tr><td>Variables</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>Arithmetic operators</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>Logical operators</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>Comparisons</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>Functions</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>Closures</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>_ENV</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>Varargs</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>Multiple returns</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>Local variables</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>Global variables</td><td style="color:#22c55e">✅</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="bench-wrap" style="margin-top:16px">
+                        <table class="bench-table">
+                            <thead><tr><th>Control Flow</th><th>Status</th></tr></thead>
+                            <tbody>
+                                <tr><td>if / elseif / else</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>while</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>repeat / until</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>numeric for</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>generic for</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>break</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>goto</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>labels</td><td style="color:#22c55e">✅</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="bench-wrap" style="margin-top:16px">
+                        <table class="bench-table">
+                            <thead><tr><th>Tables</th><th>Status</th></tr></thead>
+                            <tbody>
+                                <tr><td>Table constructors</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>Array part</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>Hash part</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>Mixed tables</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>Table iteration</td><td style="color:#22c55e">✅</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="bench-wrap" style="margin-top:16px">
+                        <table class="bench-table">
+                            <thead><tr><th>Metatables</th><th>Status</th></tr></thead>
+                            <tbody>
+                                <tr><td>__index / __newindex</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>__add / __sub / __mul / __div / __mod / __pow / __unm</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>__len / __concat / __eq / __lt / __le</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>__call / __tostring</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>__ipairs / __pairs</td><td style="color:#22c55e">✅</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="bench-wrap" style="margin-top:16px">
+                        <table class="bench-table">
+                            <thead><tr><th>Coroutines</th><th>Status</th></tr></thead>
+                            <tbody>
+                                <tr><td>coroutine.create / resume / yield</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>coroutine.status / wrap</td><td style="color:#22c55e">✅</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="bench-wrap" style="margin-top:16px">
+                        <table class="bench-table">
+                            <thead><tr><th>Standard Libraries</th><th>Status</th></tr></thead>
+                            <tbody>
+                                <tr><td>base</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>math</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>string</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>table</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>coroutine</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>io</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>os</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>utf8</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>package</td><td style="color:#22c55e">✅</td></tr>
+                                <tr><td>debug</td><td style="color:#ef4444">❌</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Unsupported — AOT Limitations</h3>
+                    <p>Due to the static compilation model, the following features are intentionally unsupported:</p>
+                    <div class="bench-wrap" style="margin-top:16px">
+                        <table class="bench-table">
+                            <thead><tr><th>Feature</th><th>Reason</th></tr></thead>
+                            <tbody>
+                                <tr><td>load()</td><td>Runtime Lua code loading</td></tr>
+                                <tr><td>loadfile()</td><td>Runtime Lua code loading from file</td></tr>
+                                <tr><td>dofile()</td><td>Runtime Lua code execution from file</td></tr>
+                                <tr><td>string.dump()</td><td>Lua code compilation</td></tr>
+                                <tr><td>debug library</td><td>Runtime introspection</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ═══ Doc: Migration Guide ═══ -->
+            <section id="doc-migration" class="section doc-section" role="tabpanel">
+                <h2>
+                    <span class="section-title-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg></span>
+                    Migration Guide: Lua C API → clx C++ API
+                </h2>
+                <div class="doc-section">
+                    <p>This guide is for developers who have written Lua binary modules using the Lua C API and want to port them to clx. clx does not expose a VM stack — instead, values are passed as <span class="inline-code">clx::LValue</span> objects directly.</p>
+                </div>
+                <div class="doc-section">
+                    <h3>Key Differences</h3>
+                    <div class="bench-wrap" style="margin-top:16px">
+                        <table class="bench-table">
+                            <thead><tr><th>Lua C API</th><th>clx C++ API</th></tr></thead>
+                            <tbody>
+                                <tr><td>Stack-based (<span class="inline-code">lua_push*</span>, <span class="inline-code">lua_to*</span>)</td><td>Value-based (<span class="inline-code">clx::LValue</span>, no stack)</td></tr>
+                                <tr><td><span class="inline-code">lua_State* L</span></td><td><span class="inline-code">clx::LState* L</span></td></tr>
+                                <tr><td><span class="inline-code">lua_pushnumber(L, 3.14)</span></td><td><span class="inline-code">clx::number(3.14)</span></td></tr>
+                                <tr><td><span class="inline-code">lua_tointeger(L, 1)</span></td><td><span class="inline-code">args[0].as_integer()</span></td></tr>
+                                <tr><td><span class="inline-code">luaL_checknumber(L, 1)</span></td><td><span class="inline-code">clx::check_number(L, args[0])</span></td></tr>
+                                <tr><td><span class="inline-code">lua_settop(L, 0)</span></td><td>Not needed — no stack</td></tr>
+                                <tr><td><span class="inline-code">lua_getfield(L, idx, "key")</span></td><td><span class="inline-code">clx::get_field(L, table, "key")</span></td></tr>
+                                <tr><td><span class="inline-code">lua_setfield(L, idx, "key")</span></td><td><span class="inline-code">clx::set_field(L, table, "key", val)</span></td></tr>
+                                <tr><td><span class="inline-code">lua_newtable(L)</span></td><td><span class="inline-code">clx::table(L)</span></td></tr>
+                                <tr><td>return count <span class="inline-code">n</span></td><td><span class="inline-code">return MultiValue(values...)</span></td></tr>
+                                <tr><td><span class="inline-code">lua_error(L)</span></td><td><span class="inline-code">throw clx::LRuntimeException(...)</span></td></tr>
+                                <tr><td><span class="inline-code">lua_len(L, idx)</span></td><td><span class="inline-code">clx::len(L, v)</span></td></tr>
+                                <tr><td><span class="inline-code">lua_concat(L, n)</span></td><td><span class="inline-code">clx::concat(L, a, b)</span></td></tr>
+                                <tr><td><span class="inline-code">lua_pcall(L, nargs, nresults)</span></td><td><span class="inline-code">clx::pcall(L, func, args, count)</span></td></tr>
+                                <tr><td><span class="inline-code">lua_next(L, idx)</span></td><td><span class="inline-code">clx::next(L, table, key)</span></td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Function Signature</h3>
+                    <p><span class="bright">Lua C API:</span></p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">c</span></div>
+                        <div class="code-body">static int my_func(lua_State* L) {
+    double x = luaL_checknumber(L, 1);
+    double y = luaL_checknumber(L, 2);
+    lua_pushnumber(L, x + y);
+    return 1;
+}</div>
+                    </div>
+                    <p><span class="bright">clx C++ API:</span></p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span></div>
+                        <div class="code-body">static clx::MultiValue my_func(clx::LState* L, const clx::LValue* args, size_t count) {
+    double x = clx::check_number(L, args[0]);
+    double y = clx::check_number(L, args[1]);
+    return clx::number(x + y);
+}</div>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Module Registration</h3>
+                    <p><span class="bright">Lua C API:</span></p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">c</span></div>
+                        <div class="code-body">static const struct luaL_Reg mylib[] = {
+    {"add", my_add},
+    {"sub", my_sub},
+    {NULL, NULL}
+};
+
+int luaopen_mylib(lua_State* L) {
+    luaL_newlib(L, mylib);
+    return 1;
+}</div>
+                    </div>
+                    <p><span class="bright">clx C++ API:</span></p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span></div>
+                        <div class="code-body">static constexpr clx::LazyReg my_funcs[] = {
+    {"add", my_add},
+    {"sub", my_sub},
+};
+
+CLX_API clx::LValue luaopen_mylib(clx::LState* L) {
+    clx::LValue t = clx::table(L);
+    clx::set_lazy_funcs(L, t, my_funcs, 2);
+    return t;
+}</div>
+                    </div>
+                </div>
+                <div class="doc-section">
+                    <h3>Complete Migration Example</h3>
+                    <p><span class="bright">Before (Lua C API):</span></p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">c</span><span>vector.c</span></div>
+                        <div class="code-body">#include "lua.h"
+#include "lauxlib.h"
+
+static int vec_add(lua_State* L) {
+    double x1 = luaL_checknumber(L, 1);
+    double y1 = luaL_checknumber(L, 2);
+    double x2 = luaL_checknumber(L, 3);
+    double y2 = luaL_checknumber(L, 4);
+    lua_pushnumber(L, x1 + x2);
+    lua_pushnumber(L, y1 + y2);
+    return 2;
+}
+
+static int vec_len(lua_State* L) {
+    double x = luaL_checknumber(L, 1);
+    double y = luaL_checknumber(L, 2);
+    lua_pushnumber(L, sqrt(x*x + y*y));
+    return 1;
+}
+
+static const struct luaL_Reg vec_lib[] = {
+    {"add", vec_add},
+    {"len", vec_len},
+    {NULL, NULL}
+};
+
+int luaopen_vector(lua_State* L) {
+    luaL_newlib(L, vec_lib);
+    return 1;
+}</div>
+                    </div>
+                    <p><span class="bright">After (clx C++ API):</span></p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>vector.cpp</span></div>
+                        <div class="code-body">#include <clx.h>
+
+static clx::MultiValue vec_add(clx::LState* L, const clx::LValue* args, size_t count) {
+    double x1 = clx::check_number(L, args[0]);
+    double y1 = clx::check_number(L, args[1]);
+    double x2 = clx::check_number(L, args[2]);
+    double y2 = clx::check_number(L, args[3]);
+    return clx::MultiValue({clx::number(x1 + x2), clx::number(y1 + y2)});
+}
+
+static clx::MultiValue vec_len(clx::LState* L, const clx::LValue* args, size_t count) {
+    double x = clx::check_number(L, args[0]);
+    double y = clx::check_number(L, args[1]);
+    return clx::number(std::sqrt(x*x + y*y));
+}
+
+static constexpr clx::LazyReg vec_funcs[] = {
+    {"add", vec_add},
+    {"len", vec_len},
+};
+
+CLX_API clx::LValue luaopen_vector(clx::LState* L) {
+    clx::LValue t = clx::table(L);
+    clx::set_lazy_funcs(L, t, vec_funcs, 2);
+    return t;
+}</div>
+                    </div>
+                    <p>Not supported in clx: <span class="inline-code">lua_load</span>, <span class="inline-code">luaL_loadfile</span>, <span class="inline-code">luaL_loadstring</span>, <span class="inline-code">lua_dump</span>, bytecode format, <span class="inline-code">lua_pushcclosure</span>, upvalue API, <span class="inline-code">lua_newstate</span>, <span class="inline-code">lua_gc</span>, <span class="inline-code">luaL_Buffer</span>.</p>
+                </div>
+            </section>
+
+        </div>
+    </article>
+</main>
+
+<script>
+(function () {
+    'use strict';
+
+     const benchmarkData = {
+        "3ddist": [
+            { name: "clx", time: 0.046, factor: "1.70x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.013, factor: "6.00x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.078, factor: "1.00x", class: "red", winner: false }
+        ],
+        "ackermann": [
+            { name: "clx", time: 0.005, factor: "8.40x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.009, factor: "4.67x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.042, factor: "1.00x", class: "red", winner: false }
+        ],
+        "arraysum": [
+            { name: "clx", time: 0.025, factor: "4.08x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.040, factor: "2.55x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.102, factor: "1.00x", class: "red", winner: false }
+        ],
+        "binarytrees": [
+            { name: "clx", time: 0.012, factor: "1.25x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.009, factor: "1.67x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.015, factor: "1.00x", class: "red", winner: false }
+        ],
+        "bubble": [
+            { name: "clx", time: 0.006, factor: "7.17x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.005, factor: "8.60x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.043, factor: "1.00x", class: "red", winner: false }
+        ],
+        "canada": [
+            { name: "clx", time: 0.287, factor: "0.79x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.096, factor: "2.38x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.228, factor: "1.00x", class: "red", winner: false }
+        ],
+        "coro": [
+            { name: "clx", time: 0.002, factor: "2.00x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.003, factor: "1.33x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.004, factor: "1.00x", class: "red", winner: false }
+        ],
+        "fannkuchredux": [
+            { name: "clx", time: 0.003, factor: "1.67x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.005, factor: "1.00x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.005, factor: "1.00x", class: "red", winner: false }
+        ],
+        "fasta": [
+            { name: "clx", time: 0.002, factor: "2.00x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.004, factor: "1.00x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.004, factor: "1.00x", class: "red", winner: false }
+        ],
+        "fib": [
+            { name: "clx", time: 0.006, factor: "45.50x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.041, factor: "6.66x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.273, factor: "1.00x", class: "red", winner: false }
+        ],
+        "hashtable": [
+            { name: "clx", time: 0.062, factor: "1.21x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.029, factor: "2.59x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.075, factor: "1.00x", class: "red", winner: false }
+        ],
+        "json": [
+            { name: "clx", time: 0.020, factor: "6.65x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.819, factor: "0.16x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.133, factor: "1.00x", class: "red", winner: false }
+        ],
+        "knucleotide": [
+            { name: "clx", time: 0.008, factor: "1.25x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.008, factor: "1.25x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.010, factor: "1.00x", class: "red", winner: false }
+        ],
+        "life": [
+            { name: "clx", time: 0.036, factor: "2.00x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.015, factor: "4.80x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.072, factor: "1.00x", class: "red", winner: false }
+        ],
+        "mandelbrot": [
+            { name: "clx", time: 0.003, factor: "3.00x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.004, factor: "2.25x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.009, factor: "1.00x", class: "red", winner: false }
+        ],
+        "nbody": [
+            { name: "clx", time: 0.007, factor: "1.00x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.004, factor: "1.75x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.007, factor: "1.00x", class: "red", winner: false }
+        ],
+        "pi": [
+            { name: "clx", time: 0.018, factor: "3.94x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.036, factor: "1.97x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.071, factor: "1.00x", class: "red", winner: false }
+        ],
+        "sieve": [
+            { name: "clx", time: 0.033, factor: "2.15x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.032, factor: "2.22x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.071, factor: "1.00x", class: "red", winner: false }
+        ],
+        "spectralnorm": [
+            { name: "clx", time: 0.039, factor: "7.51x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.015, factor: "19.53x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.293, factor: "1.00x", class: "red", winner: false }
+        ],
+        "warmup": [
+            { name: "clx", time: 0.002, factor: "1.50x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.004, factor: "0.75x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.003, factor: "1.00x", class: "red", winner: false }
+        ]
+    };
+
+    const benchmarkDescriptions = {
+        "3ddist": "Computes two million <code>math.sqrt</code> calls on deterministically generated 3D coordinates. Measures the cost of the math library dispatch and float arithmetic.",
+        "ackermann": "Deeply recursive Ackermann function with no numeric regularity. Primarily a measure of call overhead and stack performance.",
+        "arraysum": "Iterates over a five-million-element numeric array and sums its values. Minimal logic; measures loop overhead and numeric array read performance.",
+        "binarytrees": "Allocates, traverses, and deallocates millions of two-field tree nodes. Primarily a GC stress test.",
+        "bubble": "Sorts a worst-case (descending) integer array of 8 000 elements using bubble sort. The O(n&sup2;) loop body is minimal — a direct measure of array throughput.",
+        "canada": "Parses the canonical 2.2 MB <code>canada.json</code> GeoJSON dataset using dkjson, then computes the geographic bounding box. The most representative real-world workload: file I/O, large string handling, a third-party Lua library, and deep table traversal.",
+        "coro": "Minimal coroutine smoke-test: a single producer yields four values to a consumer. Measures raw coroutine creation and resume/yield overhead.",
+        "fannkuchredux": "Counts permutation flips according to the Pancake sorting problem. Array-heavy with tight indexed loops; measures raw table-access and integer arithmetic performance.",
+        "fasta": "Generates pseudo-random DNA sequences according to weighted probability tables and writes them in FASTA format. Mixes integer arithmetic, string building, and I/O.",
+        "fib": "Classic doubly-recursive <code>fib(n)</code> with no memoisation. Stresses function-call overhead and tail-call optimisation.",
+        "hashtable": "Inserts 100 000 string-keyed entries into a Lua table, then reads them all back. Measures string interning, table hashing, and the cost of mixed key/value boxing.",
+        "json": "Encodes 8 000 heterogeneous Lua tables to a JSON-like string using a recursive encoder. Stresses string concatenation, <code>type()</code> dispatch, and recursive function calls.",
+        "knucleotide": "Counts k-mer frequencies in a DNA strand using Lua tables as hash maps. Stresses string hashing, table insertion, and iteration.",
+        "life": "Simulates 300 generations of Conway's Game of Life on a 40&times;20 grid using nested table access. Exercises two-dimensional array traversal and integer conditionals.",
+        "mandelbrot": "Iterates the Mandelbrot recurrence over a 2D grid and writes a PBM bitmap to stdout. Stresses loop optimisation and float-to-int conversion.",
+        "nbody": "Simulates a small planetary system using Newtonian gravity. Heavy floating-point arithmetic on a fixed set of named fields; exercises struct-like table access and numeric type propagation.",
+        "pi": "Estimates &pi; by testing whether random points fall inside the unit circle using a deterministic LCG. Pure integer and float arithmetic in a tight loop.",
+        "sieve": "Finds all primes up to 1 000 000 using a boolean array sieve. Dense indexed-write loop; measures integer array write throughput.",
+        "spectralnorm": "Computes the spectral norm of an infinite matrix using the power method. Dense floating-point inner loops with repeated array accesses.",
+        "warmup": "Minimal allocation to measure startup latency — the fixed overhead between runtime initialisation and effective program execution."
+    };
+
+    function updateBenchmarkTable(id) {
+        const data = benchmarkData[id];
+        const tbody = document.getElementById('bench-body');
+        if (!tbody) return;
+
+        const maxTime = Math.max(...data.map(d => d.time));
+        
+        tbody.innerHTML = data.map(d => `
+            <tr>
+                <td class="${d.winner ? 'winner' : ''} name">${d.name}</td>
+                <td class="${d.winner ? 'winner' : ''}">${d.time}s</td>
+                <td style="color: var(--text-dim)">${d.factor}</td>
+                <td>
+                    <div class="bar-track">
+                        <div class="bar ${d.class}" data-w="${(d.time / maxTime) * 100}"></div>
+                    </div>
+                </td>
+            </tr>
+        `).join('');
+
+        const desc = document.getElementById('bench-desc');
+        if (desc) desc.innerHTML = benchmarkDescriptions[id] || '';
+
+        // Trigger animation
+        setTimeout(animateBars, 10);
+    }
+
+    // --- Transform .code-body divs to Prism <pre><code> blocks ---
+    // Prism must be loaded before this runs
+    document.addEventListener('DOMContentLoaded', function() {
+        var bodies = document.querySelectorAll('.code-body');
+        for (var i = 0; i < bodies.length; i++) {
+            var el = bodies[i];
+            var block = el.closest('.code-block');
+            if (!block) continue;
+            var langEl = block.querySelector('.code-header .lang');
+            if (!langEl) continue;
+            var lang = langEl.textContent.trim().toLowerCase();
+            // Map lang tags to Prism language IDs
+            var prismLang = { sh:'bash', bash:'bash', cpp:'cpp', lua:'lua', c:'c' }[lang];
+            if (!prismLang) continue;  // skip non-code blocks (Pipeline, Layout, etc.)
+            var text = el.textContent || el.innerText;
+            var pre = document.createElement('pre');
+            var code = document.createElement('code');
+            code.className = 'language-' + prismLang;
+            code.textContent = text;
+            pre.appendChild(code);
+            el.textContent = '';
+            el.appendChild(pre);
+            Prism.highlightElement(code);
+        }
+    });
+
+    function animateBars() {
+        const bars = document.querySelectorAll('#benchmarks .bar');
+        bars.forEach(bar => {
+            bar.style.width = bar.dataset.w + '%';
+        });
+    }
+
+    // --- Navigation Logic ---
+    var navItems = document.querySelectorAll('.nav-item[data-section]');
+    var sections = document.querySelectorAll('.section');
+
+    function switchSection(id) {
+        navItems.forEach(btn => {
+            var active = btn.dataset.section === id;
+            btn.classList.toggle('active', active);
+            btn.setAttribute('aria-selected', active);
+        });
+
+        sections.forEach(s => s.classList.remove('active'));
+
+        var target = document.getElementById(id);
+        if (!target) return;
+
+        requestAnimationFrame(() => {
+            target.classList.add('active');
+            if (id === 'benchmarks') {
+                const currentBench = document.getElementById('bench-select').value;
+                updateBenchmarkTable(currentBench);
+            }
+        });
+    }
+
+    navItems.forEach(btn => {
+        btn.addEventListener('click', () => switchSection(btn.dataset.section));
+    });
+
+    // Handle anchor links to sections — prevent default scroll, use switchSection instead
+    document.querySelectorAll('a[href^="#"]').forEach(function(a) {
+        a.addEventListener('click', function(e) {
+            var id = this.getAttribute('href').slice(1);
+            if (document.getElementById(id)) {
+                e.preventDefault();
+                switchSection(id);
+            }
+        });
+    });
+
+    // --- Benchmark Select Event ---
+    document.getElementById('bench-select').addEventListener('change', (e) => {
+        updateBenchmarkTable(e.target.value);
+    });
+
+    // Initial state — handle URL hash
+    var hash = location.hash.replace('#', '');
+    if (hash && document.getElementById(hash)) {
+        switchSection(hash);
+    } else {
+        updateBenchmarkTable('fib'); // Load default data
+    }
+
+    // Listen for hash changes
+    window.addEventListener('hashchange', function() {
+        var h = location.hash.replace('#', '');
+        if (h && document.getElementById(h)) switchSection(h);
+    });
+
+})();
+</script>
+
+</body>
+</html>
