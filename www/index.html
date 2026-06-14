@@ -158,6 +158,9 @@
             padding: 4px 14px 20px;
             border-bottom: 1px solid var(--border);
             margin-bottom: 14px;
+            display: flex;
+            align-items: baseline;
+            gap: 10px;
         }
 
         .sidebar-brand h1 {
@@ -172,7 +175,6 @@
         .sidebar-brand .version {
             font-size: 0.6875rem;
             color: var(--text-dim);
-            margin-top: 2px;
         }
 
         .nav-item {
@@ -686,7 +688,7 @@
     <article class="card">
         <nav class="sidebar" role="tablist" aria-label="Section navigation">
             <div class="sidebar-brand">
-                <h1><span class="clr-main">cl</span><span class="clr-x">x</span></h1>
+                <h1><span class="clr-main">cl</span><span class="clr-x">x</span></h1><span class="version">v0.1.0</span>
             </div>
 
             <button class="nav-item active" data-section="overview" role="tab" aria-selected="true" aria-controls="overview">
