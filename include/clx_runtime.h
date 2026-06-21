@@ -696,6 +696,7 @@ struct LThread : public LHeader {
     MultiValue resume_args;
     bool is_main;
     bool has_error;
+    bool close_requested;
 #if defined(_WIN32)
     LPVOID fiber;
 #else
@@ -1558,6 +1559,8 @@ LValue newuserdata(LState* L, size_t size);
 MultiValue resume(LState* L, const LValue& thread, const LValue* args, size_t count);
 //------------------ Yields from a coroutine
 MultiValue yield(LState* L, const LValue* args, size_t count);
+//------------------ Closes a coroutine
+MultiValue close_thread(LState* L, const LValue& thread);
 
 //------------------ Opens CLX state
 LState* open(int argc = 0, char* argv[] = nullptr);

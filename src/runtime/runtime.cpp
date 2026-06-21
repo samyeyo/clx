@@ -24,7 +24,7 @@ namespace clx {
 namespace clx {
 
 //------------------ LThread::LThread — thread constructor
-LThread::LThread() : state(nullptr), status(THREAD_SUSPENDED), caller(nullptr), is_main(false), has_error(false) {
+LThread::LThread() : state(nullptr), status(THREAD_SUSPENDED), caller(nullptr), is_main(false), has_error(false), close_requested(false) {
     type = static_cast<uint8_t>(LType::Thread);
     marked = 0;
     next = nullptr;
@@ -160,7 +160,36 @@ MultiValue yield(LState* L, const LValue* args, size_t count) {
     swapcontext(&t->ctx, &caller->ctx);
 #endif
 
+    if (t->close_requested) {
+        t->close_requested = false;
+        t->has_error = true;
+        throw LRuntimeException(clx::string(L, "thread is being closed"));
+    }
+
     return t->resume_args;
+}
+
+
+//------------------ close_thread: closes a suspended coroutine (public API)
+MultiValue close_thread(LState* L, const LValue& thread) {
+    LThread* t = static_cast<LThread*>(thread.as_pointer());
+
+    if (t->status == THREAD_DEAD)
+        return MultiValue(clx::boolean(true));
+
+    if (t->status == THREAD_RUNNING)
+        clx::error(L, "cannot close running coroutine");
+    if (t->status == THREAD_NORMAL)
+        clx::error(L, "cannot close normal coroutine");
+
+    t->close_requested = true;
+
+    MultiValue result = resume(L, thread, nullptr, 0);
+
+    if (t->status == THREAD_DEAD)
+        return MultiValue(clx::boolean(true));
+
+    return MultiValue(clx::boolean(false));
 }
 
 
