@@ -71,7 +71,7 @@ CLX_INLINE_HOT bool   is_thread(const LValue& v)       { return v.type() == LTyp
 //------------------ Checks if value is userdata
 CLX_INLINE_HOT bool   is_userdata(const LValue& v)     { return v.type() == LType::Userdata; }
 //------------------ Always false (API compat)
-CLX_INLINE_HOT bool   is_none(const LValue& v)         { return false; }  
+CLX_INLINE_HOT bool   is_none(const LValue& v)         { return false; }
 //------------------ Checks if value is nil
 CLX_INLINE_HOT bool   is_noneornil(const LValue& v)    { return v.type() == LType::Nil; }
 
@@ -91,16 +91,10 @@ CLX_INLINE_HOT double to_number(const LValue& v, double def = 0.0) {
     return v.to_number(out) ? out : def;
 }
 
-//------------------ Converts value to int64_t (with default)
-CLX_INLINE_HOT int64_t to_integer(const LValue& v, int64_t def = 0) {
-    int64_t out;
-    return clx_to_integer(v, out) ? out : def;
-}
-
 //------------------ Converts to int64_t, reports success
 CLX_INLINE int64_t to_integerx(const LValue& v, bool* isnum = nullptr) {
     int64_t out;
-    bool ok = clx_to_integer(v, out);
+    bool ok = to_integer(v, out);
     if (isnum) *isnum = ok;
     return ok ? out : 0;
 }
@@ -167,7 +161,7 @@ CLX_INLINE_COLD double check_number(LState* L, const LValue& v) {
 //------------------ Checks and returns int64_t (throws)
 CLX_INLINE_COLD int64_t check_integer(LState* L, const LValue& v) {
     int64_t out;
-    if (clx_to_integer(v, out)) return out;
+    if (to_integer(v, out)) return out;
     std::string msg = std::string("integer expected, got ") + TYPE_NAMES[static_cast<size_t>(v.type())];
     throw LRuntimeException(LValue(L->intern_string(msg)));
 }
@@ -213,12 +207,12 @@ CLX_INLINE_COLD const char* opt_string(LState* L, const LValue& v, const char* d
 
 //------------------ Reads a string-keyed field from a table
 CLX_INLINE LValue get_field(LState* L, const LValue& table, const char* key) {
-    return clx_table_get(L, table, LValue(L->intern_string(key)));
+    return table_get(L, table, LValue(L->intern_string(key)));
 }
 
 //------------------ Writes a string-keyed field to a table
 CLX_INLINE void set_field(LState* L, const LValue& table, const char* key, const LValue& val) {
-    clx_table_set(L, table, LValue(L->intern_string(key)), val);
+    table_set(L, table, LValue(L->intern_string(key)), val);
 }
 
 //------------------ Gets table value bypassing metamethods
@@ -236,7 +230,7 @@ CLX_INLINE void raw_set(LState* L, const LValue& table, const LValue& key, const
 
 //------------------ Gets integer-keyed table value (fast)
 CLX_INLINE LValue raw_get_i(LState* L, const LValue& table, int64_t idx) {
-    return clx_table_get_int(L, table, static_cast<size_t>(idx));
+    return table_get_int(L, table, static_cast<size_t>(idx));
 }
 
 //------------------ Sets integer-keyed table value (fast)
@@ -320,7 +314,7 @@ CLX_INLINE void setmetatable(LState* L, const LValue& obj, const LValue& mt) {
             }
         }
         t->metatable = new_mt;
-        t->shape_version++;
+        t->hash_version++;
     } else if (obj.type() == LType::Userdata) {
         static_cast<LUserdata*>(obj.as_pointer())->metatable = new_mt;
     }
@@ -369,20 +363,17 @@ CLX_INLINE MultiValue next(LState* L, const LValue& table, const LValue& key) {
 
     bool found_key = (key.type() == LType::Nil);
     for (size_t i = 0; i < t->hash_size; ++i) {
-        LValue k; k.val = t->keys[i];
+        uint64_t k = t->entries[i].key;
+        if (k == HASH_EMPTY || k == HASH_TOMBSTONE) continue;
+        LValue kv; kv.val = k;
         if (!found_key) {
-            if (k.val == key.val) found_key = true;
-        } else if (k.type() != LType::Nil && t->vals[i].type() != LType::Nil) {
-            return MultiValue({k, t->vals[i]});
+            if (k == key.val) found_key = true;
+        } else if (t->entries[i].val.type() != LType::Nil) {
+            return MultiValue({kv, t->entries[i].val});
         }
     }
 
     return MultiValue();
-}
-
-//------------------ Length operator wrapper
-CLX_INLINE int64_t len(LState* L, const LValue& v) {
-    return clx_len(L, v).as_integer();
 }
 
 //------------------ Raw length (no metamethods)
@@ -409,7 +400,7 @@ CLX_INLINE_HOT int64_t rawlen(const LValue& v) {
 //------------------ String concatenation wrapper
 CLX_INLINE LValue concat(LState* L, const LValue& a, const LValue& b) {
     LValue args[2] = {a, b};
-    return clx_concat_multi(L, args, 2);
+    return concat_multi(L, args, 2);
 }
 
 //------------------ Calls a function

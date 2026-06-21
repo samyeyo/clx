@@ -6,6 +6,7 @@
 // └─────────────────────────────────────────────┘
 
 #include "clx_runtime.h"
+#include "clx.h"
 #include "../codegen/codegen.h"
 #include <cstdio>
 #include <cstring>
@@ -14,9 +15,10 @@
 #include <cstdlib>
 #include <iostream>
 #include <algorithm>
+#include <vector>
 
 namespace clx {
-    void clx_register_static_preload(LState* L, const char* name, LValue (*open_func)(LState*));
+    void register_static_preload(LState* L, const char* name, LValue (*open_func)(LState*));
 }
 
 namespace clx {
@@ -50,7 +52,7 @@ static void fiber_entry_impl(LThread* t) {
         size_t argc = t->resume_args.count < 8 ? t->resume_args.count : 8;
         for(size_t i = 0; i < argc; ++i) args[i] = t->resume_args[i];
         t->resume_args = MultiValue();
-        
+
         size_t prev_top = L->shadow_top;
         for(size_t i = 0; i < argc; ++i) L->shadow_stack[L->shadow_top++] = &args[i];
         t->yield_args = call_function(L, t->function, args, argc, "coroutine", 0);
@@ -65,11 +67,11 @@ static void fiber_entry_impl(LThread* t) {
         t->status = THREAD_DEAD;
         t->has_error = true;
     }
-    
+
     LThread* caller = t->caller;
     L->running_thread = caller;
     caller->status = THREAD_RUNNING;
-    
+
 #if defined(_WIN32)
     SwitchToFiber(caller->fiber);
 #else
@@ -89,6 +91,78 @@ static void fiber_trampoline() {
     fiber_entry_impl(g_starting_thread);
 }
 #endif
+
+
+//------------------ create_thread: creates a new coroutine thread (public API)
+LValue create_thread(LState* L, const LValue& func, double stack_size) {
+    LThread* t = new LThread();
+    t->state = L;
+    t->function = func;
+
+#if defined(_WIN32)
+    t->fiber = CreateFiber(static_cast<SIZE_T>(stack_size), fiber_trampoline, t);
+#else
+    getcontext(&t->ctx);
+    t->stack_memory = new char[static_cast<size_t>(stack_size)];
+    t->ctx.uc_stack.ss_sp = t->stack_memory;
+    t->ctx.uc_stack.ss_size = static_cast<size_t>(stack_size);
+    t->ctx.uc_link = nullptr;
+    g_starting_thread = t;
+    makecontext(&t->ctx, fiber_trampoline, 0);
+#endif
+
+    t->next = L->allocated_objects;
+    L->allocated_objects = t;
+    L->object_count++;
+    return LValue(LType::Thread, t);
+}
+
+
+//------------------ resume: resumes a suspended coroutine (public API)
+MultiValue resume(LState* L, const LValue& thread, const LValue* args, size_t count) {
+    LThread* t = static_cast<LThread*>(thread.as_pointer());
+    t->resume_args = MultiValue(args, count);
+    t->caller = L->running_thread;
+    t->caller->status = THREAD_NORMAL;
+    t->status = THREAD_RUNNING;
+    L->running_thread = t;
+
+#if defined(_WIN32)
+    SwitchToFiber(t->fiber);
+#else
+    swapcontext(&t->caller->ctx, &t->ctx);
+#endif
+
+    std::vector<LValue> ret;
+    ret.push_back(boolean(!t->has_error));
+    for (size_t i = 0; i < t->yield_args.count; ++i)
+        ret.push_back(t->yield_args[i]);
+    t->has_error = false;
+    return MultiValue(ret);
+}
+
+
+//------------------ yield: yields from a coroutine (public API)
+MultiValue yield(LState* L, const LValue* args, size_t count) {
+    LThread* t = L->running_thread;
+    if (t->is_main)
+        clx::error(L, "attempt to yield from outside a coroutine");
+    t->yield_args = MultiValue(args, count);
+    t->status = THREAD_SUSPENDED;
+
+    LThread* caller = t->caller;
+    L->running_thread = caller;
+    caller->status = THREAD_RUNNING;
+
+#if defined(_WIN32)
+    SwitchToFiber(caller->fiber);
+#else
+    swapcontext(&t->ctx, &caller->ctx);
+#endif
+
+    return t->resume_args;
+}
+
 
 //------------------ LRuntimeException::LRuntimeException — error exception constructor
 LRuntimeException::LRuntimeException(clx::LValue err) : error_obj(err) {}
@@ -111,15 +185,15 @@ std::string LValue::to_string(LState* L) const {
         if (t->metatable) {
             LValue meta_key = L->str_tostring;
             LValue* meta_func = t->metatable->gettable(meta_key);
-            
+
             if (meta_func && meta_func->type() == LType::Function) {
                 LValue args[1];
                 args[0] = *this;
-                
+
                 L->shadow_stack[L->shadow_top++] = &args[0];
                 MultiValue ret = call_function(L, *meta_func, args, 1, __FILE__, __LINE__);
                 L->shadow_top--;
-                
+
                 if (ret.count > 0 && ret[0].type() == LType::String) {
                     return std::string(ret[0].as_string());
                 }
@@ -233,9 +307,8 @@ static CLX_INLINE_COLD size_t next_pow2(size_t n) {
 //------------------ LTable::LTable — table constructor
 LTable::LTable()
     : array(nullptr), array_size(0), array_cap(0),
-      bucket(nullptr), keys(nullptr), vals(nullptr), nexts(nullptr),
-      hash_size(0), hash_count(0), free_head(-1),
-      shape_version(0), metatable(nullptr)
+      entries(nullptr), hash_size(0), hash_count(0), hash_tombs(0),
+      hash_version(0), array_version(0), metatable(nullptr)
 {
     type = static_cast<uint8_t>(LType::Table);
     marked = 0;
@@ -244,74 +317,41 @@ LTable::LTable()
 
 //------------------ LTable::~LTable — table destructor
 LTable::~LTable() {
-    if (array)  delete[] array;
-    if (keys)   { delete[] reinterpret_cast<char*>(keys); keys = nullptr; vals = nullptr; nexts = nullptr; }
-    if (bucket) delete[] bucket;
+    if (array)   delete[] array;
+    if (entries) delete[] entries;
 }
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-//------------------ LTable::resize_hash — resize hash portion
+//------------------ LTable::resize_hash — allocate/rehash to new_size (power of 2)
 void LTable::resize_hash(size_t new_size) {
     new_size = next_pow2(new_size);
-    shape_version++;
-    bucket = new int32_t[new_size];
-    
-    size_t ksz = new_size * sizeof(uint64_t);
-    size_t vsz = new_size * sizeof(LValue);
-    size_t nsz = new_size * sizeof(int32_t);
-    char* mem = new char[ksz + vsz + nsz];
-    keys  = reinterpret_cast<uint64_t*>(mem);
-    vals  = reinterpret_cast<LValue*>(mem + ksz);
-    nexts = reinterpret_cast<int32_t*>(mem + ksz + vsz);
-    hash_size = new_size;
-    hash_count = 0;
 
-    std::fill_n(bucket, new_size, int32_t(-1));
-    for (size_t i = 0; i < new_size - 1; ++i) nexts[i] = static_cast<int32_t>(i + 1);
-    nexts[new_size - 1] = -1;
-    free_head = 0;
-    
-    uint64_t nil_val = clx::LValue().val;
-    for (size_t i = 0; i < new_size; ++i) keys[i] = nil_val;
+    HashEntry* new_entries = new HashEntry[new_size];
+    for (size_t i = 0; i < new_size; ++i) new_entries[i].key = HASH_EMPTY;
+
+    uint32_t mask = static_cast<uint32_t>(new_size - 1);
+    if (entries) {
+        for (size_t i = 0; i < hash_size; ++i) {
+            uint64_t k = entries[i].key;
+            if (k == HASH_EMPTY || k == HASH_TOMBSTONE) continue;
+            uint32_t h = lvalue_hash(k) & mask;
+            while (new_entries[h].key != HASH_EMPTY)
+                h = (h + 1) & mask;
+            new_entries[h].key = k;
+            new_entries[h].val = entries[i].val;
+        }
+        delete[] entries;
+    }
+
+    entries    = new_entries;
+    hash_size  = new_size;
+    hash_tombs = 0;
+    hash_version++;
 }
-
-
-
-//------------------ LTable::hash_insert_direct — insert into hash (no rehash)
-void LTable::hash_insert_direct(const LValue& key, const LValue& val) {
-    uint32_t h = lvalue_hash(key.val) & static_cast<uint32_t>(hash_size - 1);
-
-    int32_t slot  = free_head;
-    free_head = nexts[slot];
-
-    keys[slot]   = key.val;
-    vals[slot]   = val;
-    nexts[slot]  = bucket[h];
-    bucket[h]    = slot;
-
-    hash_count++;
-    shape_version++;
-}
-
-
-
 
 
 //------------------ LTable::gettable — get value by key
 LValue* LTable::gettable(const LValue& key) {
-    
     if (key.type() == LType::Integer) {
         int64_t idx = key.as_integer();
         if (static_cast<uint64_t>(idx - 1) < array_cap)
@@ -322,75 +362,58 @@ LValue* LTable::gettable(const LValue& key) {
         if (d == static_cast<double>(idx) && static_cast<uint64_t>(idx - 1) < array_cap)
             return &array[idx - 1];
     }
-
     if (hash_size == 0) return nullptr;
-
-    
-    uint32_t h = lvalue_hash(key.val) & static_cast<uint32_t>(hash_size - 1);
-    int32_t curr = bucket[h];
-    while (curr != -1) {
-        if (lvalue_eq_fast(keys[curr], key.val))
-            return &vals[curr];
-        curr = nexts[curr];
+    uint32_t mask = static_cast<uint32_t>(hash_size - 1);
+    uint32_t h    = lvalue_hash(key.val) & mask;
+    for (;;) {
+        HashEntry& e = entries[h];
+        if (e.key == HASH_EMPTY)     return nullptr;
+        if (e.key != HASH_TOMBSTONE && lvalue_eq_fast(e.key, key.val))
+            return &e.val;
+        h = (h + 1) & mask;
     }
-    return nullptr;
 }
-
-
-
 
 
 //------------------ LTable::settable — set value by key
 void LTable::settable(const LValue& key, const LValue& val) {
-    
+
     if (key.type() == LType::Integer) {
         int64_t idx = key.as_integer();
         if (static_cast<uint64_t>(idx - 1) < array_cap) {
             array[idx - 1] = val;
-            if (static_cast<size_t>(idx) > array_size) array_size = idx;
-            shape_version++;
+            if (static_cast<size_t>(idx) > array_size) array_size = static_cast<size_t>(idx);
+            array_version++;
             return;
         }
         if (idx == static_cast<int64_t>(array_size + 1)) {
-            int64_t growing_idx = idx;
-            size_t new_cap = (array_cap == 0) ? 4 : array_cap * 2;
-            LValue* new_array = new LValue[new_cap];
-            if (array_cap) std::memcpy(new_array, array, array_cap * sizeof(LValue));
+            size_t new_cap = (array_cap == 0) ? 8 : array_cap * 2;
+            LValue* new_arr = new LValue[new_cap];
+            if (array_cap) std::memcpy(new_arr, array, array_cap * sizeof(LValue));
             delete[] array;
-            array = new_array;
+            array = new_arr;
             array[array_size] = val;
             array_size++;
             array_cap = new_cap;
-            shape_version++;
-            
+            array_version++;
             if (hash_size > 0) {
-                for (size_t bi = 0; bi < hash_size; ++bi) {
-                    int32_t* prev = &bucket[bi];
-                    int32_t curr = bucket[bi];
-                    while (curr != -1) {
-                        LValue k; k.val = keys[curr];
-                        int64_t hidx = -1;
-                        if (k.type() == LType::Integer) {
-                            hidx = k.as_integer();
-                        } else if (k.type() == LType::Number) {
-                            double d = k.as_number();
-                            int64_t t = static_cast<int64_t>(d);
-                            if (d == static_cast<double>(t)) hidx = t;
-                        }
-                        int32_t next = nexts[curr];
-                        if (hidx > 0 && hidx != growing_idx && static_cast<uint64_t>(hidx - 1) < new_cap) {
-                            array[hidx - 1] = vals[curr];
-                            uint64_t nil_val = LValue().val;
-                            keys[curr] = nil_val;
-                            vals[curr] = LValue();
-                            *prev = next;
-                            nexts[curr] = free_head;
-                            free_head = curr;
-                            hash_count--;
-                        } else {
-                            prev = &nexts[curr];
-                        }
-                        curr = next;
+                for (size_t i = 0; i < hash_size; ++i) {
+                    uint64_t k = entries[i].key;
+                    if (k == HASH_EMPTY || k == HASH_TOMBSTONE) continue;
+                    LValue kv; kv.val = k;
+                    int64_t hidx = -1;
+                    if (kv.type() == LType::Integer) hidx = kv.as_integer();
+                    else if (kv.type() == LType::Number) {
+                        double d = kv.as_number(); int64_t t = static_cast<int64_t>(d);
+                        if (d == static_cast<double>(t)) hidx = t;
+                    }
+                    if (hidx > 0 && hidx != idx && static_cast<uint64_t>(hidx - 1) < new_cap) {
+                        array[hidx - 1] = entries[i].val;
+                        entries[i].key = HASH_TOMBSTONE;
+                        entries[i].val = LValue();
+                        hash_count--;
+                        hash_tombs++;
+                        hash_version++;
                     }
                 }
             }
@@ -402,50 +425,38 @@ void LTable::settable(const LValue& key, const LValue& val) {
         if (d == static_cast<double>(idx)) {
             if (static_cast<uint64_t>(idx - 1) < array_cap) {
                 array[idx - 1] = val;
-                if (static_cast<size_t>(idx) > array_size) array_size = idx;
-                shape_version++;
+                if (static_cast<size_t>(idx) > array_size) array_size = static_cast<size_t>(idx);
+                array_version++;
                 return;
             }
             if (idx == static_cast<int64_t>(array_size + 1)) {
-                int64_t growing_idx = idx;
-                size_t new_cap = (array_cap == 0) ? 4 : array_cap * 2;
-                LValue* new_array = new LValue[new_cap];
-                if (array_cap) std::memcpy(new_array, array, array_cap * sizeof(LValue));
+                size_t new_cap = (array_cap == 0) ? 8 : array_cap * 2;
+                LValue* new_arr = new LValue[new_cap];
+                if (array_cap) std::memcpy(new_arr, array, array_cap * sizeof(LValue));
                 delete[] array;
-                array = new_array;
+                array = new_arr;
                 array[array_size] = val;
                 array_size++;
                 array_cap = new_cap;
-                shape_version++;
-                
+                array_version++;
                 if (hash_size > 0) {
-                    for (size_t bi = 0; bi < hash_size; ++bi) {
-                        int32_t* prev = &bucket[bi];
-                        int32_t curr = bucket[bi];
-                        while (curr != -1) {
-                            LValue k; k.val = keys[curr];
-                            int64_t hidx = -1;
-                            if (k.type() == LType::Integer) {
-                                hidx = k.as_integer();
-                            } else if (k.type() == LType::Number) {
-                                double d = k.as_number();
-                                int64_t t = static_cast<int64_t>(d);
-                                if (d == static_cast<double>(t)) hidx = t;
-                            }
-                            int32_t next = nexts[curr];
-                            if (hidx > 0 && hidx != growing_idx && static_cast<uint64_t>(hidx - 1) < new_cap) {
-                                array[hidx - 1] = vals[curr];
-                                uint64_t nil_val = LValue().val;
-                                keys[curr] = nil_val;
-                                vals[curr] = LValue();
-                                *prev = next;
-                                nexts[curr] = free_head;
-                                free_head = curr;
-                                hash_count--;
-                            } else {
-                                prev = &nexts[curr];
-                            }
-                            curr = next;
+                    for (size_t i = 0; i < hash_size; ++i) {
+                        uint64_t k = entries[i].key;
+                        if (k == HASH_EMPTY || k == HASH_TOMBSTONE) continue;
+                        LValue kv; kv.val = k;
+                        int64_t hidx = -1;
+                        if (kv.type() == LType::Integer) hidx = kv.as_integer();
+                        else if (kv.type() == LType::Number) {
+                            double dd = kv.as_number(); int64_t t = static_cast<int64_t>(dd);
+                            if (dd == static_cast<double>(t)) hidx = t;
+                        }
+                        if (hidx > 0 && hidx != idx && static_cast<uint64_t>(hidx - 1) < new_cap) {
+                            array[hidx - 1] = entries[i].val;
+                            entries[i].key = HASH_TOMBSTONE;
+                            entries[i].val = LValue();
+                            hash_count--;
+                            hash_tombs++;
+                            hash_version++;
                         }
                     }
                 }
@@ -454,81 +465,56 @@ void LTable::settable(const LValue& key, const LValue& val) {
         }
     }
 
-    
 
-    
     if (val.type() == LType::Nil) {
         if (hash_size == 0) return;
-        uint32_t h = lvalue_hash(key.val) & static_cast<uint32_t>(hash_size - 1);
-        int32_t* prev = &bucket[h];
-        int32_t curr = bucket[h];
-        while (curr != -1) {
-            if (lvalue_eq_fast(keys[curr], key.val)) {
-                keys[curr]   = LValue().val;
-                vals[curr]   = LValue();
-                *prev        = nexts[curr];
-                nexts[curr]  = free_head;
-                free_head    = curr;
+        uint32_t mask = static_cast<uint32_t>(hash_size - 1);
+        uint32_t h = lvalue_hash(key.val) & mask;
+        for (;;) {
+            HashEntry& e = entries[h];
+            if (e.key == HASH_EMPTY) return;
+            if (e.key != HASH_TOMBSTONE && lvalue_eq_fast(e.key, key.val)) {
+                e.key = HASH_TOMBSTONE;
+                e.val = LValue();
                 hash_count--;
-                shape_version++;
+                hash_tombs++;
+                hash_version++;
                 return;
             }
-            prev = &nexts[curr];
-            curr = nexts[curr];
-        }
-        return;
-    }
-
-    
-    if (hash_size > 0) {
-        uint32_t h = lvalue_hash(key.val) & static_cast<uint32_t>(hash_size - 1);
-        int32_t curr = bucket[h];
-        while (curr != -1) {
-            if (lvalue_eq_fast(keys[curr], key.val)) {
-                vals[curr] = val;
-                shape_version++;
-                return;
-            }
-            curr = nexts[curr];
+            h = (h + 1) & mask;
         }
     }
 
-    
     if (hash_size == 0) {
         resize_hash(8);
-    } else if (free_head == -1 || hash_count * 4 >= hash_size * 3) {
-        
-        size_t new_sz = hash_size * 2;
-        uint64_t* old_keys  = keys;
-        LValue*   old_vals  = vals;
-        int32_t*  old_nexts = nexts;
-        int32_t*  old_bkt   = bucket;
-        size_t    old_sz    = hash_size;
-
-        resize_hash(new_sz);
-        for (size_t b = 0; b < old_sz; ++b) {
-            int32_t bi = static_cast<int32_t>(old_bkt[b]);
-            while (bi != -1) {
-                uint32_t hh = lvalue_hash(old_keys[bi]) & static_cast<uint32_t>(hash_size - 1);
-                int32_t slot = free_head;
-                free_head = nexts[slot];
-                keys[slot]  = old_keys[bi];
-                vals[slot]  = old_vals[bi];
-                nexts[slot] = bucket[hh];
-                bucket[hh]  = slot;
-                hash_count++;
-                bi = old_nexts[bi];
-            }
-        }
-        delete[] reinterpret_cast<char*>(old_keys);
-        delete[] old_bkt;
+    } else if ((hash_count + hash_tombs + 1) * 4 >= hash_size * 3) {
+        resize_hash(hash_count >= hash_size / 2 ? hash_size * 2 : hash_size);
     }
 
-    hash_insert_direct(key, val);
+    uint32_t mask = static_cast<uint32_t>(hash_size - 1);
+    uint32_t h    = lvalue_hash(key.val) & mask;
+    int32_t  tomb = -1;
+    for (;;) {
+        HashEntry& e = entries[h];
+        if (e.key == HASH_EMPTY) {
+            HashEntry& slot = (tomb != -1) ? entries[tomb] : e;
+            slot.key = key.val;
+            slot.val = val;
+            if (tomb != -1) hash_tombs--;
+            hash_count++;
+            hash_version++;
+            return;
+        }
+        if (e.key == HASH_TOMBSTONE) {
+            if (tomb == -1) tomb = static_cast<int32_t>(h);
+        } else if (lvalue_eq_fast(e.key, key.val)) {
+            e.val = val;
+            hash_version++;
+            return;
+        }
+        h = (h + 1) & mask;
+    }
 }
-
-
-
 
 
 //------------------ LTable::get_value — get with metamethod fallback
@@ -540,7 +526,7 @@ LValue LTable::get_value(LState* L, const LValue& key) {
     if (metatable) {
         LValue index_key = L->str_index;
         LValue* index_ptr = metatable->gettable(index_key);
-        
+
         if (index_ptr && index_ptr->type() != LType::Nil) {
             if (index_ptr->type() == LType::Table) {
                 LTable* parent = static_cast<LTable*>(index_ptr->as_pointer());
@@ -550,12 +536,12 @@ LValue LTable::get_value(LState* L, const LValue& key) {
                 LValue args[2];
                 args[0] = LValue(this);
                 args[1] = key;
-                
+
                 L->shadow_stack[L->shadow_top++] = &args[0];
                 L->shadow_stack[L->shadow_top++] = &args[1];
                 MultiValue ret = call_function(L, *index_ptr, args, 2, __FILE__, __LINE__);
                 L->shadow_top -= 2;
-                
+
                 return ret.count > 0 ? ret[0] : LValue();
             }
         }
@@ -575,7 +561,7 @@ void LTable::set_value(LState* L, const LValue& key, const LValue& val) {
     if (metatable) {
         LValue newindex_key = L->str_newindex;
         LValue* newindex_ptr = metatable->gettable(newindex_key);
-        
+
         if (newindex_ptr && newindex_ptr->type() != LType::Nil) {
             if (newindex_ptr->type() == LType::Table) {
                 LTable* parent = static_cast<LTable*>(newindex_ptr->as_pointer());
@@ -587,7 +573,7 @@ void LTable::set_value(LState* L, const LValue& key, const LValue& val) {
                 args[0] = LValue(this);
                 args[1] = key;
                 args[2] = val;
-                
+
                 L->shadow_stack[L->shadow_top++] = &args[0];
                 L->shadow_stack[L->shadow_top++] = &args[1];
                 L->shadow_stack[L->shadow_top++] = &args[2];
@@ -618,7 +604,7 @@ void LTable::bind(LState* L, const char* name, CFunctionType func) {
 
 //------------------ LTable::bind_all — bind multiple C functions
 void LTable::bind_all(LState* L, std::initializer_list<LReg> funcs) {
-    for (const auto& reg : funcs) 
+    for (const auto& reg : funcs)
         bind(L, reg.name, reg.func);
 }
 
@@ -641,7 +627,7 @@ LState::LState()
     object_count++;
     _G->settable(LValue(intern_string("_G")), LValue(LType::Table, _G));
 
-    
+
     str_index    = LValue(intern_string("__index"));
     str_newindex = LValue(intern_string("__newindex"));
     str_gc       = LValue(intern_string("__gc"));
@@ -654,10 +640,9 @@ LState::LState()
 
 static void dtor_free_table(LTable* t) {
     if (t->array)  { delete[] t->array;  t->array  = nullptr; }
-    if (t->keys)   { delete[] reinterpret_cast<char*>(t->keys); t->keys = nullptr; t->vals = nullptr; t->nexts = nullptr; }
-    if (t->bucket) { delete[] t->bucket; t->bucket = nullptr; }
+    if (t->entries) { delete[] t->entries; t->entries = nullptr; }
     t->array_size = t->array_cap = t->hash_size = t->hash_count = 0;
-    t->free_head = -1;
+    t->hash_count = t->hash_tombs = 0;
     delete t;
 }
 
@@ -666,6 +651,24 @@ LState::~LState() {
     if (gc_phase == GCPhase::Sweeping) {
         while (gc_phase == GCPhase::Sweeping)
             gc_step();
+    }
+
+    for (LHeader* h = allocated_objects; h; h = h->next) {
+        if (h->type == static_cast<uint8_t>(LType::Userdata)) {
+            LUserdata* ud = static_cast<LUserdata*>(h);
+            if (ud->metatable) {
+                LValue* gc_func = ud->metatable->gettable(this->str_gc);
+                if (gc_func && gc_func->type() == LType::Function) {
+                    LValue args[1] = { LValue(LType::Userdata, ud) };
+                    size_t prev_shadow = this->shadow_top;
+                    this->shadow_stack[this->shadow_top++] = &args[0];
+                    try {
+                        call_function(this, *gc_func, args, 1, "StateClose_Finalizer", 0);
+                    } catch (...) {}
+                    this->shadow_top = prev_shadow;
+                }
+            }
+        }
     }
 
     LHeader* curr = allocated_objects;
@@ -818,10 +821,9 @@ bool LState::gc_step() {
                     gc_finalizable = t;
                 } else {
                     if (t->array)  { delete[] t->array;  t->array  = nullptr; }
-                    if (t->keys)   { delete[] reinterpret_cast<char*>(t->keys); t->keys = nullptr; t->vals = nullptr; t->nexts = nullptr; }
-                    if (t->bucket) { delete[] t->bucket; t->bucket = nullptr; }
-                    t->array_size = t->array_cap = t->hash_size = t->hash_count = 0;
-                    t->free_head = -1;
+                    if (t->entries) { delete[] t->entries; t->entries = nullptr; }
+                                    t->array_size = t->array_cap = t->hash_size = t->hash_count = 0;
+                    t->hash_count = t->hash_tombs = 0;
                     t->next = free_tables;
                     free_tables = t;
                 }
@@ -861,10 +863,9 @@ bool LState::gc_step() {
             LTable* nx = static_cast<LTable*>(t->next);
             clx_trigger_gc(this, t);
             if (t->array)  { delete[] t->array;  t->array  = nullptr; }
-            if (t->keys)   { delete[] reinterpret_cast<char*>(t->keys); t->keys = nullptr; t->vals = nullptr; t->nexts = nullptr; }
-            if (t->bucket) { delete[] t->bucket; t->bucket = nullptr; }
-            t->array_size = t->array_cap = t->hash_size = t->hash_count = 0;
-            t->free_head = -1;
+            if (t->entries) { delete[] t->entries; t->entries = nullptr; }
+                    t->array_size = t->array_cap = t->hash_size = t->hash_count = 0;
+            t->hash_count = t->hash_tombs = 0;
             t->next = free_tables;
             free_tables = t;
             t = nx;
@@ -935,12 +936,13 @@ void LState::collect_garbage() {
             LTable* t = static_cast<LTable*>(curr);
             for (size_t i = 0; i < t->array_size; ++i) push_if_needed(t->array[i]);
             for (size_t b = 0; b < t->hash_size; ++b) {
-                int32_t ni = t->bucket[b];
-                while (ni != -1) {
-                    LValue kv; kv.val = t->keys[ni];
+                uint32_t _mask = static_cast<uint32_t>(t->hash_size - 1);
+                for (size_t _i = 0; _i < t->hash_size; ++_i) {
+                    uint64_t _k = t->entries[_i].key;
+                    if (_k == HASH_EMPTY || _k == HASH_TOMBSTONE) continue;
+                    LValue kv; kv.val = _k;
                     push_if_needed(kv);
-                    push_if_needed(t->vals[ni]);
-                    ni = t->nexts[ni];
+                    push_if_needed(t->entries[_i].val);
                 }
             }
             if (t->metatable && t->metatable->marked == 0) {
@@ -976,16 +978,16 @@ void LState::collect_garbage() {
                     if (h && h->marked == 0) { h->marked = 2; protect_wl.push_back(h); }
                 }
             }
-            for (size_t b = 0; b < tt->hash_size; ++b) {
-                for (int32_t ni = static_cast<int32_t>(tt->bucket[b]); ni != -1; ni = tt->nexts[ni]) {
-                    LValue kv; kv.val = tt->keys[ni];
-                    for (LValue v : { kv, tt->vals[ni] }) {
+            for (size_t _pi = 0; _pi < tt->hash_size; ++_pi) {
+                    uint64_t _pk = tt->entries[_pi].key;
+                    if (_pk == HASH_EMPTY || _pk == HASH_TOMBSTONE) continue;
+                    LValue kv; kv.val = _pk;
+                    for (LValue v : { kv, tt->entries[_pi].val }) {
                         if (v.is_gc_obj()) {
                             LHeader* h = v.as_pointer();
                             if (h && h->marked == 0) { h->marked = 2; protect_wl.push_back(h); }
                         }
                     }
-                }
             }
         }
     }
@@ -1001,7 +1003,7 @@ void LState::collect_garbage() {
 
 //------------------ LState::register_module — register module loader
 void LState::register_module(const std::string& name, LValue (*func)(LState*)) {
-    clx_register_static_preload(this, name.c_str(), func);
+    register_static_preload(this, name.c_str(), func);
 }
 
 
@@ -1038,7 +1040,7 @@ MultiValue call_function(LState* L, const LValue& func, const LValue* args, size
                 else new_args = stack_buf;
                 new_args[0] = func;
                 for (size_t i = 0; i < count; ++i) new_args[i + 1] = args[i];
-                
+
                 size_t prev_inner = L->shadow_top;
                 for (size_t i = 0; i < nargs; ++i) L->shadow_stack[L->shadow_top++] = &new_args[i];
                 MultiValue ret = call_function(L, *m, new_args, nargs, file, line);
@@ -1056,7 +1058,7 @@ MultiValue call_function(LState* L, const LValue& func, const LValue* args, size
     if (file && file[0] != '\0') {
         prefix = std::string(file) + ":" + std::to_string(line) + ": ";
     }
-    
+
     std::string err_msg = prefix + "attempt to call a " + TYPE_NAMES[static_cast<size_t>(func.type())] + " value";
     throw LRuntimeException(LValue(L->intern_string(err_msg)));
 }
@@ -1165,7 +1167,7 @@ void set_lazy_funcs(LState* L, const LValue& table, const LazyReg* regs, size_t 
     if (!mt) {
         mt = static_cast<LTable*>(L->create_table().as_pointer());
         t->metatable = mt;
-        t->shape_version++;
+        t->hash_version++;
     }
 
     mt->settable(LValue(L->intern_string("__lazy_regs")),
@@ -1200,9 +1202,10 @@ LValue LState::create_table(size_t asize, size_t hsize) {
         t->array_cap   = 0;
         t->hash_size   = 0;
         t->hash_count  = 0;
-        t->free_head   = -1;
-        t->bucket      = nullptr;
-        t->shape_version = 0;
+        t->hash_count    = 0;
+        t->hash_tombs    = 0;
+        t->hash_version  = 0;
+        t->array_version = 0;
         t->metatable   = nullptr;
         t->marked      = 0;
     } else {
@@ -1217,10 +1220,10 @@ LValue LState::create_table(size_t asize, size_t hsize) {
     }
 
     t->type = static_cast<uint8_t>(LType::Table);
-    
+
     t->next = allocated_objects;
     allocated_objects = t;
-    
+
     object_count++;
     return LValue(LType::Table, t);
 }
@@ -1312,13 +1315,13 @@ LValue call_bin_metamethod(LState* L, const LValue& a, const LValue& b, const ch
     }
 
     std::string_view ev(event);
-    
+
     if (ev == "__eq") return clx::LValue(false);
-    
+
     std::string op_type = "perform arithmetic on";
     if (ev == "__lt" || ev == "__le") op_type = "compare";
     else if (ev == "__concat") op_type = "concatenate";
-    
+
     std::string err_msg = prefix + "attempt to " + op_type + " a " + TYPE_NAMES[static_cast<size_t>(a.type())] + " value";
     throw LRuntimeException(LValue(L->intern_string(err_msg)));
 }
@@ -1341,8 +1344,8 @@ void set_global(LState* L, const char* name, const LValue& val) {
 }
 
 
-//------------------ clx_open — create Lua state
-LState* clx_open(int argc, char* argv[]) {
+//------------------ open — create Lua state
+LState* open(int argc, char* argv[]) {
     LState* L = new LState();
 
     LThread* main_th = new LThread();
@@ -1373,8 +1376,8 @@ LState* clx_open(int argc, char* argv[]) {
 }
 
 
-//------------------ clx_close — close Lua state
-void clx_close(LState* L) {
+//------------------ close — close Lua state
+void close(LState* L) {
 #if defined(_WIN32)
     ConvertFiberToThread();
 #endif
@@ -1382,4 +1385,4 @@ void clx_close(LState* L) {
     delete L;
 }
 
-} 
+}

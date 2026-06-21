@@ -409,20 +409,31 @@ struct LazyReg {
 };
 
 //------------------ Hash/array hybrid table
-struct LTable : public LHeader {
-    LValue* array;
-    size_t  array_size;
-    size_t  array_cap;
-    int32_t* bucket;
-    size_t  hash_size;
-    LTable* metatable;
-    size_t  hash_count;
 
-    uint64_t* keys;
-    LValue*  vals;
-    int32_t* nexts;
-    int32_t  free_head;
-    uint32_t shape_version;
+static constexpr uint64_t HASH_EMPTY     = 0xFFFFFFFFFFFFFFFFULL;
+static constexpr uint64_t HASH_TOMBSTONE = 0xFFFFFFFFFFFFFFFEULL;
+
+
+struct HashEntry {
+    uint64_t key;
+    LValue   val;
+};
+static_assert(sizeof(HashEntry) == 16, "HashEntry must be 16 bytes");
+
+struct LTable : public LHeader {
+    LValue*    array;
+    size_t     array_size;
+    size_t     array_cap;
+
+    HashEntry* entries;
+    size_t     hash_size;
+    size_t     hash_count;
+    size_t     hash_tombs;
+
+    uint32_t   hash_version;
+    uint32_t   array_version;
+
+    LTable*    metatable;
 
     LTable();
     ~LTable();
@@ -439,7 +450,6 @@ struct LTable : public LHeader {
 
 private:
     void resize_hash(size_t new_size);
-    void hash_insert_direct(const LValue& key, const LValue& val);
 };
 
 //------------------ Wyhash secret constants
@@ -622,6 +632,20 @@ struct StringPool {
         }
     }
 
+    const char* lookup(const char* str, size_t len, uint32_t h) const {
+        if (count == 0) return nullptr;
+        size_t mask = capacity - 1;
+        size_t idx  = h & mask;
+        for (;;) {
+            const Slot& s = slots[idx];
+            if (s.empty()) return nullptr;
+            if (s.hash == h && s.len == static_cast<uint32_t>(len) &&
+                clx_memcmp(s.baked, str, len) == 0)
+                return s.baked;
+            idx = (idx + 1) & mask;
+        }
+    }
+
     void reserve(size_t n) {
         if (n > capacity) rehash(n);
     }
@@ -745,7 +769,7 @@ struct LState {
 
     std::vector<LHeader*> gc_worklist;
 
-    
+
     enum class GCPhase : uint8_t { Idle, Sweeping };
     GCPhase  gc_phase         = GCPhase::Idle;
     LHeader* gc_sweep_cursor  = nullptr;
@@ -754,11 +778,11 @@ struct LState {
     LHeader* gc_finalizable_ud = nullptr;
     static constexpr size_t GC_STEP_BUDGET = 512;
     bool gc_running        = true;
-    int  gc_pause          = 200;    
-    int  gc_stepmul        = 200;    
-    int  gc_stepsize       = 13;     
+    int  gc_pause          = 200;
+    int  gc_stepmul        = 200;
+    int  gc_stepsize       = 13;
     void collect_garbage();
-    bool gc_step();  
+    bool gc_step();
 
     void register_module(const std::string& name, LValue (*func)(LState*));
 };
@@ -855,6 +879,12 @@ public:
         return *this;
     }
 
+    CLX_INLINE StringBuilder& append(StringBuilder& other) {
+        cached = nullptr;
+        for (size_t i = 0; i < other.count; ++i) append(other.parts[i], other.lens[i]);
+        return *this;
+    }
+
     CLX_INLINE StringBuilder& append(LState* L, const LValue& v) {
         if (v.type() == LType::String) {
             return append(v.as_string(), v.string_len());
@@ -929,7 +959,7 @@ struct CloseGuard {
     ~CloseGuard();
 };
 
-//------------------ Reads a variable from environment table
+//------------------ Reads a variable from environment table (shared_ptr upvalue)
 inline LValue get_env_var(LState* L, LUpValue env, const char* name) {
     LTable* t = static_cast<LTable*>((*env).as_pointer());
     LValue key = LValue(L->intern_string(name));
@@ -937,15 +967,30 @@ inline LValue get_env_var(LState* L, LUpValue env, const char* name) {
     return val ? *val : LValue();
 }
 
-//------------------ Writes a variable to environment table
+//------------------ Reads a variable from environment table (direct LValue)
+inline LValue get_env_var(LState* L, const LValue& env, const char* name) {
+    LTable* t = static_cast<LTable*>(env.as_pointer());
+    LValue key = LValue(L->intern_string(name));
+    LValue* val = t->gettable(key);
+    return val ? *val : LValue();
+}
+
+//------------------ Writes a variable to environment table (shared_ptr upvalue)
 inline void set_env_var(LState* L, LUpValue env, const char* name, const LValue& val) {
     LTable* t = static_cast<LTable*>((*env).as_pointer());
     LValue key = LValue(L->intern_string(name));
     t->settable(key, val);
 }
 
+//------------------ Writes a variable to environment table (direct LValue)
+inline void set_env_var(LState* L, const LValue& env, const char* name, const LValue& val) {
+    LTable* t = static_cast<LTable*>(env.as_pointer());
+    LValue key = LValue(L->intern_string(name));
+    t->settable(key, val);
+}
+
 //------------------ Addition with metamethod fallback
-  CLX_INLINE_HOT LValue clx_add(LState* L, const LValue& a, const LValue& b) {
+  CLX_INLINE_HOT LValue add(LState* L, const LValue& a, const LValue& b) {
      if (a.type() == LType::Integer && b.type() == LType::Integer) [[likely]] return LValue(a.as_integer() + b.as_integer());
      if ((a.type() == LType::Number || a.type() == LType::Integer) && (b.type() == LType::Number || b.type() == LType::Integer)) [[likely]] {
          double l = (a.type() == LType::Integer) ? static_cast<double>(a.as_integer()) : a.as_number();
@@ -957,7 +1002,7 @@ inline void set_env_var(LState* L, LUpValue env, const char* name, const LValue&
      return call_bin_metamethod(L, a, b, "__add");
  }
 
- CLX_INLINE_HOT LValue clx_sub(LState* L, const LValue& a, const LValue& b) {
+ CLX_INLINE_HOT LValue sub(LState* L, const LValue& a, const LValue& b) {
      if (a.type() == LType::Integer && b.type() == LType::Integer) [[likely]] return LValue(a.as_integer() - b.as_integer());
      if ((a.type() == LType::Number || a.type() == LType::Integer) && (b.type() == LType::Number || b.type() == LType::Integer)) [[likely]] {
          double l = (a.type() == LType::Integer) ? static_cast<double>(a.as_integer()) : a.as_number();
@@ -969,7 +1014,7 @@ inline void set_env_var(LState* L, LUpValue env, const char* name, const LValue&
      return call_bin_metamethod(L, a, b, "__sub");
  }
 
- CLX_INLINE_HOT LValue clx_mul(LState* L, const LValue& a, const LValue& b) {
+ CLX_INLINE_HOT LValue mul(LState* L, const LValue& a, const LValue& b) {
      if (a.type() == LType::Integer && b.type() == LType::Integer) [[likely]] return LValue(a.as_integer() * b.as_integer());
      if ((a.type() == LType::Number || a.type() == LType::Integer) && (b.type() == LType::Number || b.type() == LType::Integer)) [[likely]] {
          double l = (a.type() == LType::Integer) ? static_cast<double>(a.as_integer()) : a.as_number();
@@ -981,7 +1026,7 @@ inline void set_env_var(LState* L, LUpValue env, const char* name, const LValue&
      return call_bin_metamethod(L, a, b, "__mul");
  }
 
- CLX_INLINE_HOT LValue clx_div(LState* L, const LValue& a, const LValue& b) {
+ CLX_INLINE_HOT LValue div(LState* L, const LValue& a, const LValue& b) {
      if ((a.type() == LType::Number || a.type() == LType::Integer) && (b.type() == LType::Number || b.type() == LType::Integer)) [[likely]] {
          double l = (a.type() == LType::Integer) ? static_cast<double>(a.as_integer()) : a.as_number();
          double r = (b.type() == LType::Integer) ? static_cast<double>(b.as_integer()) : b.as_number();
@@ -993,7 +1038,7 @@ inline void set_env_var(LState* L, LUpValue env, const char* name, const LValue&
  }
 
 //------------------ Equality with metamethod fallback
-CLX_INLINE_HOT LValue clx_eq(LState* L, const LValue& a, const LValue& b) {
+CLX_INLINE_HOT LValue eq(LState* L, const LValue& a, const LValue& b) {
     if (a.val == b.val) return LValue(true);
     if (a.type() == LType::Integer && b.type() == LType::Number) return LValue(static_cast<double>(a.as_integer()) == b.as_number());
     if (a.type() == LType::Number && b.type() == LType::Integer) return LValue(a.as_number() == static_cast<double>(b.as_integer()));
@@ -1009,7 +1054,7 @@ CLX_INLINE_HOT LValue clx_eq(LState* L, const LValue& a, const LValue& b) {
 }
 
 //------------------ Safe integer conversion (no metamethods)
-CLX_INLINE bool clx_to_integer(const LValue& v, int64_t& out) {
+CLX_INLINE bool to_integer(const LValue& v, int64_t& out) {
     if (v.type() == LType::Integer) {
         out = v.as_integer();
         return true;
@@ -1025,48 +1070,48 @@ CLX_INLINE bool clx_to_integer(const LValue& v, int64_t& out) {
 }
 
 //------------------ Bitwise AND with metamethod fallback
-CLX_INLINE LValue clx_band(LState* L, const LValue& a, const LValue& b) {
+CLX_INLINE LValue band(LState* L, const LValue& a, const LValue& b) {
     int64_t l, r;
-    if (clx_to_integer(a, l) && clx_to_integer(b, r)) [[likely]] return LValue(l & r);
+    if (to_integer(a, l) && to_integer(b, r)) [[likely]] return LValue(l & r);
     return call_bin_metamethod(L, a, b, "__band");
 }
 
 //------------------ Bitwise OR with metamethod fallback
-CLX_INLINE LValue clx_bor(LState* L, const LValue& a, const LValue& b) {
+CLX_INLINE LValue bor(LState* L, const LValue& a, const LValue& b) {
     int64_t l, r;
-    if (clx_to_integer(a, l) && clx_to_integer(b, r)) [[likely]] return LValue(l | r);
+    if (to_integer(a, l) && to_integer(b, r)) [[likely]] return LValue(l | r);
     return call_bin_metamethod(L, a, b, "__bor");
 }
 
 //------------------ Bitwise XOR with metamethod fallback
-CLX_INLINE LValue clx_bxor(LState* L, const LValue& a, const LValue& b) {
+CLX_INLINE LValue bxor(LState* L, const LValue& a, const LValue& b) {
     int64_t l, r;
-    if (clx_to_integer(a, l) && clx_to_integer(b, r)) [[likely]] return LValue(l ^ r);
+    if (to_integer(a, l) && to_integer(b, r)) [[likely]] return LValue(l ^ r);
     return call_bin_metamethod(L, a, b, "__bxor");
 }
 
 //------------------ Bitwise SHL with metamethod fallback
-CLX_INLINE LValue clx_shl(LState* L, const LValue& a, const LValue& b) {
+CLX_INLINE LValue shl(LState* L, const LValue& a, const LValue& b) {
     int64_t l, r;
-    if (clx_to_integer(a, l) && clx_to_integer(b, r)) [[likely]] return LValue(l << r);
+    if (to_integer(a, l) && to_integer(b, r)) [[likely]] return LValue(l << r);
     return call_bin_metamethod(L, a, b, "__shl");
 }
 
 //------------------ Bitwise SHR with metamethod fallback
-CLX_INLINE LValue clx_shr(LState* L, const LValue& a, const LValue& b) {
+CLX_INLINE LValue shr(LState* L, const LValue& a, const LValue& b) {
     int64_t l, r;
-    if (clx_to_integer(a, l) && clx_to_integer(b, r)) [[likely]] return LValue(l >> r);
+    if (to_integer(a, l) && to_integer(b, r)) [[likely]] return LValue(l >> r);
     return call_bin_metamethod(L, a, b, "__shr");
 }
 
 //------------------ Bitwise NOT with metamethod fallback
-CLX_INLINE LValue clx_bnot(LState* L, const LValue& a) {
+CLX_INLINE LValue bnot(LState* L, const LValue& a) {
     int64_t v;
-    if (clx_to_integer(a, v)) [[likely]] return LValue(~v);
+    if (to_integer(a, v)) [[likely]] return LValue(~v);
     return call_bin_metamethod(L, a, a, "__bnot");
 }
 
- CLX_INLINE LValue clx_lt(LState* L, const LValue& a, const LValue& b) {
+ CLX_INLINE LValue lt(LState* L, const LValue& a, const LValue& b) {
      if (a.type() == LType::Integer && b.type() == LType::Integer) [[likely]] return LValue(a.as_integer() < b.as_integer());
      if ((a.type() == LType::Number || a.type() == LType::Integer) && (b.type() == LType::Number || b.type() == LType::Integer)) [[likely]] {
          double l = (a.type() == LType::Integer) ? static_cast<double>(a.as_integer()) : a.as_number();
@@ -1077,7 +1122,7 @@ CLX_INLINE LValue clx_bnot(LState* L, const LValue& a) {
      return call_bin_metamethod(L, a, b, "__lt");
  }
 
- CLX_INLINE LValue clx_le(LState* L, const LValue& a, const LValue& b) {
+ CLX_INLINE LValue le(LState* L, const LValue& a, const LValue& b) {
      if (a.type() == LType::Integer && b.type() == LType::Integer) [[likely]] return LValue(a.as_integer() <= b.as_integer());
      if ((a.type() == LType::Number || a.type() == LType::Integer) && (b.type() == LType::Number || b.type() == LType::Integer)) [[likely]] {
          double l = (a.type() == LType::Integer) ? static_cast<double>(a.as_integer()) : a.as_number();
@@ -1089,7 +1134,7 @@ CLX_INLINE LValue clx_bnot(LState* L, const LValue& a) {
  }
 
 //------------------ Length operator with metamethod fallback
-CLX_INLINE_COLD LValue clx_len(LState* L, const LValue& a) {
+CLX_INLINE_COLD LValue len(LState* L, const LValue& a) {
     if (a.type() == LType::String) {
         return LValue(static_cast<int64_t>(a.string_len()));
     }
@@ -1119,7 +1164,7 @@ CLX_INLINE_COLD LValue clx_len(LState* L, const LValue& a) {
 }
 
 //------------------ Modulo with metamethod fallback
-CLX_INLINE LValue clx_mod(LState* L, const LValue& a, const LValue& b) {
+CLX_INLINE LValue mod(LState* L, const LValue& a, const LValue& b) {
     if ((a.type() == LType::Number || a.type() == LType::Integer) && (b.type() == LType::Number || b.type() == LType::Integer)) {
         double l = (a.type() == LType::Integer) ? static_cast<double>(a.as_integer()) : a.as_number();
         double r = (b.type() == LType::Integer) ? static_cast<double>(b.as_integer()) : b.as_number();
@@ -1131,7 +1176,7 @@ CLX_INLINE LValue clx_mod(LState* L, const LValue& a, const LValue& b) {
 }
 
 //------------------ Floor-division with metamethod fallback
-CLX_INLINE LValue clx_idiv(LState* L, const LValue& a, const LValue& b) {
+CLX_INLINE LValue idiv(LState* L, const LValue& a, const LValue& b) {
     if ((a.type() == LType::Number || a.type() == LType::Integer) && (b.type() == LType::Number || b.type() == LType::Integer)) {
         double l = (a.type() == LType::Integer) ? static_cast<double>(a.as_integer()) : a.as_number();
         double r = (b.type() == LType::Integer) ? static_cast<double>(b.as_integer()) : b.as_number();
@@ -1143,7 +1188,7 @@ CLX_INLINE LValue clx_idiv(LState* L, const LValue& a, const LValue& b) {
 }
 
 //------------------ Power with metamethod fallback
-CLX_INLINE LValue clx_pow(LState* L, const LValue& a, const LValue& b) {
+CLX_INLINE LValue pow(LState* L, const LValue& a, const LValue& b) {
     if ((a.type() == LType::Number || a.type() == LType::Integer) && (b.type() == LType::Number || b.type() == LType::Integer)) {
         double l = (a.type() == LType::Integer) ? static_cast<double>(a.as_integer()) : a.as_number();
         double r = (b.type() == LType::Integer) ? static_cast<double>(b.as_integer()) : b.as_number();
@@ -1155,7 +1200,7 @@ CLX_INLINE LValue clx_pow(LState* L, const LValue& a, const LValue& b) {
 }
 
 //------------------ Unary minus with metamethod fallback
-CLX_INLINE LValue clx_unm(LState* L, const LValue& a) {
+CLX_INLINE LValue unm(LState* L, const LValue& a) {
     if (a.type() == LType::Integer) return LValue(-static_cast<double>(a.as_integer()));
     if (a.type() == LType::Number) return LValue(-a.as_number());
     double d;
@@ -1164,12 +1209,12 @@ CLX_INLINE LValue clx_unm(LState* L, const LValue& a) {
 }
 
 //------------------ Logical NOT
-CLX_INLINE LValue clx_not(const LValue& a) {
+CLX_INLINE LValue logical_not(const LValue& a) {
     return LValue(!a.as_bool());
 }
 
 //------------------ Multi-value concat (string builder fast path)
-CLX_INLINE_COLD LValue clx_concat_multi(LState* L, const LValue* args, size_t count) {
+CLX_INLINE_COLD LValue concat_multi(LState* L, const LValue* args, size_t count) {
     if (count <= 8) [[likely]] {
         const char* ptrs[8];
         size_t  lens[8];
@@ -1229,7 +1274,7 @@ CLX_INLINE_COLD LValue clx_concat_multi(LState* L, const LValue* args, size_t co
 }
 
 //------------------ Table read with __index fallback
-inline LValue clx_table_get(LState* L, const LValue& obj, const LValue& key) {
+inline LValue table_get(LState* L, const LValue& obj, const LValue& key) {
     LTable* mt = nullptr;
     LValue direct;
 
@@ -1244,12 +1289,16 @@ inline LValue clx_table_get(LState* L, const LValue& obj, const LValue& key) {
         }
         if (direct.type() == LType::Nil) {
             if (t->hash_size > 0) {
-                uint32_t _h = lvalue_hash(key.val) & static_cast<uint32_t>(t->hash_size - 1);
-                for (int32_t _c = t->bucket[_h]; _c != -1; _c = t->nexts[_c]) {
-                    if (lvalue_eq_fast(t->keys[_c], key.val)) {
-                        direct = t->vals[_c];
+                uint32_t _mask = static_cast<uint32_t>(t->hash_size - 1);
+                uint32_t _h = lvalue_hash(key.val) & _mask;
+                for (;;) {
+                    HashEntry& _e = t->entries[_h];
+                    if (_e.key == HASH_EMPTY) break;
+                    if (_e.key != HASH_TOMBSTONE && lvalue_eq_fast(_e.key, key.val)) {
+                        direct = _e.val;
                         break;
                     }
+                    _h = (_h + 1) & _mask;
                 }
             }
             if (direct.type() == LType::Nil)
@@ -1266,7 +1315,7 @@ inline LValue clx_table_get(LState* L, const LValue& obj, const LValue& key) {
         LValue* index = mt->gettable(LValue(L->intern_string("__index")));
         if (!index) return LValue();
         if (index->type() == LType::Table)
-            return clx_table_get(L, *index, key);
+            return table_get(L, *index, key);
         if (index->type() == LType::Function) {
             LValue args[2] = { obj, key };
             size_t prev = L->shadow_top;
@@ -1294,12 +1343,12 @@ inline LValue clx_table_get(LState* L, const LValue& obj, const LValue& key) {
         return mv.count > 0 ? mv[0] : LValue();
     }
     if (index->type() == LType::Table)
-        return clx_table_get(L, *index, key);
+        return table_get(L, *index, key);
     return LValue();
 }
 
 //------------------ Table write with __newindex fallback
-inline void clx_table_set(LState* L, const LValue& obj, const LValue& key, const LValue& val) {
+inline void table_set(LState* L, const LValue& obj, const LValue& key, const LValue& val) {
     LTable* mt = nullptr;
 
     if (obj.type() == LType::Table) {
@@ -1337,14 +1386,14 @@ inline void clx_table_set(LState* L, const LValue& obj, const LValue& key, const
             call_function(L, *newindex, args, 3, "__newindex", 0);
             L->shadow_top = prev;
         } else if (newindex->type() == LType::Table) {
-            clx_table_set(L, *newindex, key, val);
+            table_set(L, *newindex, key, val);
         }
         return;
     }
 }
 
 //------------------ Integer-key table read (fast path)
-inline LValue clx_table_get_int(LState* L, const LValue& obj, size_t idx) {
+inline LValue table_get_int(LState* L, const LValue& obj, size_t idx) {
     LTable* mt = nullptr;
     LValue key_val = LValue(static_cast<int64_t>(idx));
 
@@ -1374,12 +1423,12 @@ inline LValue clx_table_get_int(LState* L, const LValue& obj, size_t idx) {
         return mv.count > 0 ? mv[0] : LValue();
     }
     if (index->type() == LType::Table)
-        return clx_table_get(L, *index, key_val);
+        return table_get(L, *index, key_val);
     return LValue();
 }
 
 //------------------ Integer-key table write (fast path)
-inline void clx_table_set_int(LState* L, const LValue& obj, size_t idx, const LValue& val) {
+inline void table_set_int(LState* L, const LValue& obj, size_t idx, const LValue& val) {
     LValue key_val = LValue(static_cast<int64_t>(idx));
 
     if (obj.type() == LType::Table) {
@@ -1407,44 +1456,52 @@ inline void clx_table_set_int(LState* L, const LValue& obj, size_t idx, const LV
             call_function(L, *newindex, args, 3, "__newindex", 0);
             L->shadow_top = prev;
         } else if (newindex->type() == LType::Table) {
-            clx_table_set(L, *newindex, key_val, val);
+            table_set(L, *newindex, key_val, val);
         }
     }
 }
 
 //------------------ Cached table access slot
 struct CacheSlot {
-    uint64_t table_val;
-    uint32_t shape_version;
-    LValue    cached;
-    bool      valid;
+    uint64_t table_val    = 0;
+    uint64_t key_val      = 0;
+    uint32_t hash_version = 0;
+    LValue   cached;
+    bool     valid        = false;
 };
 
 //------------------ Cached slot table read
-CLX_INLINE_HOT LValue clx_table_get_cs(LState* L, const LValue& obj, const LValue& key, CacheSlot* cs) {
-    if (cs->valid && cs->table_val == obj.val && obj.type() == LType::Table) {
+CLX_INLINE_HOT LValue table_get_cs(LState* L, const LValue& obj, const LValue& key, CacheSlot* cs) {
+    if (obj.type() == LType::Table) {
+
+        if (key.type() == LType::Integer)
+            return table_get(L, obj, key);
         LTable* t = static_cast<LTable*>(obj.as_pointer());
-        if (t->shape_version == cs->shape_version)
+        if (cs->valid && cs->table_val == obj.val &&
+            cs->key_val  == key.val &&
+            cs->hash_version == t->hash_version)
             return cs->cached;
+        LValue result = table_get(L, obj, key);
+        cs->valid        = true;
+        cs->table_val    = obj.val;
+        cs->key_val      = key.val;
+        cs->hash_version = t->hash_version;
+        cs->cached       = result;
+        return result;
     }
-    LValue result = clx_table_get(L, obj, key);
-    if (!result.is_gc_obj() && obj.type() == LType::Table) {
-        cs->valid = true;
-        cs->table_val = obj.val;
-        cs->shape_version = static_cast<LTable*>(obj.as_pointer())->shape_version;
-        cs->cached     = result;
-    }
-    return result;
+    return table_get(L, obj, key);
 }
 
 //------------------ Cached slot table write
-CLX_INLINE_HOT void clx_table_set_cs(LState* L, const LValue& obj, const LValue& key, const LValue& val, CacheSlot* cs) {
-    clx_table_set(L, obj, key, val);
-    if (!val.is_gc_obj() && obj.type() == LType::Table) {
-        cs->valid = true;
-        cs->table_val = obj.val;
-        cs->shape_version = static_cast<LTable*>(obj.as_pointer())->shape_version;
-        cs->cached     = val;
+CLX_INLINE_HOT void table_set_cs(LState* L, const LValue& obj, const LValue& key, const LValue& val, CacheSlot* cs) {
+    table_set(L, obj, key, val);
+    if (obj.type() == LType::Table && key.type() != LType::Integer) {
+        LTable* t        = static_cast<LTable*>(obj.as_pointer());
+        cs->valid        = true;
+        cs->table_val    = obj.val;
+        cs->key_val      = key.val;
+        cs->hash_version = t->hash_version;
+        cs->cached       = val;
     }
 }
 
@@ -1503,11 +1560,11 @@ MultiValue resume(LState* L, const LValue& thread, const LValue* args, size_t co
 MultiValue yield(LState* L, const LValue* args, size_t count);
 
 //------------------ Opens CLX state
-LState* clx_open(int argc = 0, char* argv[] = nullptr);
+LState* open(int argc = 0, char* argv[] = nullptr);
 //------------------ Opens all standard libraries
 void openlibs(LState* L);
 //------------------ Closes CLX state
-void clx_close(LState* L);
+void close(LState* L);
 
 //------------------ Sets lazy-initialized functions on a table
 void set_lazy_funcs(LState* L, const LValue& table, const LazyReg* regs, size_t count);
