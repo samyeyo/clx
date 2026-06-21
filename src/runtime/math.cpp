@@ -147,7 +147,7 @@ static MultiValue math_tan(LState* L, const LValue* args, size_t count) {
 static MultiValue math_tointeger(LState* L, const LValue* args, size_t count) {
     if (count == 0) return MultiValue();
     int64_t i;
-    if (clx_to_integer(args[0], i)) return MultiValue(clx::integer(i));
+    if (to_integer(args[0], i)) return MultiValue(clx::integer(i));
     return MultiValue();
 }
 
