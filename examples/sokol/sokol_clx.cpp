@@ -213,8 +213,8 @@ static void cleanup_cb(void* user_data) {
 
 
 
-//------------------ SOKOL: clx_run - sokol.run() Lua binding: starts sokol app with Lua callbacks
-static clx::MultiValue clx_run(clx::LState* L, const clx::LValue* args, size_t n) {
+//------------------ SOKOL: run - sokol.run() Lua binding: starts sokol app with Lua callbacks
+static clx::MultiValue run(clx::LState* L, const clx::LValue* args, size_t n) {
     if (n < 1 || !clx::is_table(args[0]))
         clx::error(L, "sokol.run: expected a config table");
 
@@ -250,23 +250,23 @@ static clx::MultiValue clx_run(clx::LState* L, const clx::LValue* args, size_t n
     return clx::MultiValue();
 }
 
-//------------------ SOKOL: clx_width - sokol.width() Lua binding: returns window width in pixels
-static clx::MultiValue clx_width(clx::LState*, const clx::LValue*, size_t) {
+//------------------ SOKOL: width - sokol.width() Lua binding: returns window width in pixels
+static clx::MultiValue width(clx::LState*, const clx::LValue*, size_t) {
     return clx::integer(sapp_width());
 }
 
-//------------------ SOKOL: clx_height - sokol.height() Lua binding: returns window height in pixels
-static clx::MultiValue clx_height(clx::LState*, const clx::LValue*, size_t) {
+//------------------ SOKOL: height - sokol.height() Lua binding: returns window height in pixels
+static clx::MultiValue height(clx::LState*, const clx::LValue*, size_t) {
     return clx::integer(sapp_height());
 }
 
-//------------------ SOKOL: clx_frame_duration - sokol.frame_duration() Lua binding: returns frame delta time
-static clx::MultiValue clx_frame_duration(clx::LState*, const clx::LValue*, size_t) {
+//------------------ SOKOL: frame_duration - sokol.frame_duration() Lua binding: returns frame delta time
+static clx::MultiValue frame_duration(clx::LState*, const clx::LValue*, size_t) {
     return clx::number(sapp_frame_duration());
 }
 
-//------------------ SOKOL: clx_clear - sokol.clear() Lua binding: sets clear color (r, g, b, a)
-static clx::MultiValue clx_clear(clx::LState* L, const clx::LValue* args, size_t n) {
+//------------------ SOKOL: clear - sokol.clear() Lua binding: sets clear color (r, g, b, a)
+static clx::MultiValue clear(clx::LState* L, const clx::LValue* args, size_t n) {
     g_clear_r = (n > 0) ? static_cast<float>(clx::check_number(L, args[0])) : 0.0f;
     g_clear_g = (n > 1) ? static_cast<float>(clx::check_number(L, args[1])) : 0.0f;
     g_clear_b = (n > 2) ? static_cast<float>(clx::check_number(L, args[2])) : 0.0f;
@@ -274,8 +274,8 @@ static clx::MultiValue clx_clear(clx::LState* L, const clx::LValue* args, size_t
     return clx::MultiValue();
 }
 
-//------------------ SOKOL: clx_color - sokol.color() Lua binding: sets current draw color (r, g, b, a)
-static clx::MultiValue clx_color(clx::LState* L, const clx::LValue* args, size_t n) {
+//------------------ SOKOL: color - sokol.color() Lua binding: sets current draw color (r, g, b, a)
+static clx::MultiValue color(clx::LState* L, const clx::LValue* args, size_t n) {
     g_color_r = (n > 0) ? static_cast<float>(clx::check_number(L, args[0])) : 1.0f;
     g_color_g = (n > 1) ? static_cast<float>(clx::check_number(L, args[1])) : 1.0f;
     g_color_b = (n > 2) ? static_cast<float>(clx::check_number(L, args[2])) : 1.0f;
@@ -283,8 +283,8 @@ static clx::MultiValue clx_color(clx::LState* L, const clx::LValue* args, size_t
     return clx::MultiValue();
 }
 
-//------------------ SOKOL: clx_draw_rect - sokol.draw_rect() Lua binding: draws filled rectangle
-static clx::MultiValue clx_draw_rect(clx::LState* L, const clx::LValue* args, size_t n) {
+//------------------ SOKOL: draw_rect - sokol.draw_rect() Lua binding: draws filled rectangle
+static clx::MultiValue draw_rect(clx::LState* L, const clx::LValue* args, size_t n) {
     if (n < 4) clx::error(L, "draw_rect: expected x, y, w, h");
     float x = static_cast<float>(clx::check_number(L, args[0]));
     float y = static_cast<float>(clx::check_number(L, args[1]));
@@ -300,8 +300,8 @@ static clx::MultiValue clx_draw_rect(clx::LState* L, const clx::LValue* args, si
     return clx::MultiValue();
 }
 
-//------------------ SOKOL: clx_draw_filled_circle - sokol.draw_filled_circle() Lua binding
-static clx::MultiValue clx_draw_filled_circle(clx::LState* L, const clx::LValue* args, size_t n) {
+//------------------ SOKOL: draw_filled_circle - sokol.draw_filled_circle() Lua binding
+static clx::MultiValue draw_filled_circle(clx::LState* L, const clx::LValue* args, size_t n) {
     if (n < 3) clx::error(L, "draw_filled_circle: expected cx, cy, r");
     float cx = static_cast<float>(clx::check_number(L, args[0]));
     float cy = static_cast<float>(clx::check_number(L, args[1]));
@@ -321,8 +321,8 @@ static clx::MultiValue clx_draw_filled_circle(clx::LState* L, const clx::LValue*
     return clx::MultiValue();
 }
 
-//------------------ SOKOL: clx_pixels - sokol.pixels() Lua binding: upload raw RGBA pixel data and display
-static clx::MultiValue clx_pixels(clx::LState* L, const clx::LValue* args, size_t n) {
+//------------------ SOKOL: pixels - sokol.pixels() Lua binding: upload raw RGBA pixel data and display
+static clx::MultiValue pixels(clx::LState* L, const clx::LValue* args, size_t n) {
     if (n < 3) clx::error(L, "pixels: expected width, height, data_table");
     int w = static_cast<int>(clx::check_number(L, args[0]));
     int h = static_cast<int>(clx::check_number(L, args[1]));
@@ -376,15 +376,15 @@ static clx::MultiValue clx_pixels(clx::LState* L, const clx::LValue* args, size_
 }
 
 static constexpr clx::LazyReg sokol_funcs[] = {
-    { "run",                clx_run },
-    { "width",              clx_width },
-    { "height",             clx_height },
-    { "frame_duration",     clx_frame_duration },
-    { "clear",              clx_clear },
-    { "color",              clx_color },
-    { "draw_rect",          clx_draw_rect },
-    { "draw_filled_circle", clx_draw_filled_circle },
-    { "pixels",             clx_pixels },
+    { "run",                run },
+    { "width",              width },
+    { "height",             height },
+    { "frame_duration",     frame_duration },
+    { "clear",              clear },
+    { "color",              color },
+    { "draw_rect",          draw_rect },
+    { "draw_filled_circle", draw_filled_circle },
+    { "pixels",             pixels },
 };
 
 //------------------ SOKOL: luaopen_sokol_clx - module entry point, registers all sokol bindings
