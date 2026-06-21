@@ -149,4 +149,59 @@ end
 assert_eq(fib_count, 10, "fibonacci wrap iterated 10 times")
 assert_eq(fib_sum, 143, "sum of first 10 fibonacci numbers")
 
+print("\n----------------- 6. coroutine.close")
+
+do
+    local co = coroutine.create(function() end)
+    coroutine.resume(co)
+    assert_eq(coroutine.status(co), "dead", "setup: co is dead")
+    assert_eq(coroutine.close(co), true, "6.1 close dead coroutine returns true")
+    assert_eq(coroutine.status(co), "dead", "6.2 close dead leaves status dead")
+end
+
+do
+    local co = coroutine.create(function() coroutine.yield() end)
+    coroutine.resume(co)
+    assert_eq(coroutine.status(co), "suspended", "setup: co is suspended")
+    assert_eq(coroutine.close(co), true, "6.3 close suspended coroutine returns true")
+    assert_eq(coroutine.status(co), "dead", "6.4 close suspended leaves status dead")
+end
+
+do
+    local ok, err = coroutine.close("hello")
+    assert_eq(ok, false, "6.5 close string returns false")
+    assert_eq(type(err), "string", "6.6 close string error is a string")
+end
+
+do
+    local ok, err = coroutine.close(nil)
+    assert_eq(ok, false, "6.7 close nil returns false")
+    assert_eq(type(err), "string", "6.8 close nil error is a string")
+end
+
+do
+    local co = coroutine.create(function()
+        local thr = coroutine.running()
+        local ok, err = pcall(coroutine.close, thr)
+        coroutine.yield(ok, err)
+    end)
+    local results = {coroutine.resume(co)}
+    assert_eq(results[2], false, "6.9 close self from within returns false")
+    assert_eq(type(results[3]), "string", "6.10 close self error is a string")
+end
+
+do
+    local closed_flag = false
+    local obj = setmetatable({}, {__close = function(self) closed_flag = true end})
+    local co = coroutine.create(function(o)
+        local x <close> = o
+        coroutine.yield()
+    end)
+    coroutine.resume(co, obj)
+    assert_eq(closed_flag, false, "6.11 obj not closed before coroutine.close")
+    coroutine.close(co)
+    assert_eq(closed_flag, true, "6.12 obj closed via __close after coroutine.close")
+end
+
+
 print_summary("COROUTINES")
