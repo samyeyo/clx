@@ -25,7 +25,7 @@ CLX_API clx::LValue luaopen_native_mod(clx::LState* L) {
     });
 
     mod->bind(L, "test_api", [](clx::LState* L, const clx::LValue* args, size_t n) -> clx::MultiValue {
-        // Test raw_get convenience overloads
+
         clx::LValue t2 = L->create_table();
         clx::raw_set(L, t2, "a", clx::LValue(1.0));
         clx::raw_set(L, t2, "b", clx::LValue(2.0));
