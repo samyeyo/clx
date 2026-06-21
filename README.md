@@ -159,18 +159,15 @@ Results are expressed in speedup factor against standard Lua 5.5 interpreter :
 
 | Script | lua 5.5 | LuaJIT | clx `--fast` |
 |--------|---------|--------|--------------------------|
-| fib.lua | 0.273s (1.00x) | 0.041s (6.66x) | **0.006s (45.50x)** |
-| arraysum.lua | 0.102s (1.00x) | 0.040s (2.55x) | **0.025s (4.08x)** |
-| spectralnorm.lua | 0.293s (1.00x) | **0.015s (19.53x)** | 0.039s (7.51x) |
-| canada.lua | 0.228s (1.00x) | **0.096s (2.38x)** | 0.287s (0.79x)* |
-| warmup.lua | 0.003s (1.00x) | 0.004s (0.75x) | **0.002s (1.50x)** |
+| fib.lua | 0.293s (1.00x) | 0.048s (6.10x) | **0.006s (48.83x)** |
+| arraysum.lua | 0.110s (1.00x) | 0.044s (2.50x) | **0.023s (4.78x)** |
+| spectralnorm.lua | 0.303s (1.00x) | **0.018s (16.83x)** | 0.040s (7.57x) |
+| canada.lua | 0.450s (1.00x) | **0.148s (3.04x)** | 0.231s (1.95x) |
+| warmup.lua | 0.006s (1.00x) | 0.008s (0.75x) | **0.003s (2.00x)** |
 
 > Measured on Intel® Core™ i5 Ultra 125U CPU @ 4.30GHz · Linux · GCC 13.3.0 · Avg of 10 runs
 
 > Full benchmarks are available in **[clx benchmarks](./doc/benchmarks.md)**
-
-> *canada.lua is a string-heavy workload (using dkjson.lua pattern matching)
-> Current CLX optimizations primarily target numeric and specialization-friendly workloads.
 
 ## Documentation
 

@@ -67,31 +67,28 @@ Performance improvements vs lua 5.5 (10 runs average, single CPU, hyperfine) :
 
 | Script | lua 5.5 | LuaJIT | clx (speedup, `--fast`) |
 |--------|---------|--------|--------------------------|
-| 3ddist.lua | 0.078s (1.00x) | **0.013s (6.00x)** | 0.046s (1.70x) |
-| ackermann.lua | 0.042s (1.00x) | 0.009s (4.67x) | **0.005s (8.40x)** |
-| arraysum.lua | 0.102s (1.00x) | 0.040s (2.55x) | **0.025s (4.08x)** |
-| binarytrees.lua | 0.015s (1.00x) | **0.009s (1.67x)** | 0.012s (1.25x) |
-| bubble.lua | 0.043s (1.00x) | **0.005s (8.60x)** | 0.006s (7.17x) |
-| canada.lua | 0.228s (1.00x) | **0.096s (2.38x)** | 0.287s (0.79x) |
-| coro.lua | 0.004s (1.00x) | 0.003s (1.33x) | **0.002s (2.00x)** |
-| fannkuchredux.lua | 0.005s (1.00x) | 0.005s (1.00x) | **0.003s (1.67x)** |
-| fasta.lua | 0.004s (1.00x) | 0.004s (1.00x) | **0.002s (2.00x)** |
-| fib.lua | 0.273s (1.00x) | 0.041s (6.66x) | **0.006s (45.50x)** |
-| hashtable.lua | 0.075s (1.00x) | **0.029s (2.59x)** | 0.062s (1.21x) |
-| json.lua | 0.133s (1.00x) | 0.819s (0.16x) | **0.020s (6.65x)** |
-| knucleotide.lua | 0.010s (1.00x) | **0.008s (1.25x)** | 0.008s (1.25x) |
-| life.lua | 0.072s (1.00x) | **0.015s (4.80x)** | 0.036s (2.00x) |
-| mandelbrot.lua | 0.009s (1.00x) | 0.004s (2.25x) | **0.003s (3.00x)** |
-| nbody.lua | 0.007s (1.00x) | **0.004s (1.75x)** | 0.007s (1.00x) |
-| pi.lua | 0.071s (1.00x) | 0.036s (1.97x) | **0.018s (3.94x)** |
-| sieve.lua | 0.071s (1.00x) | **0.032s (2.22x)** | 0.033s (2.15x) |
-| spectralnorm.lua | 0.293s (1.00x) | **0.015s (19.53x)** | 0.039s (7.51x) |
-| warmup.lua | 0.003s (1.00x) | 0.004s (0.75x) | **0.002s (1.50x)** |
+| 3ddist.lua | 0.100s (1.00x) | **0.020s (5.00x)** | 0.058s (1.72x) |
+| ackermann.lua | 0.057s (1.00x) | 0.015s (3.80x) | **0.008s (7.12x)** |
+| arraysum.lua | 0.110s (1.00x) | 0.044s (2.50x) | **0.023s (4.78x)** |
+| binarytrees.lua | 0.018s (1.00x) | **0.013s (1.38x)** | 0.016s (1.12x) |
+| bubble.lua | 0.048s (1.00x) | 0.008s (6.00x) | **0.008s (6.00x)** |
+| canada.lua | 0.450s (1.00x) | **0.148s (3.04x)** | 0.231s (1.95x) |
+| coro.lua | 0.009s (1.00x) | 0.009s (1.00x) | **0.003s (3.00x)** |
+| fannkuchredux.lua | 0.007s (1.00x) | 0.008s (0.88x) | **0.004s (1.75x)** |
+| fasta.lua | 0.004s (1.00x) | 0.005s (0.80x) | **0.003s (1.33x)** |
+| fib.lua | 0.293s (1.00x) | 0.048s (6.10x) | **0.006s (48.83x)** |
+| hashtable.lua | 0.910s (1.00x) | **0.254s (3.58x)** | 0.546s (1.67x) |
+| json.lua | 0.149s (1.00x) | 0.824s (0.18x) | **0.022s (6.77x)** |
+| knucleotide.lua | 0.010s (1.00x) | 0.009s (1.11x) | **0.008s (1.25x)** |
+| life.lua | 0.075s (1.00x) | **0.018s (4.17x)** | 0.042s (1.79x) |
+| mandelbrot.lua | 0.011s (1.00x) | 0.007s (1.57x) | **0.004s (2.75x)** |
+| nbody.lua | 0.010s (1.00x) | **0.007s (1.43x)** | 0.008s (1.25x) |
+| pi.lua | 0.080s (1.00x) | 0.038s (2.11x) | **0.019s (4.21x)** |
+| sieve.lua | 0.074s (1.00x) | 0.035s (2.11x) | **0.031s (2.39x)** |
+| spectralnorm.lua | 0.303s (1.00x) | **0.018s (16.83x)** | 0.040s (7.57x) |
+| warmup.lua | 0.006s (1.00x) | 0.008s (0.75x) | **0.003s (2.00x)** |
 
 > Measured on Intel® Core™ i5 Ultra 125U CPU @ 4.30GHz · Linux · GCC 13.3.0
-
-> *canada.lua is a string-heavy workload (using dkjson.lua pattern matching)
-> Current CLX optimizations primarily target numeric and specialization-friendly workloads.
 
 ---
 
