@@ -41,7 +41,7 @@ direct C++ arithmetic instead of going through the dynamic `LValue` system:
 local result = a + b  -- Uses clx::LValue arithmetic with type checks
 
 -- Fast path (numeric):
-local result = a + b  -- When a and b are known numbers, uses clx_add directly
+local result = a + b  -- When a and b are known numbers, uses add directly
 ```
 
 ### Local variable optimization
@@ -175,7 +175,7 @@ This helps the compiler optimize branch prediction for the common case.
 ### Inlining
 
 Small functions are inlined at compile time through C++ compiler optimizations (-O3).
-All arithmetic operators (`clx_add`, `clx_sub`, `clx_mul`, etc.) are marked `CLX_INLINE`
+All arithmetic operators (`add`, `sub`, `mul`, etc.) are marked `CLX_INLINE`
 with `always_inline` attributes.
 
 ### SIMD vctorization

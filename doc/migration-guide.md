@@ -466,7 +466,7 @@ The following Lua C API features have no equivalent in clx:
 - **`lua_dump` / `luac`** — No bytecode format.
 - **`lua_pushcclosure`** — Use `clx::cfunction(L, func)` which wraps a `std::function`.
 - **`lua_upvalueindex` / `lua_getupvalue` / `lua_setupvalue`** — Use lambda captures instead.
-- **`lua_newstate` / `luaL_newstate`** — Use `clx::clx_open()`.
+- **`lua_newstate` / `luaL_newstate`** — Use `clx::open()`.
 - **`lua_gc` / `lua_setallocf`** — GC is automatic; no manual control exposed.
 - **`luaL_openlibs`** — Use `clx::openlibs(L)` or individual `luastd_*()`.
 - **`lua_tothread`** — Use `clx::tothread(v)`.

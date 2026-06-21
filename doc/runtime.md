@@ -280,7 +280,7 @@ clx implements bitwise operations via inline functions:
 | `bit32.shr` | >> (right shift) |
 | `bit32.bnot` | ~ (bitwise NOT) |
 
-These are available as `clx_band`, `clx_bor`, `clx_bxor`, `clx_shl`, `clx_shr`, `clx_bnot` in the runtime.
+These are available as `band`, `bor`, `bxor`, `shl`, `shr`, `bnot` in the runtime.
 
 ## Memory Layout
 

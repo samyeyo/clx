@@ -6,15 +6,15 @@ The API is value-based (no stack) — values are `LValue` objects, not stack ind
 ## Lifecycle
 
 ```cpp
-LState* L = clx_open(argc, argv);  // create a clx state
+LState* L = open(argc, argv);  // create a clx state
 luastd_base(L);                      // register base lib (_G, pcall, type, ...)
 luastd_math(L);                      // register math lib
 luastd_string(L);                    // register string lib
 luastd_coroutine(L);                 // register coroutine lib
-clx_close(L);                           // cleanup
+close(L);                           // cleanup
 ```
 
-`L` owns all memory (string pool, GC objects, threads). Call `clx_close()` exactly once.
+`L` owns all memory (string pool, GC objects, threads). Call `close()` exactly once.
 
 ## Values (`LValue`)
 
@@ -374,7 +374,7 @@ void luastd_string(LState* L);     // registers string table
 void luastd_coroutine(LState* L);  // registers coroutine table
 ```
 
-Or call `openlibs(L)` to register all libraries at once. Call individual `luastd_*` functions after `clx_open()` before using the corresponding Lua features.
+Or call `openlibs(L)` to register all libraries at once. Call individual `luastd_*` functions after `open()` before using the corresponding Lua features.
 
 ## Global Helpers
 

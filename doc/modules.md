@@ -36,7 +36,7 @@ calling it**. The function runs only on the first `require("name")` from Lua cod
 
 ```
 main() {
-    clx_open()
+    open()
     openlibs(L)
 
     register_module("mymodule", luaopen_mymodule)  // stored in preload, NOT called
@@ -44,7 +44,7 @@ main() {
 
     luaopen_main(L)                                 // entry point runs immediately
 
-    clx_close(L)
+    close(L)
 }
 ```
 
@@ -151,13 +151,13 @@ program can link against the library and call it via `register_module`:
 CLX_API clx::LValue luaopen_mylib(clx::LState* L);
 
 int main() {
-    clx::LState* L = clx::clx_open();
+    clx::LState* L = clx::open();
     clx::openlibs(L);
 
     // Register in package.preload (NOT called yet)
     L->register_module("mylib", luaopen_mylib);
 
-    clx::clx_close(L);
+    clx::close(L);
     return 0;
 }
 ```
@@ -197,11 +197,11 @@ The generated `main()` registers all modules in `package.preload`.
 void LState::register_module(const std::string& name, LValue (*func)(LState*));
 
 // Initialize clx runtime
-LState* clx_open(int argc = 0, char* argv[] = nullptr);
+LState* open(int argc = 0, char* argv[] = nullptr);
 
 // Open optional standard libraries (string, table, io, os, math, utf8, coroutine)
 void openlibs(LState* L);
 
 // Destroy clx runtime
-void clx_close(LState* L);
+void close(LState* L);
 ```
