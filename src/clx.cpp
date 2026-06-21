@@ -71,15 +71,15 @@ Compiler detect_compiler() {
 
     execute("clang++ --version" + redirect, code);
     if (code == 0) return {"clang", "clang++"};
-    
+
     execute("g++ --version" + redirect, code);
     if (code == 0) return {"gcc", "g++"};
-    
+
 #ifdef _WIN32
     execute("cl" + redirect, code);
     if (code == 0) return {"msvc", "cl"};
 #endif
-    
+
     return {"unknown", ""};
 }
 
@@ -122,7 +122,7 @@ int main(int argc, char* argv[]) {
     bool minimal_active = false;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        
+
         if (arg == "--help") {
             print_help();
             return 0;
@@ -169,7 +169,7 @@ int main(int argc, char* argv[]) {
             input_files.push_back(arg);
         }
     }
-    
+
     if (debug_mode) size_mode = false;
 
     bool dce_mode = (mode == BuildMode::Executable && !debug_mode);
@@ -178,7 +178,7 @@ int main(int argc, char* argv[]) {
         std::cerr << "Error: No input file specified.\n";
         return 1;
     }
-    
+
     std::string cc_compile_str = "";
     std::string cc_link_str = "";
     bool link_seen = false;
@@ -213,7 +213,7 @@ int main(int argc, char* argv[]) {
     }
 
     std::string output_name = custom_output_name.empty() ? fs::path(input_files[0]).stem().string() : custom_output_name;
-    
+
     if (fs::path(output_name).extension() == ".exe") {
         output_name = fs::path(output_name).stem().string();
     }
@@ -243,9 +243,9 @@ int main(int argc, char* argv[]) {
 
         std::string module_name = p_input.stem().string();
         fs::path cpp_file;
-        
+
         if (emit_cpp) {
-            cpp_file = module_name + ".cpp"; 
+            cpp_file = module_name + ".cpp";
         } else {
             cpp_file = fs::temp_directory_path() / (module_name + "_tmp.cpp");
         }
@@ -262,7 +262,7 @@ int main(int argc, char* argv[]) {
     if (mode == BuildMode::Executable) {
         std::string main_module = fs::path(input_files[0]).stem().string();
         std::ofstream appender(cpp_files[0], std::ios::app);
-        
+
         for (const auto& file : input_files) {
             std::string mod = fs::path(file).stem().string();
             appender << "\nextern clx::LValue luaopen_" << mod << "(clx::LState* L);\n";
@@ -270,12 +270,12 @@ int main(int argc, char* argv[]) {
         for (const auto& mod : precompiled_modules) {
             appender << "\nextern clx::LValue luaopen_" << mod << "(clx::LState* L);\n";
         }
-        
+
         appender << "int main(int argc, char* argv[]) {\n";
-        appender << "    clx::LState* L = clx::clx_open(argc, argv);\n";
+        appender << "    clx::LState* L = clx::open(argc, argv);\n";
         if (!minimal_active) appender << "    clx::openlibs(L);\n";
         appender << "    try {\n";
-        
+
         for (size_t i = 1; i < input_files.size(); ++i) {
             std::string mod = fs::path(input_files[i]).stem().string();
             std::string lua_mod = input_files[i];
@@ -288,20 +288,20 @@ int main(int argc, char* argv[]) {
         for (const auto& mod : precompiled_modules) {
             appender << "        L->register_module(\"" << mod << "\", luaopen_" << mod << ");\n";
         }
-        
+
         appender << "        luaopen_" << main_module << "(L);\n";
-        
+
         appender << "    } catch (const clx::LRuntimeException& e) {\n";
         appender << "        std::cerr << e.what() << \"\\n\";\n";
-        appender << "        clx::clx_close(L);\n";
+        appender << "        clx::close(L);\n";
         appender << "        return 1;\n";
         appender << "    } catch (const std::exception& e) {\n";
         appender << "        std::cerr << \"C++ Fatal Error: \" << e.what() << \"\\n\";\n";
-        appender << "        clx::clx_close(L);\n";
+        appender << "        clx::close(L);\n";
         appender << "        return 1;\n";
         appender << "    }\n";
-        
-        appender << "    clx::clx_close(L);\n";
+
+        appender << "    clx::close(L);\n";
         appender << "    return 0;\n";
         appender << "}\n";
     }
@@ -333,7 +333,7 @@ int main(int argc, char* argv[]) {
     }
 #endif
     fs::path build_root = exe_dir.parent_path();
-    
+
 #ifdef _WIN32
     std::string include_path;
     if (fs::exists(build_root / "include")) {
@@ -342,7 +342,7 @@ int main(int argc, char* argv[]) {
         include_path = "include";
     }
     include_opt = " /I\"" + include_path + "\"";
-    
+
     fs::path win_lib = build_root / "lib";
     std::string lib_file = "clx.lib";
     fs::path lib_path = win_lib / lib_file;
@@ -522,11 +522,11 @@ int main(int argc, char* argv[]) {
         }
         std::string module_name = fs::path(input_files[0]).stem().string();
         fs::path generated_obj = fs::temp_directory_path() / (module_name + "_tmp.obj");
-        
+
         if (!fs::exists(generated_obj)) {
             generated_obj = fs::temp_directory_path() / (module_name + "_tmp.o");
         }
-        
+
         if (fs::exists(generated_obj)) {
             std::error_code ec;
             fs::rename(generated_obj, final_obj_name, ec);
