@@ -129,6 +129,7 @@ Full coroutine support using OS-level fibers/context:
 | `coroutine.status` | Get coroutine status |
 | `coroutine.wrap` | Create callable wrapper |
 | `coroutine.isyieldable` | Check if coroutine can yield |
+| `coroutine.close` | Close a suspended coroutine |
 
 Implementation uses `ucontext` on Linux/macOS and Windows Fibers on Windows.
 

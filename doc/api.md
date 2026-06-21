@@ -310,10 +310,12 @@ MultiValue r = call(L, myfunc, number(10), integer(20), "hello", 3.14);
 LValue      create_thread(L, func, stack_size = 1<<20);    // create a coroutine
 MultiValue  resume(L, thread, args, count);  // resume suspended coroutine
 MultiValue  yield(L, args, count);           // yield from current coroutine (non-main only)
+MultiValue  close_thread(L, thread);         // close a suspended coroutine
 ```
 
 `resume` returns `{true, ...yielded_values}` or `{false, error_msg}`.
 `yield` returns the MultiValue passed to the next `resume`.
+`close_thread` resumes the coroutine with a close request, returning `{true}` if it terminates.
 
 ## Core Types (from `clx_runtime.h`, exposed via `<clx.h>`)
 
@@ -322,7 +324,7 @@ LType         — tagged type enum
 LValue        — nan-boxed value (with TAG_ISTR for strings ≤5 bytes)
 MultiValue    — multi-return container (count, operator[])
 LState        — VM state (opaque)
-LThread       — coroutine (opaque, use create_thread/resume/yield)
+LThread       — coroutine (opaque, use create_thread/resume/yield/close_thread)
 LTable        — table (gettable/settable for raw access)
 LCFunction    — C function closure
 LReg          — {name, CFunctionType} for module registration

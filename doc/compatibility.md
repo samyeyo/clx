@@ -75,6 +75,7 @@ The following table summarizes the current implementation status, but real life 
 | coroutine.yield  | ✅      |
 | coroutine.status | ✅      |
 | coroutine.wrap   | ✅      |
+| coroutine.close  | ✅      |
 
 ## Modules
 

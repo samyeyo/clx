@@ -1773,7 +1773,7 @@ Pattern matching:          O(n*m) worst case</div>
 luastd_base(L);                      <span class="comment">// Register base lib (print, type, pcall, ...)</span>
 luastd_math(L);                      <span class="comment">// Register math lib (sin, cos, floor, ...)</span>
 luastd_string(L);                    <span class="comment">// Register string lib (sub, match, format, ...)</span>
-luastd_coroutine(L);                 <span class="comment">// Register coroutine lib (create, resume, yield)</span>
+luastd_coroutine(L);                 <span class="comment">// Register coroutine lib (create, resume, yield, close)</span>
 close(L);                           <span class="comment">// Free all memory — call exactly once</span></div>
                     </div>
                 </div>
@@ -2007,10 +2007,11 @@ clx::type_error(L, n, expected);    <span class="comment">// "bad argument #N (e
                 <div class="doc-section">
                     <h3>Coroutines</h3>
                     <div class="code-block">
-                        <div class="code-header"><span class="lang">cpp</span><span>Create, resume, and yield coroutines</span></div>
+                        <div class="code-header"><span class="lang">cpp</span><span>Create, resume, yield, and close coroutines</span></div>
                         <div class="code-body">clx::create_thread(L, func, 1<<20); <span class="comment">// Create coroutine with stack size</span>
 clx::resume(L, th, args, n);        <span class="comment">// Resume suspended coroutine</span>
-clx::yield(L, args, n);             <span class="comment">// Yield from current coroutine (non-main only)</span></div>
+clx::yield(L, args, n);             <span class="comment">// Yield from current coroutine (non-main only)</span>
+clx::close_thread(L, th);           <span class="comment">// Close a suspended coroutine</span></div>
                     </div>
                 </div>
 
@@ -2078,7 +2079,7 @@ THREAD_NORMAL    = 3</div>
                 <div class="doc-section">
                     <h3>Coroutine Example</h3>
                     <div class="code-block">
-                        <div class="code-header"><span class="lang">cpp</span><span>Create, resume, and yield coroutines</span></div>
+                        <div class="code-header"><span class="lang">cpp</span><span>Create, resume, yield, and close coroutines</span></div>
                         <div class="code-body">clx::LValue co_func = clx::cfunction(L, [](clx::LState* L2, <span class="kw">const</span> clx::LValue* a, size_t n) {
     <span class="kw">double</span> v = clx::check_number(L2, a[0]);
     clx::LValue y = clx::number(v * 2);
