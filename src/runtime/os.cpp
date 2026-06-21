@@ -15,29 +15,27 @@
 #include <atomic>
 #if defined(_WIN32) || defined(_WIN64)
 #include <cstdio>
-#define popen _popen
-#define pclose _pclose
 
-//------------------ clx_gmtime: thread-safe gmtime wrapper
-inline struct tm* clx_gmtime(const time_t* timep, struct tm* result) {
+//------------------ gmtime: thread-safe gmtime wrapper
+inline struct tm* gmtime(const time_t* timep, struct tm* result) {
     if (gmtime_s(result, timep) == 0) return result;
     return nullptr;
 }
 
-//------------------ clx_localtime: thread-safe localtime wrapper
-inline struct tm* clx_localtime(const time_t* timep, struct tm* result) {
+//------------------ localtime: thread-safe localtime wrapper
+inline struct tm* localtime(const time_t* timep, struct tm* result) {
     if (localtime_s(result, timep) == 0) return result;
     return nullptr;
 }
 #else
 
-//------------------ clx_gmtime: thread-safe gmtime wrapper (POSIX)
-inline struct tm* clx_gmtime(const time_t* timep, struct tm* result) {
+//------------------ gmtime: thread-safe gmtime wrapper (POSIX)
+inline struct tm* gmtime(const time_t* timep, struct tm* result) {
     return gmtime_r(timep, result);
 }
 
-//------------------ clx_localtime: thread-safe localtime wrapper (POSIX)
-inline struct tm* clx_localtime(const time_t* timep, struct tm* result) {
+//------------------ localtime: thread-safe localtime wrapper (POSIX)
+inline struct tm* localtime(const time_t* timep, struct tm* result) {
     return localtime_r(timep, result);
 }
 #endif
@@ -59,7 +57,7 @@ static MultiValue os_date(LState* L, const LValue* args, size_t count) {
     if (format[0] == '!' && format[1] != '\0') {
         format += 1;
         struct tm gmt;
-        clx_gmtime(&t, &gmt);
+        gmtime(&t, &gmt);
         if (format[0] == 't') {
             return MultiValue(clx::number(static_cast<double>(mktime(&gmt))));
         }
@@ -71,7 +69,7 @@ static MultiValue os_date(LState* L, const LValue* args, size_t count) {
     if (format[0] == '*') {
         if (format[1] == 't') {
             struct tm tm;
-            clx_localtime(&t, &tm);
+            localtime(&t, &tm);
             LValue tbl = L->create_table();
             LTable* tb = static_cast<LTable*>(tbl.as_pointer());
             tb->settable(LValue(L->intern_string("year")), LValue(static_cast<int64_t>(tm.tm_year + 1900)));
@@ -87,7 +85,7 @@ static MultiValue os_date(LState* L, const LValue* args, size_t count) {
         }
     }
     struct tm tm;
-    clx_localtime(&t, &tm);
+    localtime(&t, &tm);
     char buf[256];
     size_t n = std::strftime(buf, sizeof(buf), format, &tm);
     if (n == 0) buf[0] = '\0';
@@ -231,8 +229,8 @@ static MultiValue os_tmpname(LState* L, const LValue* args, size_t count) {
         auto now = std::chrono::steady_clock::now().time_since_epoch().count();
         uint64_t id = counter.fetch_add(1, std::memory_order_relaxed);
         char filename[64];
-        std::snprintf(filename, sizeof(filename), "clx_%llx_%llx.tmp", 
-                     static_cast<unsigned long long>(now), 
+        std::snprintf(filename, sizeof(filename), "clx_%llx_%llx.tmp",
+                     static_cast<unsigned long long>(now),
                      static_cast<unsigned long long>(id));
         auto full_path = temp_dir / filename;
         return MultiValue(clx::string(L, full_path.string().c_str()));
