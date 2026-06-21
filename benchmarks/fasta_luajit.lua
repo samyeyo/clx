@@ -121,7 +121,7 @@ local HOMO_SAPIENS = {
     { 't', 0.3015094502008 },
 }
 
-N = N or 100
+N = N or 500
 repeat_fasta("ONE", "Homo sapiens alu", HUMAN_ALU, N*2)
 random_fasta('TWO', 'IUB ambiguity codes', IUB, N*3)
 random_fasta('THREE', 'Homo sapiens frequency', HOMO_SAPIENS, N*5)

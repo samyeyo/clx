@@ -1,7 +1,7 @@
 -- Hash table benchmark
 -- Tests table insert and lookup performance
 
-local N = tonumber(arg and arg[1]) or 100000
+local N = tonumber(arg and arg[1]) or 500000
 
 local tbl = {}
 for i = 1, N do
