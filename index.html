@@ -1387,7 +1387,7 @@ local m = 1 + 2.5  <span class="comment">-- Integer converted to double</span></
                         <div class="code-body">-- Slow path (dynamic):
 local result = a + b  <span class="comment">-- Uses clx::LValue arithmetic with type checks</span>
 -- Fast path (numeric):
-local result = a + b  <span class="comment">-- When known numeric, uses clx_add directly</span></div>
+local result = a + b  <span class="comment">-- When known numeric, uses add directly</span></div>
                     </div>
                 </div>
                 <div class="doc-section">
@@ -1563,7 +1563,7 @@ __index  __newindex  __call  __tostring  __gc  __metatable</div>
                         <div class="code-body">bit32.band ( &amp; )   bit32.bor ( | )   bit32.bxor ( ~ )
 bit32.shl ( &lt;&lt; )   bit32.shr ( &gt;&gt; )   bit32.bnot ( ~ )</div>
                     </div>
-                    <p>Available as <span class="inline-code">clx_band</span>, <span class="inline-code">clx_bor</span>, <span class="inline-code">clx_bxor</span>, <span class="inline-code">clx_shl</span>, <span class="inline-code">clx_shr</span>, <span class="inline-code">clx_bnot</span> in the runtime.</p>
+                    <p>Available as <span class="inline-code">band</span>, <span class="inline-code">bor</span>, <span class="inline-code">bxor</span>, <span class="inline-code">shl</span>, <span class="inline-code">shr</span>, <span class="inline-code">bnot</span> in the runtime.</p>
                 </div>
                 <div class="doc-section">
                     <h3>Memory Layout</h3>
@@ -1648,12 +1648,12 @@ Pattern matching:          O(n*m) worst case</div>
                     <h3>Lifecycle</h3>
                     <div class="code-block">
                         <div class="code-header"><span class="lang">cpp</span><span>Open and close a clx state</span></div>
-                        <div class="code-body">LState* L = clx_open(argc, argv);  <span class="comment">// Create a clx VM state</span>
+                        <div class="code-body">LState* L = open(argc, argv);  <span class="comment">// Create a clx VM state</span>
 luastd_base(L);                      <span class="comment">// Register base lib (print, type, pcall, ...)</span>
 luastd_math(L);                      <span class="comment">// Register math lib (sin, cos, floor, ...)</span>
 luastd_string(L);                    <span class="comment">// Register string lib (sub, match, format, ...)</span>
-luastd_coroutine(L);                 <span class="comment">// Register coroutine lib (create, resume, yield)</span>
-clx_close(L);                           <span class="comment">// Free all memory — call exactly once</span></div>
+luastd_coroutine(L);                 <span class="comment">// Register coroutine lib (create, resume, yield, close)</span>
+close(L);                           <span class="comment">// Free all memory — call exactly once</span></div>
                     </div>
                 </div>
                 <div class="doc-section">
@@ -1865,10 +1865,11 @@ clx::type_error(L, n, expected);    <span class="comment">// "bad argument #N (e
                 <div class="doc-section">
                     <h3>Coroutines</h3>
                     <div class="code-block">
-                        <div class="code-header"><span class="lang">cpp</span><span>Create, resume, and yield coroutines</span></div>
+                        <div class="code-header"><span class="lang">cpp</span><span>Create, resume, yield, and close coroutines</span></div>
                         <div class="code-body">clx::create_thread(L, func, 1<<20); <span class="comment">// Create coroutine with stack size</span>
 clx::resume(L, th, args, n);        <span class="comment">// Resume suspended coroutine</span>
-clx::yield(L, args, n);             <span class="comment">// Yield from current coroutine (non-main only)</span></div>
+clx::yield(L, args, n);             <span class="comment">// Yield from current coroutine (non-main only)</span>
+clx::close_thread(L, th);           <span class="comment">// Close a suspended coroutine</span></div>
                     </div>
                 </div>
                 <div class="doc-section">
@@ -1927,12 +1928,12 @@ THREAD_NORMAL    = 3</div>
 <span class="kw">void</span> luastd_coroutine(LState* L);  <span class="comment">// registers coroutine table</span>
 <span class="kw">void</span> openlibs(LState* L);          <span class="comment">// registers all standard libraries at once</span></div>
                     </div>
-                    <p>Call individual <span class="inline-code">luastd_*</span> functions or <span class="inline-code">openlibs(L)</span> after <span class="inline-code">clx_open()</span> before using Lua features.</p>
+                    <p>Call individual <span class="inline-code">luastd_*</span> functions or <span class="inline-code">openlibs(L)</span> after <span class="inline-code">open()</span> before using Lua features.</p>
                 </div>
                 <div class="doc-section">
                     <h3>Coroutine Example</h3>
                     <div class="code-block">
-                        <div class="code-header"><span class="lang">cpp</span><span>Create, resume, and yield coroutines</span></div>
+                        <div class="code-header"><span class="lang">cpp</span><span>Create, resume, yield, and close coroutines</span></div>
                         <div class="code-body">clx::LValue co_func = clx::cfunction(L, [](clx::LState* L2, <span class="kw">const</span> clx::LValue* a, size_t n) {
     <span class="kw">double</span> v = clx::check_number(L2, a[0]);
     clx::LValue y = clx::number(v * 2);
@@ -2002,12 +2003,12 @@ utils.help()</div>
                     <div class="code-block">
                         <div class="code-body"><span class="comment">// Generated main() — simplified</span>
 main() {
-    clx_open();
+    open();
     openlibs(L);
     register_module(<span class="str">"mymodule"</span>, luaopen_mymodule); <span class="comment">// stored in preload, NOT called</span>
     register_module(<span class="str">"utils"</span>,    luaopen_utils);    <span class="comment">// stored in preload, NOT called</span>
     luaopen_main(L);                              <span class="comment">// entry point runs immediately</span>
-    clx_close(L);
+    close(L);
 }</div>
                     </div>
                     <p>When Lua calls <span class="inline-code">require("mymodule")</span>:</p>
@@ -2097,10 +2098,10 @@ main() {
                         <div class="code-body"><span class="pp">#include &lt;clx.h&gt;</span>
 <span class="kw">CLX_API</span> <span class="kw">clx::LValue</span> luaopen_mylib(<span class="kw">clx::LState</span>* L);
 <span class="kw">int</span> main() {
-    <span class="kw">clx::LState</span>* L = <span class="kw">clx::clx_open</span>();
+    <span class="kw">clx::LState</span>* L = <span class="kw">clx::open</span>();
     <span class="kw">clx::openlibs</span>(L);
     L->register_module(<span class="str">"mylib"</span>, luaopen_mylib);
-    <span class="kw">clx::clx_close</span>(L);
+    <span class="kw">clx::close</span>(L);
     <span class="kw">return</span> 0;
 }</div>
                     </div>
@@ -2135,11 +2136,11 @@ main() {
 // Stores a wrapper in package.preload[name]; does NOT call luaopen_*</span>
 <span class="kw">void</span> LState::register_module(<span class="kw">const</span> std::string&amp; name, <span class="kw">LValue</span> (*func)(<span class="kw">LState</span>*));
 <span class="comment">// Initialize clx runtime</span>
-<span class="kw">LState</span>* clx_open(<span class="kw">int</span> argc = 0, <span class="kw">char</span>* argv[] = <span class="kw">nullptr</span>);
+<span class="kw">LState</span>* open(<span class="kw">int</span> argc = 0, <span class="kw">char</span>* argv[] = <span class="kw">nullptr</span>);
 <span class="comment">// Open optional standard libraries (string, table, io, os, math, utf8, coroutine)</span>
 <span class="kw">void</span> openlibs(<span class="kw">LState</span>* L);
 <span class="comment">// Destroy clx runtime</span>
-<span class="kw">void</span> clx_close(<span class="kw">LState</span>* L);</div>
+<span class="kw">void</span> close(<span class="kw">LState</span>* L);</div>
                     </div>
                 </div>
             </section>
@@ -2404,104 +2405,104 @@ CLX_API clx::LValue luaopen_vector(clx::LState* L) {
     'use strict';
      const benchmarkData = {
         "3ddist": [
-            { name: "clx", time: 0.046, factor: "1.70x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.013, factor: "6.00x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.078, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.058, factor: "1.72x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.020, factor: "5.00x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.100, factor: "1.00x", class: "red", winner: false }
         ],
         "ackermann": [
-            { name: "clx", time: 0.005, factor: "8.40x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.009, factor: "4.67x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.042, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.008, factor: "7.12x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.015, factor: "3.80x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.057, factor: "1.00x", class: "red", winner: false }
         ],
         "arraysum": [
-            { name: "clx", time: 0.025, factor: "4.08x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.040, factor: "2.55x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.102, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.023, factor: "4.78x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.044, factor: "2.50x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.110, factor: "1.00x", class: "red", winner: false }
         ],
         "binarytrees": [
-            { name: "clx", time: 0.012, factor: "1.25x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.009, factor: "1.67x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.015, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.016, factor: "1.12x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.013, factor: "1.38x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.018, factor: "1.00x", class: "red", winner: false }
         ],
         "bubble": [
-            { name: "clx", time: 0.006, factor: "7.17x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.005, factor: "8.60x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.043, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.008, factor: "6.00x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.008, factor: "6.00x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.048, factor: "1.00x", class: "red", winner: false }
         ],
         "canada": [
-            { name: "clx", time: 0.287, factor: "0.79x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.096, factor: "2.38x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.228, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.231, factor: "1.95x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.148, factor: "3.04x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.450, factor: "1.00x", class: "red", winner: false }
         ],
         "coro": [
-            { name: "clx", time: 0.002, factor: "2.00x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.003, factor: "1.33x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.004, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.003, factor: "3.00x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.009, factor: "1.00x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.009, factor: "1.00x", class: "red", winner: false }
         ],
         "fannkuchredux": [
-            { name: "clx", time: 0.003, factor: "1.67x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.005, factor: "1.00x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.005, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.004, factor: "1.75x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.008, factor: "0.88x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.007, factor: "1.00x", class: "red", winner: false }
         ],
         "fasta": [
-            { name: "clx", time: 0.002, factor: "2.00x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.004, factor: "1.00x", class: "yellow", winner: false },
+            { name: "clx", time: 0.003, factor: "1.33x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.005, factor: "0.80x", class: "yellow", winner: false },
             { name: "Lua 5.5", time: 0.004, factor: "1.00x", class: "red", winner: false }
         ],
         "fib": [
-            { name: "clx", time: 0.006, factor: "45.50x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.041, factor: "6.66x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.273, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.006, factor: "48.83x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.048, factor: "6.10x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.293, factor: "1.00x", class: "red", winner: false }
         ],
         "hashtable": [
-            { name: "clx", time: 0.062, factor: "1.21x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.029, factor: "2.59x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.075, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.546, factor: "1.67x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.254, factor: "3.58x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.910, factor: "1.00x", class: "red", winner: false }
         ],
         "json": [
-            { name: "clx", time: 0.020, factor: "6.65x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.819, factor: "0.16x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.133, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.022, factor: "6.77x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.824, factor: "0.18x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.149, factor: "1.00x", class: "red", winner: false }
         ],
         "knucleotide": [
-            { name: "clx", time: 0.008, factor: "1.25x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.008, factor: "1.25x", class: "yellow", winner: true },
+            { name: "clx", time: 0.008, factor: "1.25x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.009, factor: "1.11x", class: "yellow", winner: false },
             { name: "Lua 5.5", time: 0.010, factor: "1.00x", class: "red", winner: false }
         ],
         "life": [
-            { name: "clx", time: 0.036, factor: "2.00x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.015, factor: "4.80x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.072, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.042, factor: "1.79x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.018, factor: "4.17x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.075, factor: "1.00x", class: "red", winner: false }
         ],
         "mandelbrot": [
-            { name: "clx", time: 0.003, factor: "3.00x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.004, factor: "2.25x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.009, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.004, factor: "2.75x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.007, factor: "1.57x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.011, factor: "1.00x", class: "red", winner: false }
         ],
         "nbody": [
-            { name: "clx", time: 0.007, factor: "1.00x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.004, factor: "1.75x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.007, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.008, factor: "1.25x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.007, factor: "1.43x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.010, factor: "1.00x", class: "red", winner: false }
         ],
         "pi": [
-            { name: "clx", time: 0.018, factor: "3.94x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.036, factor: "1.97x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.071, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.019, factor: "4.21x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.038, factor: "2.11x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.080, factor: "1.00x", class: "red", winner: false }
         ],
         "sieve": [
-            { name: "clx", time: 0.033, factor: "2.15x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.032, factor: "2.22x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.071, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.031, factor: "2.39x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.035, factor: "2.11x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.074, factor: "1.00x", class: "red", winner: false }
         ],
         "spectralnorm": [
-            { name: "clx", time: 0.039, factor: "7.51x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.015, factor: "19.53x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.293, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.040, factor: "7.57x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.018, factor: "16.83x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.303, factor: "1.00x", class: "red", winner: false }
         ],
         "warmup": [
-            { name: "clx", time: 0.002, factor: "1.50x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.004, factor: "0.75x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.003, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.003, factor: "2.00x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.008, factor: "0.75x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.006, factor: "1.00x", class: "red", winner: false }
         ]
     };
     const benchmarkDescriptions = {
