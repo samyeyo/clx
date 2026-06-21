@@ -18,7 +18,7 @@ static size_t get_array_len(LState* L, LTable* t) {
     if (t->metatable) {
         LValue* mm = t->metatable->gettable(LValue(L->intern_string("__len", 5)));
         if (mm && mm->type() != LType::Nil) {
-            LValue res = clx_len(L, LValue(t));
+            LValue res = len(L, LValue(t));
             if (res.type() == LType::Integer) return static_cast<size_t>(res.as_integer());
             return 0;
         }
@@ -113,7 +113,7 @@ MultiValue table_insert(LState* L, const LValue* args, size_t count) {
             std::memmove(&list->array[pos], &list->array[pos - 1], move_n * sizeof(LValue));
             list->array[pos - 1] = val;
             if (list->array_size <= len) list->array_size = len + 1;
-            list->shape_version++;
+            list->array_version++;
         } else {
             for (size_t k = len; k >= pos; --k) {
                 set_elem(list, k + 1, get_elem(list, k));
@@ -144,7 +144,7 @@ MultiValue table_remove(LState* L, const LValue* args, size_t count) {
         size_t move_n = len - pos;
         std::memmove(&list->array[pos - 1], &list->array[pos], move_n * sizeof(LValue));
         list->array[len - 1] = LValue();
-        list->shape_version++;
+        list->array_version++;
     } else {
         res = get_elem(list, pos);
         for (size_t k = pos; k < len; ++k)
@@ -187,7 +187,7 @@ MultiValue table_sort(LState* L, const LValue* args, size_t count) {
         }
     } else {
         auto cmp = [L](const LValue& a, const LValue& b) {
-            LValue cmp = clx_lt(L, a, b);
+            LValue cmp = lt(L, a, b);
             return cmp.as_bool();
         };
         if (dense) {
@@ -200,7 +200,7 @@ MultiValue table_sort(LState* L, const LValue* args, size_t count) {
             for (size_t k = 0; k < len; ++k) set_elem(list, k + 1, elems[k]);
         }
     }
-    list->shape_version++;
+    list->array_version++;
     return MultiValue();
 }
 
