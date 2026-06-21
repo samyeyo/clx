@@ -17,7 +17,7 @@ shift
 goto parse
 :done_parse
 
-cmake -S . -B build
+cmake -S . -B build -G "NMake Makefiles" -D CMAKE_BUILD_TYPE=%BUILD_TYPE%
 if errorlevel 1 exit /b %errorlevel%
 
 :: Build the project
