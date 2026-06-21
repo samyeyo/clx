@@ -62,7 +62,7 @@ for %%F in (%TEST_DIR%\*.lua) do (
     set "basename=%%~nF"
 
     :: Skip *_luajit.lua files and dkjson.lua (dependency) — they are not standalone benchmarks
-    echo !basename! | findstr /r /i "_luajit$ ^dkjson$" >nul || (
+    if not "!basename:~-7!"=="_luajit" if not "!basename!"=="dkjson" (
 
     :: Determine luajit file: use *_luajit.lua variant if it exists
     set "luajit_file=%TEST_DIR%\!basename!_luajit.lua"
@@ -75,7 +75,7 @@ for %%F in (%TEST_DIR%\*.lua) do (
     set "extra="
     if "!basename!"=="canada" set "extra=%TEST_DIR%\dkjson.lua"
 
-    "%CLX_CMD%" "%%F" !extra! --output "!basename!" >nul 2>&1
+    "%CLX_CMD%" --fast "%%F" !extra! --output "!basename!" >nul 2>&1
     
     if not exist "!basename!.exe" (
         powershell -nologo -noprofile -command "%INV_CULT% '{0,-22} | COMPILATION FAILED       | -                  | -' -f '!basename!.lua'"
