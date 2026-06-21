@@ -58,6 +58,37 @@ std::set<std::string_view> CodeEmitter::g_hoisted_locals;
 bool CodeEmitter::g_skip_block_braces = false;
 std::unordered_map<uint32_t, std::string> CodeEmitter::g_hoisted_lookups;
 std::unordered_map<std::string, std::string> CodeEmitter::g_hoisted_cfuncs;
+std::unordered_map<std::string, std::string> CodeEmitter::g_builtin_aliases;
+int CodeEmitter::g_cs_index = 0;
+
+
+//------------------ lookup_builtin: maps "module.func" to C++ function name
+const char* lookup_builtin(std::string_view module, std::string_view func) {
+    static const std::unordered_map<std::string_view, std::unordered_map<std::string_view, const char*>> _sfm = {
+        {"string", {
+            {"byte", "str_byte"}, {"sub", "str_sub"}, {"match", "str_match"},
+            {"find", "str_find"}, {"gsub", "str_gsub"}, {"len", "str_len"},
+            {"format", "str_format"}, {"char", "str_char"}, {"rep", "str_rep"},
+            {"reverse", "str_reverse"}, {"lower", "str_lower"}, {"upper", "str_upper"},
+            {"dump", "str_dump"}
+        }},
+        {"table", {
+            {"concat", "table_concat"}, {"insert", "table_insert"},
+            {"remove", "table_remove"}, {"sort", "table_sort"},
+            {"pack", "table_pack"}, {"unpack", "table_unpack"}, {"move", "table_move"}
+        }},
+        {"_G", {
+            {"type", "__clx_type"}, {"tostring", "__clx_tostring"}
+        }}
+    };
+    auto _smit = _sfm.find(module);
+    if (_smit != _sfm.end()) {
+        auto _sfit = _smit->second.find(func);
+        if (_sfit != _smit->second.end())
+            return _sfit->second;
+    }
+    return nullptr;
+}
 
 
 //------------------ CodeEmitter: constructor initializes output stream with precision
@@ -134,7 +165,7 @@ static std::string lua_decode_string(std::string_view s) {
                     break;
                 }
                 default: {
-                    
+
                     if (c >= '0' && c <= '9') {
                         size_t j = i + 1;
                         while (j < s.length() && j - i <= 3 && s[j] >= '0' && s[j] <= '7') j++;
@@ -225,8 +256,8 @@ void CodeEmitter::emit(uint32_t root_node, std::string_view module_name) {
 
     Optimizer::run(ctx, root_node);
 
-    
-    
+
+
     for (uint32_t i = 0; i < ctx.nodes.size(); ++i) {
         const auto& node = ctx.nodes[i];
         bool is_module_level = false;
@@ -243,7 +274,7 @@ void CodeEmitter::emit(uint32_t root_node, std::string_view module_name) {
                 std::string_view name(ctx.nodes[t_idx].as.ident.name, ctx.nodes[t_idx].as.ident.length);
                 const auto& v_node = ctx.nodes[v_idx];
                 if (v_node.type == NodeType::BinaryOp && v_node.as.bin_op.op == static_cast<int>(BinaryOp::Concat)) {
-                    
+
                     std::vector<uint32_t> ops;
                     std::vector<uint32_t> ws;
                     ws.push_back(v_idx);
@@ -343,12 +374,13 @@ void CodeEmitter::emit(uint32_t root_node, std::string_view module_name) {
         out << "static clx::LValue cstr_[" << CodeEmitter::g_string_pool.size() << "];\n";
     }
     out << "static inline clx::LValue clx_gettable_safe(clx::LValue* ptr) { return ptr ? *ptr : clx::LValue(); }\n\n";
-    
+
     out << "CLX_API clx::LValue luaopen_" << module_name << "(clx::LState* L) {\n";
+    out << "    clx::LValue _ENV(clx::LType::Table, L->_G);\n";
+    out << "    clx::CacheSlot __cs[" << CodeEmitter::g_cs_max << "]{};\n";
+    CodeEmitter::g_cs_index = 0;
 
-    out << "    clx::LUpValue _ENV = clx::make_upvalue(clx::LValue(clx::LType::Table, L->_G));\n";
 
-    
     for (const auto& sb_name : CodeEmitter::g_global_string_builders) {
         out << "    clx::StringBuilder sb_" << sb_name << ";\n";
     }
@@ -356,7 +388,7 @@ void CodeEmitter::emit(uint32_t root_node, std::string_view module_name) {
         out << "    clx::StringBuilder sb_" << sb_name << ";\n";
     }
 
-    
+
     if (!CodeEmitter::g_string_pool.empty()) {
         size_t n = CodeEmitter::g_string_pool.size();
         size_t cap = 64;
@@ -370,8 +402,8 @@ void CodeEmitter::emit(uint32_t root_node, std::string_view module_name) {
         for (size_t i = 0; i < n; ++i) {
             auto& s = CodeEmitter::g_string_pool[i];
             std::string decoded = lua_decode_string(s);
-            out << "        {\"" << cpp_escape(decoded) << "\", " 
-                << decoded.length() << ", " 
+            out << "        {\"" << cpp_escape(decoded) << "\", "
+                << decoded.length() << ", "
                 << (decoded.length() <= 8 ? swar_hash_8(decoded.data(), decoded.length()) : wyhash_str(decoded.data(), decoded.length()))
                 << "U},\n";
         }
@@ -395,16 +427,15 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
         if (yields_number(ctx, n_idx, nullptr, CodeEmitter::g_current_fast_func)) {
             const auto& n = ctx.nodes[n_idx];
             if (n.type == NodeType::IntrinsicCall) {
-                static const char* cmath_funcs[] = {"std::sin", "std::cos", "std::floor", "std::ceil", "std::abs", "std::sqrt", "std::fmod", "", "", "std::log", "std::exp", "std::tan", "std::atan", "std::asin", "std::acos", "std::sinh", "std::cosh", "std::tanh", "std::atan2", "std::pow"};
-                int _f = n.as.intrinsic_call.func;
-                if (_f >= 20) {
+                const char* _cn = n.as.intrinsic_call.cname;
+                if (strcmp(_cn, "__clx_deg") == 0 || strcmp(_cn, "__clx_rad") == 0) {
                     if (n.as.intrinsic_call.arg_count > 0) {
                         self(self, ctx.block_statements[n.as.intrinsic_call.first_arg]);
-                        out << (_f == 20 ? " * 57.29577951308232" : " * 0.017453292519943295");
+                        out << (_cn[7] == 'd' ? " * 57.29577951308232" : " * 0.017453292519943295");
                     } else out << "0.0";
                     return;
                 }
-                if (_f == 9 && n.as.intrinsic_call.arg_count > 1) {
+                if (strcmp(_cn, "std::log") == 0 && n.as.intrinsic_call.arg_count > 1) {
                     out << "std::log(";
                     self(self, ctx.block_statements[n.as.intrinsic_call.first_arg]);
                     out << ") / std::log(";
@@ -412,10 +443,10 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                     out << ")";
                     return;
                 }
-                out << cmath_funcs[_f] << "(";
+                out << _cn << "(";
                 if (n.as.intrinsic_call.arg_count > 0) {
                     self(self, ctx.block_statements[n.as.intrinsic_call.first_arg]);
-                    if (n.as.intrinsic_call.arg_count > 1 && (_f == 6 || _f == 18 || _f == 19)) {
+                    if (n.as.intrinsic_call.arg_count > 1 && (strcmp(_cn, "std::fmod") == 0 || strcmp(_cn, "std::atan2") == 0 || strcmp(_cn, "std::pow") == 0)) {
                         out << ", ";
                         self(self, ctx.block_statements[n.as.intrinsic_call.first_arg + 1]);
                     }
@@ -532,7 +563,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                 }
                 bool pure_t = ctx.nodes[n.as.table_access.table].type == NodeType::Identifier;
                 if (pure_t) {
-                     out << "((static_cast<size_t>("; self(self, n.as.table_access.key); out << ") - 1 < static_cast<clx::LTable*>(("; emit_node(n.as.table_access.table); out << ").as_pointer())->array_size) ? static_cast<clx::LTable*>(("; emit_node(n.as.table_access.table); out << ").as_pointer())->array[static_cast<size_t>("; self(self, n.as.table_access.key); out << ") - 1].as_number() : clx::clx_table_get_int(L, "; emit_node(n.as.table_access.table); out << ", static_cast<size_t>("; self(self, n.as.table_access.key); out << ")).as_number())";
+                     out << "((static_cast<size_t>("; self(self, n.as.table_access.key); out << ") - 1 < static_cast<clx::LTable*>(("; emit_node(n.as.table_access.table); out << ").as_pointer())->array_size) ? static_cast<clx::LTable*>(("; emit_node(n.as.table_access.table); out << ").as_pointer())->array[static_cast<size_t>("; self(self, n.as.table_access.key); out << ") - 1].as_number() : clx::table_get_int(L, "; emit_node(n.as.table_access.table); out << ", static_cast<size_t>("; self(self, n.as.table_access.key); out << ")).as_number())";
                      return;
                 }
             }
@@ -616,26 +647,35 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
     };
 
     switch (node.type) {
-        //------------------ NodeType::IntrinsicCall: emits a math intrinsic call
+        //------------------ NodeType::IntrinsicCall: emits an intrinsic call
         case NodeType::IntrinsicCall: {
-            int _func = node.as.intrinsic_call.func;
-            if (_func <= static_cast<int>(Intrinsic::FMod) || _func >= 9) {
-                static const char* cmath_funcs[] = {"std::sin", "std::cos", "std::floor", "std::ceil", "std::abs", "std::sqrt", "std::fmod", "", "", "std::log", "std::exp", "std::tan", "std::atan", "std::asin", "std::acos", "std::sinh", "std::cosh", "std::tanh", "std::atan2", "std::pow"};
+            const char* _cn = node.as.intrinsic_call.cname;
+            if (strcmp(_cn, "__clx_type") == 0) {
+                uint32_t va = ctx.block_statements[node.as.intrinsic_call.first_arg];
+                out << "([&](){ static const char* _tn[]={\"number\",\"nil\",\"boolean\",\"number\",\"string\",\"table\",\"function\",\"userdata\",\"thread\"}; return clx::LValue(L->intern_string(_tn[static_cast<uint8_t>((";
+                emit_node(va);
+                out << ").type())])); }())";
+            } else if (strcmp(_cn, "__clx_tostring") == 0) {
+                uint32_t va = ctx.block_statements[node.as.intrinsic_call.first_arg];
+                out << "clx::LValue(L->intern_string((";
+                emit_node(va);
+                out << ").to_string(L)))";
+            } else {
                 out << "clx::LValue(static_cast<double>(";
-                if (_func >= static_cast<int>(Intrinsic::Deg)) {
+                if (strcmp(_cn, "__clx_deg") == 0 || strcmp(_cn, "__clx_rad") == 0) {
                     emit_native(emit_native, ctx.block_statements[node.as.intrinsic_call.first_arg]);
-                    out << (_func == static_cast<int>(Intrinsic::Deg) ? " * 57.29577951308232" : " * 0.017453292519943295");
-                } else if (_func == static_cast<int>(Intrinsic::Log) && node.as.intrinsic_call.arg_count > 1) {
+                    out << (_cn[7] == 'd' ? " * 57.29577951308232" : " * 0.017453292519943295");
+                } else if (strcmp(_cn, "std::log") == 0 && node.as.intrinsic_call.arg_count > 1) {
                     out << "std::log(";
                     emit_native(emit_native, ctx.block_statements[node.as.intrinsic_call.first_arg]);
                     out << ") / std::log(";
                     emit_native(emit_native, ctx.block_statements[node.as.intrinsic_call.first_arg + 1]);
                     out << ")";
                 } else {
-                    out << cmath_funcs[_func] << "(";
+                    out << _cn << "(";
                     if (node.as.intrinsic_call.arg_count > 0) {
                         emit_native(emit_native, ctx.block_statements[node.as.intrinsic_call.first_arg]);
-                        if (node.as.intrinsic_call.arg_count > 1 && (_func == static_cast<int>(Intrinsic::FMod) || _func == static_cast<int>(Intrinsic::ATan2) || _func == static_cast<int>(Intrinsic::PowFn))) {
+                        if (node.as.intrinsic_call.arg_count > 1 && (strcmp(_cn, "std::fmod") == 0 || strcmp(_cn, "std::atan2") == 0 || strcmp(_cn, "std::pow") == 0)) {
                             out << ", ";
                             emit_native(emit_native, ctx.block_statements[node.as.intrinsic_call.first_arg + 1]);
                         }
@@ -645,18 +685,6 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                     out << ")";
                 }
                 out << "))";
-            } else if (_func == static_cast<int>(Intrinsic::TypeFn)) {
-                
-                uint32_t va = ctx.block_statements[node.as.intrinsic_call.first_arg];
-                out << "([&](){ static const char* _tn[]={\"number\",\"nil\",\"boolean\",\"number\",\"string\",\"table\",\"function\",\"userdata\",\"thread\"}; return clx::LValue(L->intern_string(_tn[static_cast<uint8_t>((";
-                emit_node(va);
-                out << ").type())])); }())";
-            } else if (_func == static_cast<int>(Intrinsic::ToStringFn)) {
-                
-                uint32_t va = ctx.block_statements[node.as.intrinsic_call.first_arg];
-                out << "clx::LValue(L->intern_string((";
-                emit_node(va);
-                out << ").to_string(L)))";
             }
             break;
         }
@@ -667,7 +695,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
             bool is_fast = false;
             std::string_view fname;
             uint32_t tgt = node.as.call_expr.target;
-            
+
             bool is_method_call = false;
             if (ctx.nodes[tgt].type == NodeType::TableAccess) {
                 if (node.as.call_expr.arg_count > 0 && ctx.block_statements[node.as.call_expr.first_arg] == ctx.nodes[tgt].as.table_access.table) {
@@ -693,7 +721,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                 } else {
                     out << "_fast_" << fname << "(";
                 }
-                
+
                 for (uint32_t i = 0; i < node.as.call_expr.arg_count; ++i) {
                     emit_native(emit_native, ctx.block_statements[node.as.call_expr.first_arg + i]);
                     if (i < node.as.call_expr.arg_count - 1) out << ", ";
@@ -719,20 +747,25 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
             }
 
             out << "([&]() {\n";
-            
+
             if (is_method_call) {
                 out << "    clx::LValue _m_self = "; emit_node(ctx.nodes[tgt].as.table_access.table); out << ";\n";
                 out << "    L->shadow_stack[L->shadow_top++] = &_m_self;\n";
-                
+
                 bool key_is_native = false;
                 uint32_t k_idx = ctx.nodes[tgt].as.table_access.key;
                 if (yields_number(ctx, k_idx, nullptr, CodeEmitter::g_current_fast_func)) key_is_native = true;
-                
+
                 out << "    clx::LValue _m_func;\n";
                 if (key_is_native) {
-                    out << "    _m_func = ([&](){ clx::LTable* _t = static_cast<clx::LTable*>(_m_self.as_pointer()); size_t _k = static_cast<size_t>("; emit_native(emit_native, k_idx); out << "); return (_k - 1 < _t->array_size) ? _t->array[_k - 1] : clx::clx_table_get_int(L, clx::LValue(clx::LType::Table, _t), _k); }());\n";
+                    out << "    _m_func = ([&](){ clx::LTable* _t = static_cast<clx::LTable*>(_m_self.as_pointer()); size_t _k = static_cast<size_t>("; emit_native(emit_native, k_idx); out << "); return (_k - 1 < _t->array_size) ? _t->array[_k - 1] : clx::table_get_int(L, clx::LValue(clx::LType::Table, _t), _k); }());\n";
                 } else {
-                    out << "    { static clx::CacheSlot __cs; _m_func = clx::clx_table_get_cs(L, _m_self, "; emit_node(k_idx); out << ", &__cs); }\n";
+                    int _cs_i = (CodeEmitter::g_cs_index < CodeEmitter::g_cs_max) ? CodeEmitter::g_cs_index++ : -1;
+                    if (_cs_i >= 0) {
+                        out << "    _m_func = clx::table_get_cs(L, _m_self, "; emit_node(k_idx); out << ", &__cs[" << _cs_i << "]);\n";
+                    } else {
+                        out << "    _m_func = clx::table_get(L, _m_self, "; emit_node(k_idx); out << ");\n";
+                    }
                 }
                 out << "    L->shadow_stack[L->shadow_top++] = &_m_func;\n";
             }
@@ -748,13 +781,13 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                         out << ");\n";
                     }
                 }
-                
+
                 CodeEmitter::g_expect_multivalue = true;
                 out << "    clx::MultiValue _mret = ";
                 emit_node(last_arg);
                 out << ";\n";
                 CodeEmitter::g_expect_multivalue = false;
-                
+
                 out << "    for (size_t _mi = 0; _mi < _mret.count; ++_mi) _dyn_args.push_back(_mret[_mi]);\n";
 
                 if (is_direct) {
@@ -769,6 +802,14 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                             out << "    L->shadow_top -= _dyn_args.size();\n";
                         } else { goto _call_direct_dyn; }
                     } else { goto _call_direct_dyn; }
+                } else if (!is_method_call && node.as.call_expr.target < ctx.nodes.size() && ctx.nodes[node.as.call_expr.target].type == NodeType::Identifier && !ctx.nodes[node.as.call_expr.target].as.ident.is_global) {
+                    std::string_view _alias_nm(ctx.nodes[node.as.call_expr.target].as.ident.name, ctx.nodes[node.as.call_expr.target].as.ident.length);
+                    auto _alias_it = CodeEmitter::g_builtin_aliases.find(std::string(_alias_nm));
+                    if (_alias_it != CodeEmitter::g_builtin_aliases.end() && CodeEmitter::g_reassigned_vars.count(std::string(_alias_nm)) == 0) {
+                        out << "    for (size_t i = 0; i < _dyn_args.size(); ++i) L->shadow_stack[L->shadow_top++] = &_dyn_args[i];\n";
+                        out << "    clx::MultiValue _main_ret = clx::" << _alias_it->second << "(L, _dyn_args.data(), _dyn_args.size());\n";
+                        out << "    L->shadow_top -= _dyn_args.size();\n";
+                    } else { goto _call_direct_dyn; }
                 } else { _call_direct_dyn:;
                     out << "    for (size_t i = 0; i < _dyn_args.size(); ++i) L->shadow_stack[L->shadow_top++] = &_dyn_args[i];\n";
                     out << "    clx::MultiValue _main_ret = clx::call_direct(L, ";
@@ -776,9 +817,9 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                     out << ", _dyn_args.data(), _dyn_args.size());\n";
                     out << "    L->shadow_top -= _dyn_args.size();\n";
                 }
-                
-                if (is_method_call) out << "    L->shadow_top -= 2;\n"; 
-                
+
+                if (is_method_call) out << "    L->shadow_top -= 2;\n";
+
                 if (want_multi) out << "    return _main_ret;\n";
                 else out << "    return (_main_ret.count > 0) ? _main_ret[0] : clx::LValue();\n";
             } else {
@@ -802,6 +843,14 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                                 out << "    L->shadow_top -= " << node.as.call_expr.arg_count << ";\n";
                             } else { goto _call_direct_normal; }
                         } else { goto _call_direct_normal; }
+                    } else if (!is_method_call && node.as.call_expr.target < ctx.nodes.size() && ctx.nodes[node.as.call_expr.target].type == NodeType::Identifier && !ctx.nodes[node.as.call_expr.target].as.ident.is_global) {
+                        std::string_view _alias_nm(ctx.nodes[node.as.call_expr.target].as.ident.name, ctx.nodes[node.as.call_expr.target].as.ident.length);
+                        auto _alias_it = CodeEmitter::g_builtin_aliases.find(std::string(_alias_nm));
+                        if (_alias_it != CodeEmitter::g_builtin_aliases.end() && CodeEmitter::g_reassigned_vars.count(std::string(_alias_nm)) == 0) {
+                            out << "    for (size_t i = 0; i < " << node.as.call_expr.arg_count << "; ++i) L->shadow_stack[L->shadow_top++] = &args[i];\n";
+                            out << "    clx::MultiValue _main_ret = clx::" << _alias_it->second << "(L, args, " << node.as.call_expr.arg_count << ");\n";
+                            out << "    L->shadow_top -= " << node.as.call_expr.arg_count << ";\n";
+                        } else { goto _call_direct_normal; }
                     } else {
                         _call_direct_normal:
                         out << "    for (size_t i = 0; i < " << node.as.call_expr.arg_count << "; ++i) L->shadow_stack[L->shadow_top++] = &args[i];\n";
@@ -821,15 +870,21 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                                 out << "    clx::MultiValue _main_ret = clx::" << _cf_it->second << "(L, nullptr, 0);\n";
                             else { goto _call_direct_normal2; }
                         } else { goto _call_direct_normal2; }
+                    } else if (!is_method_call && node.as.call_expr.target < ctx.nodes.size() && ctx.nodes[node.as.call_expr.target].type == NodeType::Identifier && !ctx.nodes[node.as.call_expr.target].as.ident.is_global) {
+                        std::string_view _alias_nm(ctx.nodes[node.as.call_expr.target].as.ident.name, ctx.nodes[node.as.call_expr.target].as.ident.length);
+                        auto _alias_it = CodeEmitter::g_builtin_aliases.find(std::string(_alias_nm));
+                        if (_alias_it != CodeEmitter::g_builtin_aliases.end() && CodeEmitter::g_reassigned_vars.count(std::string(_alias_nm)) == 0)
+                            out << "    clx::MultiValue _main_ret = clx::" << _alias_it->second << "(L, nullptr, 0);\n";
+                        else { goto _call_direct_normal2; }
                     } else { _call_direct_normal2:;
                         out << "    clx::MultiValue _main_ret = clx::call_direct(L, ";
                         if (is_method_call) out << "_m_func"; else emit_node(node.as.call_expr.target);
                         out << ", nullptr, 0);\n";
                     }
                 }
-                
+
                 if (is_method_call) out << "    L->shadow_top -= 2;\n";
-                
+
                 if (want_multi) out << "    return _main_ret;\n";
                 else out << "    return (_main_ret.count > 0) ? _main_ret[0] : clx::LValue();\n";
             }
@@ -840,8 +895,8 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
         //------------------ NodeType::ParenExpression: emits a parenthesized expression
         case NodeType::ParenExpression: {
             bool want_multi = CodeEmitter::g_expect_multivalue;
-            CodeEmitter::g_expect_multivalue = false; 
-            
+            CodeEmitter::g_expect_multivalue = false;
+
             if (want_multi) {
                 out << "clx::MultiValue(";
                 emit_node(node.as.paren_expr.expr);
@@ -857,7 +912,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
         case NodeType::LabelStatement: {
             uint32_t name_idx = node.as.label_stmt.name_ident;
             std::string_view lname(ctx.nodes[name_idx].as.ident.name, ctx.nodes[name_idx].as.ident.length);
-            
+
             out << "clx_lbl_" << lname << "_" << node_idx << ":;\n";
             break;
         }
@@ -867,7 +922,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
             out << "#line " << node.line << " \"" << ctx.filename << "\"\n";
             uint32_t name_idx = node.as.goto_stmt.name_ident;
             std::string_view lname(ctx.nodes[name_idx].as.ident.name, ctx.nodes[name_idx].as.ident.length);
-            
+
             uint32_t target_label = CodeEmitter::g_goto_targets[node_idx];
             out << "goto clx_lbl_" << lname << "_" << target_label << ";\n";
             break;
@@ -942,6 +997,34 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                 }
             }
 
+
+
+
+            for (uint32_t _pi = 0; _pi < node.as.block.count; ++_pi) {
+                uint32_t _ps = ctx.block_statements[node.as.block.first_statement + _pi];
+                const auto& _pst = ctx.nodes[_ps];
+                if (_pst.type != NodeType::LocalDecl && _pst.type != NodeType::GlobalDeclStatement && _pst.type != NodeType::Assignment) continue;
+                uint32_t _ptc = _pst.type == NodeType::LocalDecl ? _pst.as.local_decl.ident_count : (_pst.type == NodeType::GlobalDeclStatement ? _pst.as.global_decl.ident_count : _pst.as.assign.target_count);
+                uint32_t _pvc = _pst.type == NodeType::LocalDecl ? _pst.as.local_decl.value_count : (_pst.type == NodeType::GlobalDeclStatement ? _pst.as.global_decl.value_count : _pst.as.assign.value_count);
+                uint32_t _pfv = _pst.type == NodeType::LocalDecl ? _pst.as.local_decl.first_value : (_pst.type == NodeType::GlobalDeclStatement ? _pst.as.global_decl.first_value : _pst.as.assign.first_value);
+                uint32_t _pft = _pst.type == NodeType::LocalDecl ? _pst.as.local_decl.first_ident : (_pst.type == NodeType::GlobalDeclStatement ? _pst.as.global_decl.first_ident : _pst.as.assign.first_target);
+                for (uint32_t _pj = 0; _pj < _pvc && _pj < _ptc; ++_pj) {
+                    uint32_t _pvi = ctx.block_statements[_pfv + _pj];
+                    if (ctx.nodes[_pvi].type != NodeType::FunctionDef) continue;
+                    uint32_t _pti = ctx.block_statements[_pft + _pj];
+                    if (ctx.nodes[_pti].type != NodeType::Identifier || ctx.nodes[_pti].as.ident.is_global) continue;
+                    std::string_view _pn(ctx.nodes[_pti].as.ident.name, ctx.nodes[_pti].as.ident.length);
+                    if (CodeEmitter::g_reassigned_vars.count(_pn)) continue;
+                    bool _pf = false;
+                    if (CodeEmitter::g_native_return_funcs.count(_pn) && CodeEmitter::g_func_param_native.count(_pn)) {
+                        _pf = true;
+                        for (bool _pp : CodeEmitter::g_func_param_native[_pn]) if (!_pp) { _pf = false; break; }
+                    }
+                    if (_pf) CodeEmitter::g_fast_callables.insert(_pn);
+                    CodeEmitter::g_direct_callables.insert(_pn);
+                }
+            }
+
             size_t prev_locals = locals.size();
             int redecl_scopes = 0;
             std::set<std::string_view> current_block_vars;
@@ -990,7 +1073,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                     out << ";\n";
                 }
             }
-            
+
             for (int i = 0; i < redecl_scopes; ++i) {
                 out << "}\n";
             }
@@ -1023,16 +1106,16 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                     out << ", double l_" << pname;
                 }
                 out << ") -> double {\n";
-                
+
                 size_t prev_locals = locals.size();
                 for (uint32_t i = 0; i < node.as.func_def.param_count; ++i) {
                     uint32_t p_idx = ctx.block_statements[node.as.func_def.first_param + i];
                     std::string_view pname(ctx.nodes[p_idx].as.ident.name, ctx.nodes[p_idx].as.ident.length);
                     locals.push_back({pname, false});
                 }
-                
+
                 if (node.as.func_def.body_block != 0xFFFFFFFF) emit_node(node.as.func_def.body_block);
-                
+
                 locals.resize(prev_locals);
                 CodeEmitter::g_in_function_def = false;
                 CodeEmitter::g_direct_callables = std::move(saved_direct_callables);
@@ -1049,15 +1132,18 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
             }
             out << "(clx::LState* L, const clx::LValue* args, size_t arg_count) mutable -> clx::MultiValue {\n";
             out << "clx::ScopeGuard _sg_func(L);\n";
+            out << "clx::CacheSlot __cs[" << CodeEmitter::g_cs_max << "]{};\n";
+            int prev_cs_index = CodeEmitter::g_cs_index;
+            CodeEmitter::g_cs_index = 0;
             out << "size_t _va_count = (arg_count > " << node.as.func_def.param_count << ") ? (arg_count - " << node.as.func_def.param_count << ") : 0;\n";
             out << "const clx::LValue* _va_args = _va_count > 0 ? (args + " << node.as.func_def.param_count << ") : nullptr;\n";
-            
+
             for (uint32_t i = 0; i < node.as.func_def.param_count; ++i) {
                 uint32_t p_idx = ctx.block_statements[node.as.func_def.first_param + i];
                 std::string_view pname(ctx.nodes[p_idx].as.ident.name, ctx.nodes[p_idx].as.ident.length);
                 bool is_cap = ctx.nodes[p_idx].as.ident.is_captured;
                 bool is_native = std::find(CodeEmitter::g_native_numbers.begin(), CodeEmitter::g_native_numbers.end(), pname) != CodeEmitter::g_native_numbers.end();
-                
+
                 if (is_cap) {
                     if (CodeEmitter::g_constant_upvalues.count(pname)) {
                         out << "clx::LValue l_" << pname << " = (" << i << " < arg_count) ? args[" << i << "] : clx::LValue();\n";
@@ -1110,6 +1196,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
             CodeEmitter::g_in_function_def = prev_in_func;
             CodeEmitter::g_direct_callables = std::move(saved_direct_callables);
             CodeEmitter::g_fast_callables = std::move(saved_fast_callables);
+            CodeEmitter::g_cs_index = prev_cs_index;
             out << "return clx::MultiValue();\n";
             out << "}";
             if (!is_raw) out << ")";
@@ -1179,7 +1266,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                     out << ";\n";
                     CodeEmitter::g_expect_multivalue = false;
                     out << "    for (size_t _mi = 0; _mi < _mret.count; ++_mi) _dyn_args.push_back(_mret[_mi]);\n";
-                    
+
                     if (!is_direct) out << "    for (size_t i = 0; i < _dyn_args.size(); ++i) L->shadow_stack[L->shadow_top++] = &_dyn_args[i];\n";
                     if (is_direct) {
                         if (CodeEmitter::g_in_function_def) {
@@ -1209,7 +1296,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                         }
                         out << "};\n";
                         if (!is_direct) out << "    for (size_t i = 0; i < " << call_node.as.call_expr.arg_count << "; ++i) L->shadow_stack[L->shadow_top++] = &args_" << last_v_idx << "[i];\n";
-                        
+
                         if (is_direct) {
                             if (CodeEmitter::g_in_function_def) {
                                 out << "    CLX_MUSTTAIL return _impl_" << fname << "(L, args_" << last_v_idx << ", " << call_node.as.call_expr.arg_count << ");\n";
@@ -1264,8 +1351,8 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
             if (!last_is_call && !has_vararg) {
                 out << "    clx::LValue _ret_args[" << std::max(1u, v_count) << "];\n";
                 for (size_t i = 0; i < v_count; ++i) {
-                    out << "    _ret_args[" << i << "] = "; 
-                    emit_node(ctx.block_statements[first_v + i]); 
+                    out << "    _ret_args[" << i << "] = ";
+                    emit_node(ctx.block_statements[first_v + i]);
                     out << ";\n";
                 }
                 if (CodeEmitter::g_in_function_def) {
@@ -1309,7 +1396,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
         case NodeType::Assignment: {
             if (node.type == NodeType::GlobalDeclStatement && node.as.global_decl.is_wildcard) break;
             out << "#line " << node.line << " \"" << ctx.filename << "\"\n";
-            
+
             bool is_local = (node.type == NodeType::LocalDecl);
             bool is_global = (node.type == NodeType::GlobalDeclStatement);
             uint32_t t_count = is_local ? node.as.local_decl.ident_count : (is_global ? node.as.global_decl.ident_count : node.as.assign.target_count);
@@ -1342,8 +1429,8 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
             }
 
             if (is_single_native) {
-                
-                
+
+
                 if (std::find(CodeEmitter::g_native_numbers.begin(), CodeEmitter::g_native_numbers.end(), single_name) == CodeEmitter::g_native_numbers.end())
                     CodeEmitter::g_native_numbers.push_back(single_name);
                 if (is_local) {
@@ -1382,7 +1469,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
             if (is_single_dynamic) {
                 uint32_t t_idx = ctx.block_statements[first_t];
                 const auto& t_node = ctx.nodes[t_idx];
-                
+
                 if (t_node.type == NodeType::Identifier) {
                     std::string_view name(t_node.as.ident.name, t_node.as.ident.length);
                     bool is_boxed = false;
@@ -1399,7 +1486,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                                         is_fast = true;
                                         for (bool p : CodeEmitter::g_func_param_native[name]) if (!p) is_fast = false;
                                     }
-                                    
+
                                     if (is_fast) {
                                         out << "auto _fast_" << name << "_impl = ";
                                         CodeEmitter::g_emit_fast_lambda = true;
@@ -1410,7 +1497,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                                         CodeEmitter::g_in_fast_function = false;
                                         CodeEmitter::g_current_fast_func = "";
                                         out << ";\n";
-                                        
+
                                         out << "auto _fast_" << name << " = [&]( ";
                                         for (uint32_t a = 0; a < CodeEmitter::g_func_param_counts[name]; ++a) {
                                             out << "double p" << a << (a < CodeEmitter::g_func_param_counts[name] - 1 ? ", " : "");
@@ -1420,7 +1507,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                                             out << ", p" << a;
                                         }
                                         out << "); };\n";
-                                        
+
                                         out << "auto _impl_" << name << " = [=](clx::LState* L, const clx::LValue* args, size_t arg_count) -> clx::MultiValue {\n";
                                         out << "    return clx::MultiValue(clx::LValue(static_cast<double>(_fast_" << name << "(";
                                         for (uint32_t a = 0; a < CodeEmitter::g_func_param_counts[name]; ++a) {
@@ -1452,7 +1539,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                                         out << "L->shadow_stack[L->shadow_top++] = &l_" << name << ";\n";
                                         { size_t _sfi = std::distance(CodeEmitter::g_string_pool.begin(), std::find(CodeEmitter::g_string_pool.begin(), CodeEmitter::g_string_pool.end(), name)); out << "L->_G->settable(cstr_[" << _sfi << "], l_" << name << ");\n"; }
                                     }
-                                    
+
                                     intercepted = true;
                                 }
                             }
@@ -1469,9 +1556,27 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                                     out << "std::vector<double> l_" << name << ";\n";
                                 }
                                 locals.push_back({name, false});
-                            } else if (t_node.as.ident.is_captured) {
+                                } else if (t_node.as.ident.is_captured) {
                                 bool is_const = CodeEmitter::g_constant_upvalues.count(name) > 0;
                                 if (is_const) {
+                                    {
+                                        uint32_t _alias_v_idx3 = ctx.block_statements[first_v];
+                                        const auto& _alias_v_node3 = ctx.nodes[_alias_v_idx3];
+                                        if (v_count > 0 && !t_node.as.ident.is_global &&
+                                            _alias_v_node3.type == NodeType::TableAccess &&
+                                            CodeEmitter::g_reassigned_vars.count(name) == 0) {
+                                            uint32_t _ht4 = _alias_v_node3.as.table_access.table;
+                                            uint32_t _hk4 = _alias_v_node3.as.table_access.key;
+                                            if (_ht4 < ctx.nodes.size() && _hk4 < ctx.nodes.size() &&
+                                                ctx.nodes[_ht4].type == NodeType::Identifier && ctx.nodes[_hk4].type == NodeType::String) {
+                                                std::string_view _hm4(ctx.nodes[_ht4].as.ident.name, ctx.nodes[_ht4].as.ident.length);
+                                                std::string_view _hf4(ctx.nodes[_hk4].as.string.text, ctx.nodes[_hk4].as.string.length);
+                                                const char* _cf4 = lookup_builtin(_hm4, _hf4);
+                                                if (_cf4)
+                                                    CodeEmitter::g_builtin_aliases[std::string(name)] = _cf4;
+                                            }
+                                        }
+                                    }
                                     if (CodeEmitter::g_hoisted_locals.count(name)) {
                                         if (v_count > 0) {
                                             out << "l_" << name << " = ";
@@ -1522,6 +1627,24 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                                     }
                                 }
                             } else {
+                                {
+                                    uint32_t _alias_v_idx = ctx.block_statements[first_v];
+                                    const auto& _alias_v_node = ctx.nodes[_alias_v_idx];
+                                    if (v_count > 0 && !t_node.as.ident.is_global && !t_node.as.ident.is_captured &&
+                                        _alias_v_node.type == NodeType::TableAccess &&
+                                        CodeEmitter::g_reassigned_vars.count(name) == 0) {
+                                        uint32_t _ht2 = _alias_v_node.as.table_access.table;
+                                        uint32_t _hk2 = _alias_v_node.as.table_access.key;
+                                        if (_ht2 < ctx.nodes.size() && _hk2 < ctx.nodes.size() &&
+                                            ctx.nodes[_ht2].type == NodeType::Identifier && ctx.nodes[_hk2].type == NodeType::String) {
+                                            std::string_view _hm2(ctx.nodes[_ht2].as.ident.name, ctx.nodes[_ht2].as.ident.length);
+                                            std::string_view _hf2(ctx.nodes[_hk2].as.string.text, ctx.nodes[_hk2].as.string.length);
+                                            const char* _cf2 = lookup_builtin(_hm2, _hf2);
+                                            if (_cf2)
+                                                CodeEmitter::g_builtin_aliases[std::string(name)] = _cf2;
+                                        }
+                                    }
+                                }
                                 if (CodeEmitter::g_hoisted_locals.count(name)) {
                                     if (v_count > 0) {
                                         out << "l_" << name << " = ";
@@ -1550,7 +1673,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                         auto it = std::find(CodeEmitter::g_native_numbers.begin(), CodeEmitter::g_native_numbers.end(), name);
                         if (it != CodeEmitter::g_native_numbers.end()) CodeEmitter::g_native_numbers.erase(it);
 
-                        
+
                         bool is_sb_concat = false;
                         std::vector<uint32_t> ops;
                         if (v_count > 0 && CodeEmitter::g_string_builders.count(name)) {
@@ -1577,7 +1700,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                         }
 
                         if (is_sb_concat) {
-                            
+
                             out << "{ clx::LValue _gval = clx::get_env_var(L, _ENV, \"" << name << "\");\n";
                             out << "  if (sb_" << name << ".empty() && _gval.type() == clx::LType::String) {\n";
                             out << "    sb_" << name << ".append(_gval.as_string(), _gval.string_len()); }\n";
@@ -1616,7 +1739,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                                         is_fast = true;
                                         for (bool p : CodeEmitter::g_func_param_native[name]) if (!p) is_fast = false;
                                     }
-                                    
+
                                     if (is_fast) {
                                         out << "auto _fast_" << name << "_impl = ";
                                         CodeEmitter::g_emit_fast_lambda = true;
@@ -1627,7 +1750,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                                         CodeEmitter::g_in_fast_function = false;
                                         CodeEmitter::g_current_fast_func = "";
                                         out << ";\n";
-                                        
+
                                         out << "auto _fast_" << name << " = [&]( ";
                                         for (uint32_t a = 0; a < CodeEmitter::g_func_param_counts[name]; ++a) {
                                             out << "double p" << a << (a < CodeEmitter::g_func_param_counts[name] - 1 ? ", " : "");
@@ -1637,7 +1760,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                                             out << ", p" << a;
                                         }
                                         out << "); };\n";
-                                        
+
                                         out << "auto _impl_" << name << " = [=](clx::LState* L, const clx::LValue* args, size_t arg_count) -> clx::MultiValue {\n";
                                         out << "    return clx::MultiValue(clx::LValue(static_cast<double>(_fast_" << name << "(";
                                         for (uint32_t a = 0; a < CodeEmitter::g_func_param_counts[name]; ++a) {
@@ -1665,9 +1788,9 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                         if (!intercepted && v_count > 0) {
                             uint32_t v_idx = ctx.block_statements[first_v];
                             const auto& v_node = ctx.nodes[v_idx];
-                            
+
                             if (v_node.type == NodeType::BinaryOp && v_node.as.bin_op.op == static_cast<int>(BinaryOp::Concat)) {
-                                
+
                                 std::vector<uint32_t> concat_ops;
                                 std::vector<uint32_t> walk_stack;
                                 walk_stack.push_back(v_idx);
@@ -1683,19 +1806,19 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                                     }
                                 }
 
-                                
+
                                 if (!concat_ops.empty() && ctx.nodes[concat_ops[0]].type == NodeType::Identifier) {
                                     std::string_view first_name(ctx.nodes[concat_ops[0]].as.ident.name, ctx.nodes[concat_ops[0]].as.ident.length);
                                     if (first_name == name && !ctx.nodes[concat_ops[0]].as.ident.is_global) {
-                                        
-                                        
-                                        
+
+
+
                                         if (is_boxed) {
                                             out << "if (sb_" << name << ".empty()) sb_" << name << ".append((*l_" << name << ").as_string(), (*l_" << name << ").string_len());\n";
                                         } else {
                                             out << "if (sb_" << name << ".empty()) sb_" << name << ".append(l_" << name << ".as_string(), l_" << name << ".string_len());\n";
                                         }
-                                        
+
                                         for (size_t i = 1; i < concat_ops.size(); ++i) {
                                             uint32_t op_idx = concat_ops[i];
                                             const auto& op_node = ctx.nodes[op_idx];
@@ -1724,7 +1847,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                         if (!intercepted) {
                             if (is_boxed) out << "(*l_" << name << ") = ";
                             else out << "l_" << name << " = ";
-                            
+
                             if (v_count > 0) {
                                 bool lhs_is_native = !is_boxed && std::find(CodeEmitter::g_native_numbers.begin(), CodeEmitter::g_native_numbers.end(), name) != CodeEmitter::g_native_numbers.end();
                                 if (lhs_is_native) emit_native(emit_native, ctx.block_statements[first_v]);
@@ -1768,20 +1891,32 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                         if (yields_number(ctx, k_idx, nullptr, CodeEmitter::g_current_fast_func)) key_is_native = true;
 
                         if (key_is_native) {
-                            out << "{ clx::LTable* _t = static_cast<clx::LTable*>(("; emit_node(t_node.as.table_access.table); out << ").as_pointer()); size_t _k = static_cast<size_t>("; emit_native(emit_native, k_idx); out << "); if (_k - 1 < _t->array_size) _t->array[_k - 1] = "; 
+                            out << "{ clx::LTable* _t = static_cast<clx::LTable*>(("; emit_node(t_node.as.table_access.table); out << ").as_pointer()); size_t _k = static_cast<size_t>("; emit_native(emit_native, k_idx); out << "); if (_k - 1 < _t->array_size) _t->array[_k - 1] = ";
                             if (v_count > 0) emit_node(ctx.block_statements[first_v]); else out << "clx::LValue()";
-                            out << "; else clx::clx_table_set_int(L, clx::LValue(clx::LType::Table, _t), _k, "; 
+                            out << "; else clx::table_set_int(L, clx::LValue(clx::LType::Table, _t), _k, ";
                             if (v_count > 0) emit_node(ctx.block_statements[first_v]); else out << "clx::LValue()";
                             out << "); }\n";
                         } else {
                             uint32_t kt = t_node.as.table_access.key;
                             if (kt < ctx.nodes.size() && ctx.nodes[kt].type == NodeType::String) {
-                                out << "{ static clx::CacheSlot __cs; clx::clx_table_set_cs(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << (std::distance(CodeEmitter::g_string_pool.begin(), std::find(CodeEmitter::g_string_pool.begin(), CodeEmitter::g_string_pool.end(), std::string_view(ctx.nodes[kt].as.string.text, ctx.nodes[kt].as.string.length)))) << "], ";
-                                if (v_count > 0) emit_node(ctx.block_statements[first_v]);
-                                else out << "clx::LValue()";
-                                out << ", &__cs); }\n";
+                                uint32_t tbl_idx = t_node.as.table_access.table;
+                                bool tbl_is_stable = tbl_idx < ctx.nodes.size() &&
+                                                     ctx.nodes[tbl_idx].type == NodeType::Identifier &&
+                                                     ctx.nodes[tbl_idx].as.ident.is_global;
+                                int _cs_i = (tbl_is_stable && CodeEmitter::g_cs_index < CodeEmitter::g_cs_max) ? CodeEmitter::g_cs_index++ : -1;
+                                if (_cs_i >= 0) {
+                                    out << "clx::table_set_cs(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << (std::distance(CodeEmitter::g_string_pool.begin(), std::find(CodeEmitter::g_string_pool.begin(), CodeEmitter::g_string_pool.end(), std::string_view(ctx.nodes[kt].as.string.text, ctx.nodes[kt].as.string.length)))) << "], ";
+                                    if (v_count > 0) emit_node(ctx.block_statements[first_v]);
+                                    else out << "clx::LValue()";
+                                    out << ", &__cs[" << _cs_i << "]);\n";
+                                } else {
+                                    out << "clx::table_set(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << (std::distance(CodeEmitter::g_string_pool.begin(), std::find(CodeEmitter::g_string_pool.begin(), CodeEmitter::g_string_pool.end(), std::string_view(ctx.nodes[kt].as.string.text, ctx.nodes[kt].as.string.length)))) << "], ";
+                                    if (v_count > 0) emit_node(ctx.block_statements[first_v]);
+                                    else out << "clx::LValue()";
+                                    out << ");\n";
+                                }
                             } else {
-                                out << "clx::clx_table_set(L, "; emit_node(t_node.as.table_access.table); out << ", "; emit_node(t_node.as.table_access.key); out << ", ";
+                                out << "clx::table_set(L, "; emit_node(t_node.as.table_access.table); out << ", "; emit_node(t_node.as.table_access.key); out << ", ";
                                 if (v_count > 0) emit_node(ctx.block_statements[first_v]);
                                 else out << "clx::LValue()";
                                 out << ");\n";
@@ -1807,20 +1942,20 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
             if (v_count > 0) {
                 for (size_t i = 0; i < v_count; ++i) {
                     uint32_t v_idx = ctx.block_statements[first_v + i];
-                    
+
                     bool intercepted = false;
                     if (ctx.nodes[v_idx].type == NodeType::FunctionDef && i < t_count) {
                         uint32_t t_idx = ctx.block_statements[first_t + i];
                         if (ctx.nodes[t_idx].type == NodeType::Identifier && !ctx.nodes[t_idx].as.ident.is_global) {
                             std::string_view fname(ctx.nodes[t_idx].as.ident.name, ctx.nodes[t_idx].as.ident.length);
-                            
+
                             if (CodeEmitter::g_reassigned_vars.count(fname) == 0) {
                                 bool is_fast = false;
                                 if (CodeEmitter::g_native_return_funcs.count(fname) && CodeEmitter::g_func_param_native.count(fname)) {
                                     is_fast = true;
                                     for (bool p : CodeEmitter::g_func_param_native[fname]) if (!p) is_fast = false;
                                 }
-                                
+
                                 if (is_fast) {
                                     out << "auto _fast_" << fname << "_impl = ";
                                     CodeEmitter::g_emit_fast_lambda = true;
@@ -1831,7 +1966,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                                     CodeEmitter::g_in_fast_function = false;
                                     CodeEmitter::g_current_fast_func = "";
                                     out << ";\n";
-                                    
+
                                     out << "auto _fast_" << fname << " = [&]( ";
                                     for (uint32_t a = 0; a < CodeEmitter::g_func_param_counts[fname]; ++a) {
                                         out << "double p" << a << (a < CodeEmitter::g_func_param_counts[fname] - 1 ? ", " : "");
@@ -1841,7 +1976,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                                         out << ", p" << a;
                                     }
                                     out << "); };\n";
-                                    
+
                                     out << "auto _impl_" << fname << " = [=](clx::LState* L, const clx::LValue* args, size_t arg_count) -> clx::MultiValue {\n";
                                     out << "    return clx::MultiValue(clx::LValue(static_cast<double>(_fast_" << fname << "(";
                                     for (uint32_t a = 0; a < CodeEmitter::g_func_param_counts[fname]; ++a) {
@@ -1857,7 +1992,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                                     CodeEmitter::g_emit_raw_lambda = false;
                                     out << ";\n";
                                 }
-                                
+
                                 out << "clx::LValue _tmp_" << node_idx << "_" << i << " = L->create_closure(_impl_" << fname << ");\n";
                                 CodeEmitter::g_direct_callables.insert(fname);
                                 intercepted = true;
@@ -1883,8 +2018,8 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                                  t_is_n = std::find(CodeEmitter::g_native_numbers.begin(), CodeEmitter::g_native_numbers.end(), name) != CodeEmitter::g_native_numbers.end();
                             }
                         }
-                        
-                        
+
+
                         if (v_is_n) t_is_n = true;
 
                         if (t_is_n && v_is_n) {
@@ -1911,7 +2046,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                     bool val_is_native = (i < v_count && tmp_is_native[i]);
                     bool is_n = in_native || val_is_native;
                     bool is_cap = ctx.nodes[t_idx].as.ident.is_captured;
-                    
+
                     if (is_cap) {
                         if (CodeEmitter::g_constant_upvalues.count(name)) {
                             if (!CodeEmitter::g_hoisted_locals.count(name)) {
@@ -1947,7 +2082,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
             for (size_t i = 0; i < t_count; ++i) {
                 std::string val_str;
                 std::string num_str;
-                
+
                 if (i < v_count) {
                     if (i == v_count - 1 && last_is_call) {
                         val_str = "_mret_" + std::to_string(node_idx) + "[0]";
@@ -1971,12 +2106,30 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
 
                 uint32_t t_idx = ctx.block_statements[first_t + i];
                 const auto& t_node = ctx.nodes[t_idx];
-                
+
                 if (t_node.type == NodeType::Identifier) {
                     std::string_view name(t_node.as.ident.name, t_node.as.ident.length);
                     bool is_n = std::find(CodeEmitter::g_native_numbers.begin(), CodeEmitter::g_native_numbers.end(), name) != CodeEmitter::g_native_numbers.end();
                     bool is_boxed = false;
                     bool is_loc = this->is_local(name, is_boxed);
+
+                    if (is_local && !t_node.as.ident.is_global &&
+                        CodeEmitter::g_reassigned_vars.count(std::string(name)) == 0 &&
+                        i < v_count && !tmp_is_native[i]) {
+                        uint32_t _alias_v_idx2 = ctx.block_statements[first_v + i];
+                        if (_alias_v_idx2 < ctx.nodes.size() && ctx.nodes[_alias_v_idx2].type == NodeType::TableAccess) {
+                            uint32_t _ht3 = ctx.nodes[_alias_v_idx2].as.table_access.table;
+                            uint32_t _hk3 = ctx.nodes[_alias_v_idx2].as.table_access.key;
+                            if (_ht3 < ctx.nodes.size() && _hk3 < ctx.nodes.size() &&
+                                ctx.nodes[_ht3].type == NodeType::Identifier && ctx.nodes[_hk3].type == NodeType::String) {
+                                std::string_view _hm3(ctx.nodes[_ht3].as.ident.name, ctx.nodes[_ht3].as.ident.length);
+                                std::string_view _hf3(ctx.nodes[_hk3].as.string.text, ctx.nodes[_hk3].as.string.length);
+                                            const char* _cf3 = lookup_builtin(_hm3, _hf3);
+                                            if (_cf3)
+                                                CodeEmitter::g_builtin_aliases[std::string(name)] = _cf3;
+                            }
+                        }
+                    }
 
                     if (is_local || is_loc) {
                         if (is_local && is_boxed) out << "(*l_" << name << ") = " << val_str << ";\n";
@@ -1995,7 +2148,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                     if (ctx.nodes[t_node.as.table_access.table].type == NodeType::Identifier) {
                         t_name = std::string_view(ctx.nodes[t_node.as.table_access.table].as.ident.name, ctx.nodes[t_node.as.table_access.table].as.ident.length);
                     }
-                    
+
                     if (!t_name.empty() && CodeEmitter::g_pure_numeric_arrays.count(t_name)) {
                         out << "l_" << t_name << "[static_cast<size_t>(";
                         emit_native(emit_native, t_node.as.table_access.key);
@@ -2010,19 +2163,28 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                         if (yields_number(ctx, k_idx, nullptr, CodeEmitter::g_current_fast_func)) key_is_native = true;
 
                         if (key_is_native) {
-                            out << "{ clx::LTable* _t = static_cast<clx::LTable*>(("; emit_node(t_node.as.table_access.table); out << ").as_pointer()); size_t _k = static_cast<size_t>("; emit_native(emit_native, k_idx); out << "); if (_k - 1 < _t->array_size) _t->array[_k - 1] = " << val_str << "; else clx::clx_table_set_int(L, clx::LValue(clx::LType::Table, _t), _k, " << val_str << "); }\n";
+                            out << "{ clx::LTable* _t = static_cast<clx::LTable*>(("; emit_node(t_node.as.table_access.table); out << ").as_pointer()); size_t _k = static_cast<size_t>("; emit_native(emit_native, k_idx); out << "); if (_k - 1 < _t->array_size) _t->array[_k - 1] = " << val_str << "; else clx::table_set_int(L, clx::LValue(clx::LType::Table, _t), _k, " << val_str << "); }\n";
                         } else {
                             uint32_t kt2 = t_node.as.table_access.key;
                             if (kt2 < ctx.nodes.size() && ctx.nodes[kt2].type == NodeType::String) {
-                                out << "{ static clx::CacheSlot __cs; clx::clx_table_set_cs(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << (std::distance(CodeEmitter::g_string_pool.begin(), std::find(CodeEmitter::g_string_pool.begin(), CodeEmitter::g_string_pool.end(), std::string_view(ctx.nodes[kt2].as.string.text, ctx.nodes[kt2].as.string.length)))) << "], " << val_str << ", &__cs); }\n";
+                                uint32_t tbl_idx = t_node.as.table_access.table;
+                                bool tbl_is_stable = tbl_idx < ctx.nodes.size() &&
+                                                     ctx.nodes[tbl_idx].type == NodeType::Identifier &&
+                                                     ctx.nodes[tbl_idx].as.ident.is_global;
+                                int _cs_i = (tbl_is_stable && CodeEmitter::g_cs_index < CodeEmitter::g_cs_max) ? CodeEmitter::g_cs_index++ : -1;
+                                if (_cs_i >= 0) {
+                                    out << "clx::table_set_cs(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << (std::distance(CodeEmitter::g_string_pool.begin(), std::find(CodeEmitter::g_string_pool.begin(), CodeEmitter::g_string_pool.end(), std::string_view(ctx.nodes[kt2].as.string.text, ctx.nodes[kt2].as.string.length)))) << "], " << val_str << ", &__cs[" << _cs_i << "]);\n";
+                                } else {
+                                    out << "clx::table_set(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << (std::distance(CodeEmitter::g_string_pool.begin(), std::find(CodeEmitter::g_string_pool.begin(), CodeEmitter::g_string_pool.end(), std::string_view(ctx.nodes[kt2].as.string.text, ctx.nodes[kt2].as.string.length)))) << "], " << val_str << ");\n";
+                                }
                             } else {
-                                out << "clx::clx_table_set(L, "; emit_node(t_node.as.table_access.table); out << ", "; emit_node(t_node.as.table_access.key); out << ", " << val_str << ");\n";
+                                out << "clx::table_set(L, "; emit_node(t_node.as.table_access.table); out << ", "; emit_node(t_node.as.table_access.key); out << ", " << val_str << ");\n";
                             }
                         }
                     }
                 }
             }
-            
+
             if (is_local) {
                 for (size_t i = 0; i < t_count; ++i) {
                     uint32_t t_idx = ctx.block_statements[first_t + i];
@@ -2042,7 +2204,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
             }
             break;
         }
-            
+
         //------------------ NodeType::DoStatement: emits a do-end block
         case NodeType::DoStatement: {
             out << "#line " << node.line << " \"" << ctx.filename << "\"\n";
@@ -2054,7 +2216,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
         //------------------ NodeType::UnaryOp: emits a unary operation
         case NodeType::UnaryOp:
             if (node.as.unary_op.op == static_cast<int>(UnaryOp::Len)) {
-                
+
                 std::string_view _len_tname;
                 if (ctx.nodes[node.as.unary_op.expr].type == NodeType::Identifier) {
                     _len_tname = std::string_view(ctx.nodes[node.as.unary_op.expr].as.ident.name, ctx.nodes[node.as.unary_op.expr].as.ident.length);
@@ -2062,10 +2224,10 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                 if (!_len_tname.empty() && CodeEmitter::g_pure_numeric_arrays.count(_len_tname)) {
                     out << "clx::LValue(static_cast<int64_t>(l_" << _len_tname << ".size()))";
                 } else {
-                    out << "clx::clx_len(L, "; emit_node(node.as.unary_op.expr); out << ")";
+                    out << "clx::len(L, "; emit_node(node.as.unary_op.expr); out << ")";
                 }
             }
-            if (node.as.unary_op.op == static_cast<int>(UnaryOp::Minus)) { 
+            if (node.as.unary_op.op == static_cast<int>(UnaryOp::Minus)) {
                 if (yields_number(ctx, node.as.unary_op.expr, nullptr, CodeEmitter::g_current_fast_func)) {
                     if (ctx.nodes[node.as.unary_op.expr].type == NodeType::Integer) {
                         int64_t iv = ctx.nodes[node.as.unary_op.expr].as.integer.val;
@@ -2074,11 +2236,11 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                         out << "clx::LValue(static_cast<double>(-("; emit_native(emit_native, node.as.unary_op.expr); out << ")))";
                     }
                 } else {
-                    out << "clx::clx_unm(L, "; emit_node(node.as.unary_op.expr); out << ")";
+                    out << "clx::unm(L, "; emit_node(node.as.unary_op.expr); out << ")";
                 }
             }
-            if (node.as.unary_op.op == static_cast<int>(UnaryOp::BNot)) { out << "clx::clx_bnot(L, "; emit_node(node.as.unary_op.expr); out << ")"; }
-            if (node.as.unary_op.op == static_cast<int>(UnaryOp::Not)) { out << "clx::clx_not("; emit_node(node.as.unary_op.expr); out << ")";  }
+            if (node.as.unary_op.op == static_cast<int>(UnaryOp::BNot)) { out << "clx::bnot(L, "; emit_node(node.as.unary_op.expr); out << ")"; }
+            if (node.as.unary_op.op == static_cast<int>(UnaryOp::Not)) { out << "clx::logical_not("; emit_node(node.as.unary_op.expr); out << ")";  }
             break;
 
         //------------------ NodeType::BinaryOp: emits a binary operation
@@ -2102,9 +2264,9 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                  }
             }
 
-            if (op == static_cast<int>(BinaryOp::Mod)) { out << "clx::clx_mod(L, "; emit_node(node.as.bin_op.left); out << ", "; emit_node(node.as.bin_op.right); out << ")"; break; }
-            if (op == static_cast<int>(BinaryOp::FloorDiv)) { out << "clx::clx_idiv(L, "; emit_node(node.as.bin_op.left); out << ", "; emit_node(node.as.bin_op.right); out << ")"; break; }
-            if (op == static_cast<int>(BinaryOp::Pow)) { out << "clx::clx_pow(L, "; emit_node(node.as.bin_op.left); out << ", "; emit_node(node.as.bin_op.right); out << ")"; break; }
+            if (op == static_cast<int>(BinaryOp::Mod)) { out << "clx::mod(L, "; emit_node(node.as.bin_op.left); out << ", "; emit_node(node.as.bin_op.right); out << ")"; break; }
+            if (op == static_cast<int>(BinaryOp::FloorDiv)) { out << "clx::idiv(L, "; emit_node(node.as.bin_op.left); out << ", "; emit_node(node.as.bin_op.right); out << ")"; break; }
+            if (op == static_cast<int>(BinaryOp::Pow)) { out << "clx::pow(L, "; emit_node(node.as.bin_op.left); out << ", "; emit_node(node.as.bin_op.right); out << ")"; break; }
             if (op == static_cast<int>(BinaryOp::Concat)) {
                 std::vector<uint32_t> operands;
                 auto collect = [&](auto& self, uint32_t n_idx) -> void {
@@ -2120,15 +2282,15 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                 };
                 collect(collect, node_idx);
 
-                
-                
+
+
                 bool fast_concat = !operands.empty();
                 size_t total_str_len = 0;
                 for (auto op : operands) {
                     if (ctx.nodes[op].type == NodeType::String) {
                         total_str_len += ctx.nodes[op].as.string.length;
                     } else if (yields_number(ctx, op, nullptr, CodeEmitter::g_current_fast_func)) {
-                        total_str_len += 32;  
+                        total_str_len += 32;
                     } else {
                         fast_concat = false;
                         break;
@@ -2154,40 +2316,40 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                         if (i < operands.size() - 1) out << ", ";
                     }
                     out << "};\n";
-                    out << "    return clx::clx_concat_multi(L, args, " << operands.size() << ");\n";
+                    out << "    return clx::concat_multi(L, args, " << operands.size() << ");\n";
                     out << "}())";
                 }
                 break;
             }
-            if (op == static_cast<int>(BinaryOp::And)) { 
+            if (op == static_cast<int>(BinaryOp::And)) {
                 out << "([&](){ clx::LValue _a = "; emit_node(node.as.bin_op.left);
                 out << "; return _a.as_bool() ? ("; emit_node(node.as.bin_op.right);
-                out << ") : _a; }())"; 
-                break; 
+                out << ") : _a; }())";
+                break;
             }
-            if (op == static_cast<int>(BinaryOp::Or)) { 
+            if (op == static_cast<int>(BinaryOp::Or)) {
                 out << "([&](){ clx::LValue _a = "; emit_node(node.as.bin_op.left);
                 out << "; return _a.as_bool() ? _a : ("; emit_node(node.as.bin_op.right);
-                out << "); }())"; 
-                break; 
+                out << "); }())";
+                break;
             }
 
-            if (op == static_cast<int>(BinaryOp::BitAnd)) { out << "clx::clx_band(L, "; emit_node(node.as.bin_op.left); out << ", "; emit_node(node.as.bin_op.right); out << ")"; break; }
-            if (op == static_cast<int>(BinaryOp::BitOr)) { out << "clx::clx_bor(L, "; emit_node(node.as.bin_op.left); out << ", "; emit_node(node.as.bin_op.right); out << ")"; break; }
-            if (op == static_cast<int>(BinaryOp::BitXor)) { out << "clx::clx_bxor(L, "; emit_node(node.as.bin_op.left); out << ", "; emit_node(node.as.bin_op.right); out << ")"; break; }
-            if (op == static_cast<int>(BinaryOp::Shl)) { out << "clx::clx_shl(L, "; emit_node(node.as.bin_op.left); out << ", "; emit_node(node.as.bin_op.right); out << ")"; break; }
-            if (op == static_cast<int>(BinaryOp::Shr)) { out << "clx::clx_shr(L, "; emit_node(node.as.bin_op.left); out << ", "; emit_node(node.as.bin_op.right); out << ")"; break; }
+            if (op == static_cast<int>(BinaryOp::BitAnd)) { out << "clx::band(L, "; emit_node(node.as.bin_op.left); out << ", "; emit_node(node.as.bin_op.right); out << ")"; break; }
+            if (op == static_cast<int>(BinaryOp::BitOr)) { out << "clx::bor(L, "; emit_node(node.as.bin_op.left); out << ", "; emit_node(node.as.bin_op.right); out << ")"; break; }
+            if (op == static_cast<int>(BinaryOp::BitXor)) { out << "clx::bxor(L, "; emit_node(node.as.bin_op.left); out << ", "; emit_node(node.as.bin_op.right); out << ")"; break; }
+            if (op == static_cast<int>(BinaryOp::Shl)) { out << "clx::shl(L, "; emit_node(node.as.bin_op.left); out << ", "; emit_node(node.as.bin_op.right); out << ")"; break; }
+            if (op == static_cast<int>(BinaryOp::Shr)) { out << "clx::shr(L, "; emit_node(node.as.bin_op.left); out << ", "; emit_node(node.as.bin_op.right); out << ")"; break; }
 
             if (op >= static_cast<int>(BinaryOp::Add) && op <= static_cast<int>(BinaryOp::Div)) {
                 static const char* fn[] = {"", "add", "sub", "mul", "div"};
-                out << "clx::clx_" << fn[op] << "(L, "; emit_node(node.as.bin_op.left); out << ", "; emit_node(node.as.bin_op.right); out << ")";
+                out << "clx::" << fn[op] << "(L, "; emit_node(node.as.bin_op.left); out << ", "; emit_node(node.as.bin_op.right); out << ")";
                 break;
             }
 
             if (op >= static_cast<int>(BinaryOp::Eq) && op <= static_cast<int>(BinaryOp::Ne)) {
                 static const char* fn[] = {"", "", "", "", "", "eq", "lt", "lt", "le", "le", "eq"};
                 if (op == static_cast<int>(BinaryOp::Ne)) out << "clx::LValue(!(";
-                out << "clx::clx_" << fn[op] << "(L, ";
+                out << "clx::" << fn[op] << "(L, ";
                 if (op == static_cast<int>(BinaryOp::Gt) || op == static_cast<int>(BinaryOp::Ge)) { emit_node(node.as.bin_op.right); out << ", "; emit_node(node.as.bin_op.left); }
                 else { emit_node(node.as.bin_op.left); out << ", "; emit_node(node.as.bin_op.right); }
                 out << ")";
@@ -2201,7 +2363,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                 out << ")";
             }
             break;
-        }           
+        }
         //------------------ NodeType::TrueLiteral: emits a true literal
         case NodeType::TrueLiteral:  out << "clx::LValue(true)"; break;
         //------------------ NodeType::FalseLiteral: emits a false literal
@@ -2218,14 +2380,14 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
         case NodeType::Integer:
             out << "clx::integer(static_cast<int64_t>(" << node.as.integer.val << "))";
             break;
-            
+
         //------------------ NodeType::Identifier: emits a variable reference
         case NodeType::Identifier: {
             std::string_view name(node.as.ident.name, node.as.ident.length);
             bool is_native = std::find(CodeEmitter::g_native_numbers.begin(), CodeEmitter::g_native_numbers.end(), name) != CodeEmitter::g_native_numbers.end();
             bool is_boxed = false;
             bool is_loc = this->is_local(name, is_boxed);
-            
+
             if (node.as.ident.is_global) {
                 if (CodeEmitter::g_global_constants.count(name)) {
                     out << "clx::LValue(static_cast<double>(" << CodeEmitter::g_global_constants[name] << "))";
@@ -2252,7 +2414,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
             }
             break;
         }
-            
+
         //------------------ NodeType::String: emits a string literal
         case NodeType::String: {
             std::string_view s(node.as.string.text, node.as.string.length);
@@ -2260,7 +2422,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
             out << "cstr_[" << idx << "]";
             break;
         }
-        
+
         //------------------ NodeType::IfStatement: emits an if-then-else statement
         case NodeType::IfStatement:
             out << "#line " << node.line << " \"" << ctx.filename << "\"\n";
@@ -2273,7 +2435,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                 emit_node(node.as.if_stmt.else_block);
             }
             break;
-            
+
         //------------------ NodeType::WhileStatement: emits a while loop
         case NodeType::WhileStatement:
             out << "#line " << node.line << " \"" << ctx.filename << "\"\n";
@@ -2296,14 +2458,14 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
         //------------------ NodeType::ForStatement: emits a numeric for loop
         case NodeType::ForStatement: {
             out << "#line " << node.line << " \"" << ctx.filename << "\"\n";
-            
+
             bool native_for = yields_number(ctx, node.as.for_stmt.start_expr, nullptr, CodeEmitter::g_current_fast_func) &&
                               yields_number(ctx, node.as.for_stmt.limit_expr, nullptr, CodeEmitter::g_current_fast_func) &&
                               (node.as.for_stmt.step_expr == 0xFFFFFFFF || yields_number(ctx, node.as.for_stmt.step_expr, nullptr, CodeEmitter::g_current_fast_func));
-            
+
             out << "{\n";
             if (!native_for) out << "clx::ScopeGuard _sg_for_" << node_idx << "(L);\n";
-            
+
             if (native_for) {
                 out << "double s_" << node_idx << " = "; emit_native(emit_native, node.as.for_stmt.start_expr); out << ";\n";
                 out << "double l_" << node_idx << " = "; emit_native(emit_native, node.as.for_stmt.limit_expr); out << ";\n";
@@ -2317,14 +2479,14 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                 out << "L->shadow_stack[L->shadow_top++] = &start_" << node_idx << ";\n";
                 out << "clx::LValue limit_" << node_idx << " = "; emit_node(node.as.for_stmt.limit_expr); out << ";\n";
                 out << "L->shadow_stack[L->shadow_top++] = &limit_" << node_idx << ";\n";
-                
+
                 if (node.as.for_stmt.step_expr != 0xFFFFFFFF) {
                     out << "clx::LValue step_" << node_idx << " = "; emit_node(node.as.for_stmt.step_expr); out << ";\n";
                 } else {
                     out << "clx::LValue step_" << node_idx << " = clx::LValue(static_cast<double>(1.0));\n";
                 }
                 out << "L->shadow_stack[L->shadow_top++] = &step_" << node_idx << ";\n";
-                
+
                 out << "double s_" << node_idx << ", l_" << node_idx << ", st_" << node_idx << ";\n";
                 out << "if (!start_" << node_idx << ".to_number(s_" << node_idx << ") || !limit_" << node_idx << ".to_number(l_" << node_idx << ") || !step_" << node_idx << ".to_number(st_" << node_idx << ")) {\n";
                 out << "std::cerr << \"Error: " << ctx.filename << ":" << node.line << ": 'for' initial values must be numeric\\n\"; std::exit(1);\n}\n";
@@ -2334,7 +2496,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
             bool is_cap = ctx.nodes[node.as.for_stmt.var_ident].as.ident.is_captured;
             bool is_n = !is_cap;
 
-            
+
             bool step_is_default = (node.as.for_stmt.step_expr == 0xFFFFFFFF);
             bool step_known_positive = step_is_default;
             bool step_known_negative = false;
@@ -2358,7 +2520,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                 ctx.nodes[node.as.for_stmt.start_expr].type == NodeType::Integer &&
                 (step_is_default || (ctx.nodes[node.as.for_stmt.step_expr].type == NodeType::Integer && step_int_val == 1));
 
-            
+
             auto _saved_hoisted = std::move(CodeEmitter::g_hoisted_lookups);
             auto _saved_hoisted_cf = std::move(CodeEmitter::g_hoisted_cfuncs);
             CodeEmitter::g_hoisted_lookups.clear();
@@ -2422,23 +2584,31 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                     self(self, bn.as.paren_expr.expr);
                 } else if (bn.type == NodeType::TableConstructor) {
                     for (uint32_t bi = 0; bi < bn.as.table_cons.count; ++bi) {
-                        self(self, ctx.block_statements[bn.as.table_cons.first_item + bi * 2]);     
-                        self(self, ctx.block_statements[bn.as.table_cons.first_item + bi * 2 + 1]); 
+                        self(self, ctx.block_statements[bn.as.table_cons.first_item + bi * 2]);
+                        self(self, ctx.block_statements[bn.as.table_cons.first_item + bi * 2 + 1]);
                     }
                 } else if (bn.type == NodeType::FunctionDef) {
                     self(self, bn.as.func_def.body_block);
                 }
             };
             _find_invariant(_find_invariant, node.as.for_stmt.body_block);
-            
+
             std::sort(_invariant_lookups.begin(), _invariant_lookups.end());
             _invariant_lookups.erase(std::unique(_invariant_lookups.begin(), _invariant_lookups.end()), _invariant_lookups.end());
             for (uint32_t _h_node : _invariant_lookups) {
                 std::string _h_name = "_hoist_" + std::to_string(_h_node);
-                out << "clx::LValue " << _h_name << " = ([&](){ static clx::CacheSlot __cs; return clx::clx_table_get_cs(L, ";
-                emit_node(ctx.nodes[_h_node].as.table_access.table);
-                out << ", "; emit_node(ctx.nodes[_h_node].as.table_access.key);
-                out << ", &__cs); }());\n";
+                int _cs_i = (CodeEmitter::g_cs_index < CodeEmitter::g_cs_max) ? CodeEmitter::g_cs_index++ : -1;
+                if (_cs_i >= 0) {
+                    out << "clx::LValue " << _h_name << " = clx::table_get_cs(L, ";
+                    emit_node(ctx.nodes[_h_node].as.table_access.table);
+                    out << ", "; emit_node(ctx.nodes[_h_node].as.table_access.key);
+                    out << ", &__cs[" << _cs_i << "]);\n";
+                } else {
+                    out << "clx::LValue " << _h_name << " = clx::table_get(L, ";
+                    emit_node(ctx.nodes[_h_node].as.table_access.table);
+                    out << ", "; emit_node(ctx.nodes[_h_node].as.table_access.key);
+                    out << ");\n";
+                }
                 out << "L->shadow_stack[L->shadow_top++] = &" << _h_name << ";\n";
                 CodeEmitter::g_hoisted_lookups[_h_node] = _h_name;
                 uint32_t _ht = ctx.nodes[_h_node].as.table_access.table;
@@ -2447,26 +2617,9 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                     ctx.nodes[_ht].type == NodeType::Identifier && ctx.nodes[_hk].type == NodeType::String) {
                     std::string_view _hm(ctx.nodes[_ht].as.ident.name, ctx.nodes[_ht].as.ident.length);
                     std::string_view _hf(ctx.nodes[_hk].as.string.text, ctx.nodes[_hk].as.string.length);
-                    static const std::unordered_map<std::string_view, std::unordered_map<std::string_view, std::string>> _sfm = {
-                        {"string", {
-                            {"byte", "str_byte"}, {"sub", "str_sub"}, {"match", "str_match"},
-                            {"find", "str_find"}, {"gsub", "str_gsub"}, {"len", "str_len"},
-                            {"format", "str_format"}, {"char", "str_char"}, {"rep", "str_rep"},
-                            {"reverse", "str_reverse"}, {"lower", "str_lower"}, {"upper", "str_upper"},
-                            {"dump", "str_dump"}
-                        }},
-                        {"table", {
-                            {"concat", "table_concat"}, {"insert", "table_insert"},
-                            {"remove", "table_remove"}, {"sort", "table_sort"},
-                            {"pack", "table_pack"}, {"unpack", "table_unpack"}, {"move", "table_move"}
-                        }}
-                    };
-                    auto _smit = _sfm.find(_hm);
-                    if (_smit != _sfm.end()) {
-                        auto _sfit = _smit->second.find(_hf);
-                        if (_sfit != _smit->second.end())
-                            CodeEmitter::g_hoisted_cfuncs[_h_name] = _sfit->second;
-                    }
+                    const char* _cf = lookup_builtin(_hm, _hf);
+                    if (_cf)
+                        CodeEmitter::g_hoisted_cfuncs[_h_name] = _cf;
                 }
             }
 
@@ -2474,7 +2627,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                 if (is_cap || !is_n) {
                     out << "clx::ScopeGuard _sg_iter(L);\n";
                 }
-                
+
                 if (is_cap) {
                     out << "clx::LUpValue l_" << var_name << ";\n";
                     out << "l_" << var_name << " = clx::make_upvalue(clx::LValue(i_val));\n";
@@ -2491,7 +2644,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                 } else {
                     out << "const clx::LValue l_" << var_name << "( (i_val == static_cast<int64_t>(i_val)) ? clx::LValue(static_cast<int64_t>(i_val)) : clx::LValue(i_val) );\n";
                 }
-                
+
                 size_t prev_locals = locals.size();
                 locals.push_back({var_name, is_cap});
                 if (node.as.for_stmt.body_block != 0xFFFFFFFF) {
@@ -2573,9 +2726,9 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
         case NodeType::GenericForStatement: {
             out << "#line " << node.line << " \"" << ctx.filename << "\"\n";
             const auto& loop = node.as.generic_for;
-            
+
             out << "{\n    clx::ScopeGuard _sg_gen_for_" << node_idx << "(L);\n";
-            
+
             out << "    clx::MultiValue _triplet_" << node_idx << ";\n";
             if (loop.iter_count > 0 && ctx.nodes[ctx.block_statements[loop.first_iter]].type == NodeType::CallExpression) {
                 uint32_t iter_node = ctx.block_statements[loop.first_iter];
@@ -2587,7 +2740,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                     fname = std::string_view(ctx.nodes[tgt].as.ident.name, ctx.nodes[tgt].as.ident.length);
                     if (CodeEmitter::g_direct_callables.count(fname)) is_direct = true;
                 }
-                
+
                 out << "    {\n";
                 if (call_node.as.call_expr.arg_count > 0) {
                     out << "        clx::LValue args_" << iter_node << "[] = {";
@@ -2597,7 +2750,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
                     }
                     out << "};\n";
                 }
-                
+
                 if (is_direct) {
                     out << "        _triplet_" << node_idx << " = _impl_" << fname << "(L, " << (call_node.as.call_expr.arg_count > 0 ? "args_" + std::to_string(iter_node) : "nullptr") << ", " << call_node.as.call_expr.arg_count << ");\n";
                 } else {
@@ -2620,7 +2773,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
             } else {
                 out << "    _triplet_" << node_idx << " = clx::MultiValue();\n";
             }
-            
+
             out << "    clx::LValue _f_" << node_idx << " = (_triplet_" << node_idx << ".count > 0) ? _triplet_" << node_idx << "[0] : clx::LValue();\n";
             out << "    clx::LValue _s_" << node_idx << " = (_triplet_" << node_idx << ".count > 1) ? _triplet_" << node_idx << "[1] : clx::LValue();\n";
             out << "    clx::LValue _var_" << node_idx << " = (_triplet_" << node_idx << ".count > 2) ? _triplet_" << node_idx << "[2] : clx::LValue();\n";
@@ -2629,7 +2782,7 @@ void CodeEmitter::emit_node(uint32_t node_idx) {
             out << "        clx::LValue _args_" << node_idx << "[] = { _s_" << node_idx << ", _var_" << node_idx << " };\n";
             out << "        clx::LCFunction* _lcf_" << node_idx << " = static_cast<clx::LCFunction*>(_f_" << node_idx << ".as_pointer());\n";
 out << "        clx::MultiValue _res_" << node_idx << " = _lcf_" << node_idx << "->direct ? _lcf_" << node_idx << "->direct(L, _args_" << node_idx << ", 2) : _lcf_" << node_idx << "->func(L, _args_" << node_idx << ", 2);\n";
-            
+
             out << "        _var_" << node_idx << " = (_res_" << node_idx << ".count > 0) ? _res_" << node_idx << "[0] : clx::LValue();\n";
             out << "        if (_var_" << node_idx << ".type() == clx::LType::Nil) break;\n";
 
@@ -2644,7 +2797,7 @@ out << "        clx::MultiValue _res_" << node_idx << " = _lcf_" << node_idx << 
                     CodeEmitter::g_native_numbers.end()
                 );
                 CodeEmitter::g_native_integers.erase(v_name);
-                
+
                 if (is_cap) {
                     out << "        clx::LUpValue l_" << v_name << ";\n";
                     out << "        l_" << v_name << " = clx::make_upvalue((_res_" << node_idx << ".count > " << i << ") ? _res_" << node_idx << "[" << i << "] : clx::LValue());\n";
@@ -2657,7 +2810,7 @@ out << "        clx::MultiValue _res_" << node_idx << " = _lcf_" << node_idx << 
             }
 
             if (loop.body_block != 0xFFFFFFFF) emit_node(loop.body_block);
-            
+
             locals.resize(prev_locals);
             out << "    }\n}\n";
             break;
@@ -2713,9 +2866,9 @@ out << "        clx::MultiValue _res_" << node_idx << " = _lcf_" << node_idx << 
                     out << "}\n";
                 } else {
                     out << "static_cast<clx::LTable*>(_t.as_pointer())->settable(";
-                    if (k == 0xFFFFFFFF) { 
+                    if (k == 0xFFFFFFFF) {
                         out << "clx::LValue(static_cast<double>(" << (_has_va ? "_ai++" : std::to_string(array_index++)) << "))";
-                    } else { 
+                    } else {
                         emit_node(k);
                     }
                     out << ", ";
@@ -2771,22 +2924,31 @@ out << "        clx::MultiValue _res_" << node_idx << " = _lcf_" << node_idx << 
                         for (size_t _i = 0; _i < _cks.size() - 1; ++_i) {
                             out << " size_t _k" << _i << " = static_cast<size_t>(";
                             emit_native(emit_native, _cks[_i]); out << ");";
-                            out << " clx::LValue _v" << _i << " = (_k" << _i << " - 1 < _tc->array_size) ? _tc->array[_k" << _i << " - 1] : clx::clx_table_get_int(L, clx::LValue(clx::LType::Table, _tc), _k" << _i << ");";
+                            out << " clx::LValue _v" << _i << " = (_k" << _i << " - 1 < _tc->array_size) ? _tc->array[_k" << _i << " - 1] : clx::table_get_int(L, clx::LValue(clx::LType::Table, _tc), _k" << _i << ");";
                             out << " _tc = static_cast<clx::LTable*>(_v" << _i << ".as_pointer());";
                         }
                         size_t _last = _cks.size() - 1;
                         out << " size_t _k" << _last << " = static_cast<size_t>(";
                         emit_native(emit_native, _cks[_last]); out << ");";
-                        out << " return (_k" << _last << " - 1 < _tc->array_size) ? _tc->array[_k" << _last << " - 1] : clx::clx_table_get_int(L, clx::LValue(clx::LType::Table, _tc), _k" << _last << "); }())";
+                        out << " return (_k" << _last << " - 1 < _tc->array_size) ? _tc->array[_k" << _last << " - 1] : clx::table_get_int(L, clx::LValue(clx::LType::Table, _tc), _k" << _last << "); }())";
                     } else {
-                        out << "([&](){ clx::LTable* _t = static_cast<clx::LTable*>(("; emit_node(node.as.table_access.table); out << ").as_pointer()); size_t _k = static_cast<size_t>("; emit_native(emit_native, k_idx); out << "); return (_k - 1 < _t->array_size) ? _t->array[_k - 1] : clx::clx_table_get_int(L, clx::LValue(clx::LType::Table, _t), _k); }())";
+                        out << "([&](){ clx::LTable* _t = static_cast<clx::LTable*>(("; emit_node(node.as.table_access.table); out << ").as_pointer()); size_t _k = static_cast<size_t>("; emit_native(emit_native, k_idx); out << "); return (_k - 1 < _t->array_size) ? _t->array[_k - 1] : clx::table_get_int(L, clx::LValue(clx::LType::Table, _t), _k); }())";
                     }
                 } else {
                     uint32_t kt = node.as.table_access.key;
                     if (kt < ctx.nodes.size() && ctx.nodes[kt].type == NodeType::String) {
-                        out << "([&](){ static clx::CacheSlot __cs; return clx::clx_table_get_cs(L, "; emit_node(node.as.table_access.table); out << ", cstr_[" << (std::distance(CodeEmitter::g_string_pool.begin(), std::find(CodeEmitter::g_string_pool.begin(), CodeEmitter::g_string_pool.end(), std::string_view(ctx.nodes[kt].as.string.text, ctx.nodes[kt].as.string.length)))) << "], &__cs); }())";
+                        uint32_t tbl_idx = node.as.table_access.table;
+                        bool tbl_is_stable = tbl_idx < ctx.nodes.size() &&
+                                             ctx.nodes[tbl_idx].type == NodeType::Identifier &&
+                                             ctx.nodes[tbl_idx].as.ident.is_global;
+                        int _cs_i = (tbl_is_stable && CodeEmitter::g_cs_index < CodeEmitter::g_cs_max) ? CodeEmitter::g_cs_index++ : -1;
+                        if (_cs_i >= 0) {
+                            out << "clx::table_get_cs(L, "; emit_node(node.as.table_access.table); out << ", cstr_[" << (std::distance(CodeEmitter::g_string_pool.begin(), std::find(CodeEmitter::g_string_pool.begin(), CodeEmitter::g_string_pool.end(), std::string_view(ctx.nodes[kt].as.string.text, ctx.nodes[kt].as.string.length)))) << "], &__cs[" << _cs_i << "])";
+                        } else {
+                            out << "clx::table_get(L, "; emit_node(node.as.table_access.table); out << ", cstr_[" << (std::distance(CodeEmitter::g_string_pool.begin(), std::find(CodeEmitter::g_string_pool.begin(), CodeEmitter::g_string_pool.end(), std::string_view(ctx.nodes[kt].as.string.text, ctx.nodes[kt].as.string.length)))) << "])";
+                        }
                     } else {
-                        out << "clx::clx_table_get(L, "; emit_node(node.as.table_access.table); out << ", "; emit_node(node.as.table_access.key); out << ")";
+                        out << "clx::table_get(L, "; emit_node(node.as.table_access.table); out << ", "; emit_node(node.as.table_access.key); out << ")";
                     }
                 }
             }

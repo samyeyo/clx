@@ -52,10 +52,6 @@ enum class BinaryOp : int { Add=1, Sub=2, Mul=3, Div=4, Eq=5, Lt=6, Gt=7, Le=8, 
 //------------------ UnaryOp: unary operator codes
 enum class UnaryOp : int { Len=1, Minus=2, BNot=3, Not=4 };
 
-//------------------ Intrinsic: builtin math/string function identifiers for fast dispatch
-enum class Intrinsic : int { Sin, Cos, Floor, Ceil, Abs, Sqrt, FMod, TypeFn, ToStringFn, Log, Exp, Tan, ATan, ASin, ACos, SinH, CosH, TanH, ATan2, PowFn, Deg, Rad };
-
-
 //------------------ ASTNode: tagged union node in the arena-allocated AST
 struct ASTNode {
     //------------------ type: discriminator for the active union variant
@@ -105,8 +101,8 @@ struct ASTNode {
         struct { uint32_t first_value; uint32_t value_count; } return_stmt;
         //------------------ unary_op: unary operation
         struct { uint32_t expr; int op; } unary_op;
-        //------------------ intrinsic_call: call to an intrinsic builtin function
-        struct { int func; uint32_t first_arg; uint32_t arg_count; } intrinsic_call;
+        //------------------ intrinsic_call: call to an intrinsic function (cname = C++ name, e.g. "std::sin" or "__clx_type")
+        struct { const char* cname; uint32_t first_arg; uint32_t arg_count; } intrinsic_call;
         //------------------ paren_expr: parenthesized expression
         struct { uint32_t expr; } paren_expr;
         //------------------ label_stmt: label for goto

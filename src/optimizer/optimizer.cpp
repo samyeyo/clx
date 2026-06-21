@@ -219,7 +219,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
     std::map<std::string_view, uint32_t> root_lbls;
     resolve_labels(resolve_labels, root_node, root_lbls);
 
-    
+
     CodeEmitter::g_reassigned_vars.clear();
     std::map<std::string_view, uint32_t> var_assign_counts;
     for (const auto& node : ctx.nodes) {
@@ -264,7 +264,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
         }
     }
 
-    
+
     if (root_node < ctx.nodes.size() && ctx.nodes[root_node].type == NodeType::Block) {
         const ASTNode& root_block = ctx.nodes[root_node];
         for (uint32_t i = 0; i < root_block.as.block.count; ++i) {
@@ -297,7 +297,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
         }
     }
 
-    
+
     for (const auto& node : ctx.nodes) {
         if (node.type == NodeType::Block) {
             std::map<uint32_t, uint32_t> pending_tables;
@@ -383,7 +383,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
         }
     }
 
-    
+
     std::vector<std::pair<std::string_view, uint32_t>> func_defs;
     for (const auto& node : ctx.nodes) {
         if (node.type == NodeType::LocalDecl || node.type == NodeType::GlobalDeclStatement) {
@@ -538,7 +538,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
         }
     }
 
-    
+
     bool changed;
     int safety_limit = 100;
     do {
@@ -688,7 +688,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
         }
     }
 
-    
+
     for (uint32_t i = 0; i < ctx.nodes.size(); ++i) {
         if (ctx.nodes[i].type == NodeType::TableAccess) {
             std::string t_str = get_ast_string(ctx, ctx.nodes[i].as.table_access.table);
@@ -724,7 +724,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
         }
     }
 
-    
+
     for (const auto& node : ctx.nodes) {
         if (node.type == NodeType::String) {
             std::string_view s(node.as.string.text, node.as.string.length);
@@ -736,7 +736,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
         }
     }
 
-    
+
     CodeEmitter::g_pure_numeric_arrays.clear();
     std::set<std::string_view> pure_candidates;
     std::set<std::string_view> disqualified_arrays;
@@ -778,15 +778,15 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                     uint32_t tb_idx = ctx.nodes[t_idx].as.table_access.table;
                     if (ctx.nodes[tb_idx].type == NodeType::Identifier) {
                         std::string_view tname(ctx.nodes[tb_idx].as.ident.name, ctx.nodes[tb_idx].as.ident.length);
-                        
+
                         uint32_t k_idx = ctx.nodes[t_idx].as.table_access.key;
                         bool key_ok = yields_number(ctx, k_idx, &known_numbers);
-                        
-                        
-                        
+
+
+
                         if (!key_ok) {
-                            
-                            
+
+
                             std::unordered_set<uint32_t> _opt_visited;
                             auto key_depends_on_self = [&](auto& self, uint32_t nid) -> bool {
                                 if (nid >= ctx.nodes.size() || _opt_visited.count(nid)) return false;
@@ -799,7 +799,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                                         return true;
                                 }
                                 if (nn.type == NodeType::Identifier) {
-                                    
+
                                     std::string_view vn(nn.as.ident.name, nn.as.ident.length);
                                     for (const auto& nd : ctx.nodes) {
                                         if (nd.type != NodeType::Assignment) continue;
@@ -902,9 +902,9 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
         }
     }
 
-    
-    
-    
+
+
+
     CodeEmitter::g_numeric_table_fields.clear();
     for (const auto& node : ctx.nodes) {
         if (node.type != NodeType::LocalDecl) continue;
@@ -917,7 +917,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
         const auto& tc = ctx.nodes[val_idx].as.table_cons;
         if (tc.count == 0) continue;
 
-        
+
         std::map<std::string_view, bool> field_numeric;
         std::set<std::string_view> all_fields;
         bool first = true;
@@ -935,8 +935,8 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                 entry_fields.insert(fname);
                 bool is_num = yields_number(ctx, fv, nullptr);
                 if (!is_num && ctx.nodes[fv].type == NodeType::Identifier) {
-                    
-                    
+
+
                     std::string_view vname(ctx.nodes[fv].as.ident.name, ctx.nodes[fv].as.ident.length);
                     for (const auto& nd : ctx.nodes) {
                         if (nd.type != NodeType::LocalDecl) continue;
@@ -971,7 +971,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
             }
             if (!numeric_fields.empty()) {
                 CodeEmitter::g_numeric_table_fields[nm] = numeric_fields;
-                
+
                 for (auto& fld : numeric_fields) {
                     if (std::find(CodeEmitter::g_string_pool.begin(), CodeEmitter::g_string_pool.end(), fld) == CodeEmitter::g_string_pool.end())
                         CodeEmitter::g_string_pool.push_back(fld);
@@ -980,9 +980,9 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
         }
     }
 
-    
-    
-    
+
+
+
     {
         int safety2 = 100;
         bool changed2;
@@ -1032,7 +1032,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
         } while (changed2);
     }
 
-    
+
     CodeEmitter::g_native_numbers.clear();
     for (auto name : known_numbers) {
         if (disqualified.find(name) == disqualified.end()) {

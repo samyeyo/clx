@@ -15,6 +15,7 @@
 #include <map>
 #include <vector>
 #include <algorithm>
+#include <cstring>
 #include <string_view>
 
 namespace clx {
@@ -51,26 +52,26 @@ inline bool yields_number(const ASTContext& ctx, uint32_t node_idx,
         { result = true; goto done; }
 
     if (n.type == NodeType::IntrinsicCall)
-        { result = n.as.intrinsic_call.func <= static_cast<int>(Intrinsic::FMod); goto done; }
+        { result = strcmp(n.as.intrinsic_call.cname, "__clx_type") != 0 && strcmp(n.as.intrinsic_call.cname, "__clx_tostring") != 0; goto done; }
 
     if (n.type == NodeType::ParenExpression)
         { result = yields_number(ctx, n.as.paren_expr.expr, known_numbers, self_name, param_numbers, depth); goto done; }
 
-    if (n.type == NodeType::UnaryOp && n.as.unary_op.op == static_cast<int>(UnaryOp::Len))  
+    if (n.type == NodeType::UnaryOp && n.as.unary_op.op == static_cast<int>(UnaryOp::Len))
         { result = true; goto done; }
-    if (n.type == NodeType::UnaryOp && n.as.unary_op.op == static_cast<int>(UnaryOp::Minus))  
+    if (n.type == NodeType::UnaryOp && n.as.unary_op.op == static_cast<int>(UnaryOp::Minus))
         { result = yields_number(ctx, n.as.unary_op.expr, known_numbers, self_name, param_numbers, depth); goto done; }
 
     if (n.type == NodeType::BinaryOp) {
         int op = n.as.bin_op.op;
-        
+
         if ((op >= static_cast<int>(BinaryOp::Add) && op <= static_cast<int>(BinaryOp::Div)) || (op >= static_cast<int>(BinaryOp::Mod) && op <= static_cast<int>(BinaryOp::Shr))) {
             result = yields_number(ctx, n.as.bin_op.left,  known_numbers, self_name, param_numbers, depth) &&
                      yields_number(ctx, n.as.bin_op.right, known_numbers, self_name, param_numbers, depth);
             goto done;
         }
-        
-        
+
+
         if (op == static_cast<int>(BinaryOp::Or) && yields_number(ctx, n.as.bin_op.right, known_numbers, self_name, param_numbers, depth)) {
             uint32_t left = n.as.bin_op.left;
             if (ctx.nodes[left].type == NodeType::CallExpression ||
@@ -83,19 +84,19 @@ inline bool yields_number(const ASTContext& ctx, uint32_t node_idx,
     if (n.type == NodeType::TableAccess) {
         uint32_t tbl_idx = n.as.table_access.table;
 
-        
+
         if (tbl_idx < ctx.nodes.size() && ctx.nodes[tbl_idx].type == NodeType::Identifier) {
             std::string_view tn(ctx.nodes[tbl_idx].as.ident.name, ctx.nodes[tbl_idx].as.ident.length);
             if (CodeEmitter::g_pure_numeric_arrays.count(tn)) {
-                
+
                 result = yields_number(ctx, n.as.table_access.key, known_numbers, self_name, param_numbers, depth);
                 goto done;
             }
 
-            
+
             auto it = CodeEmitter::g_numeric_table_fields.find(tn);
             if (it == CodeEmitter::g_numeric_table_fields.end()) {
-                
+
                 for (const auto& nd : ctx.nodes) {
                     if (nd.type != NodeType::LocalDecl) continue;
                     for (uint32_t ii = 0; ii < nd.as.local_decl.ident_count; ++ii) {
@@ -130,7 +131,7 @@ inline bool yields_number(const ASTContext& ctx, uint32_t node_idx,
             }
         }
 
-        
+
         if (tbl_idx < ctx.nodes.size() && ctx.nodes[tbl_idx].type == NodeType::TableAccess) {
             const auto& inner_acc = ctx.nodes[tbl_idx].as.table_access;
             if (ctx.nodes[inner_acc.table].type == NodeType::Identifier) {
@@ -168,10 +169,10 @@ inline bool yields_number(const ASTContext& ctx, uint32_t node_idx,
             { result = true; goto done; }
         if (known_numbers  && known_numbers->count(name))  { result = true; goto done; }
         if (param_numbers  && param_numbers->count(name))  { result = true; goto done; }
-        
-        
-        
-        
+
+
+
+
     }
 
     result = false;

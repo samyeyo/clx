@@ -6,6 +6,7 @@
 // └─────────────────────────────────────────────┘
 
 #include "parser.h"
+#include "../codegen/codegen.h"
 #include <stdexcept>
 
 #define INVALID_NODE 0xFFFFFFFF
@@ -258,7 +259,7 @@ uint32_t Parser::parse_postfix_expression() {
             uint32_t first_arg = ctx.block_statements.size();
             for (uint32_t arg : args) ctx.block_statements.push_back(arg);
 
-            int intrinsic_id = -1;
+            const char* intrinsic_cname = nullptr;
             if (ctx.nodes[expr].type == NodeType::TableAccess) {
                 uint32_t t_idx = ctx.nodes[expr].as.table_access.table;
                 uint32_t k_idx = ctx.nodes[expr].as.table_access.key;
@@ -266,39 +267,30 @@ uint32_t Parser::parse_postfix_expression() {
                     std::string_view tname(ctx.nodes[t_idx].as.ident.name, ctx.nodes[t_idx].as.ident.length);
                     std::string_view kname(ctx.nodes[k_idx].as.string.text, ctx.nodes[k_idx].as.string.length);
                     if (tname == "math") {
-                        if (kname == "sin") intrinsic_id = static_cast<int>(Intrinsic::Sin);
-                        else if (kname == "cos") intrinsic_id = static_cast<int>(Intrinsic::Cos);
-                        else if (kname == "floor") intrinsic_id = static_cast<int>(Intrinsic::Floor);
-                        else if (kname == "ceil") intrinsic_id = static_cast<int>(Intrinsic::Ceil);
-                        else if (kname == "abs") intrinsic_id = static_cast<int>(Intrinsic::Abs);
-                        else if (kname == "sqrt") intrinsic_id = static_cast<int>(Intrinsic::Sqrt);
-                        else if (kname == "fmod") intrinsic_id = static_cast<int>(Intrinsic::FMod);
-                        else if (kname == "log") intrinsic_id = static_cast<int>(Intrinsic::Log);
-                        else if (kname == "exp") intrinsic_id = static_cast<int>(Intrinsic::Exp);
-                        else if (kname == "tan") intrinsic_id = static_cast<int>(Intrinsic::Tan);
-                        else if (kname == "atan") intrinsic_id = static_cast<int>(Intrinsic::ATan);
-                        else if (kname == "asin") intrinsic_id = static_cast<int>(Intrinsic::ASin);
-                        else if (kname == "acos") intrinsic_id = static_cast<int>(Intrinsic::ACos);
-                        else if (kname == "sinh") intrinsic_id = static_cast<int>(Intrinsic::SinH);
-                        else if (kname == "cosh") intrinsic_id = static_cast<int>(Intrinsic::CosH);
-                        else if (kname == "tanh") intrinsic_id = static_cast<int>(Intrinsic::TanH);
-                        else if (kname == "atan2") intrinsic_id = static_cast<int>(Intrinsic::ATan2);
-                        else if (kname == "pow") intrinsic_id = static_cast<int>(Intrinsic::PowFn);
-                        else if (kname == "deg") intrinsic_id = static_cast<int>(Intrinsic::Deg);
-                        else if (kname == "rad") intrinsic_id = static_cast<int>(Intrinsic::Rad);
+                        static const std::unordered_map<std::string_view, const char*> _m = {
+                            {"sin", "std::sin"}, {"cos", "std::cos"}, {"floor", "std::floor"},
+                            {"ceil", "std::ceil"}, {"abs", "std::abs"}, {"sqrt", "std::sqrt"},
+                            {"fmod", "std::fmod"}, {"log", "std::log"}, {"exp", "std::exp"},
+                            {"tan", "std::tan"}, {"atan", "std::atan"}, {"asin", "std::asin"},
+                            {"acos", "std::acos"}, {"sinh", "std::sinh"}, {"cosh", "std::cosh"},
+                            {"tanh", "std::tanh"}, {"atan2", "std::atan2"}, {"pow", "std::pow"},
+                            {"deg", "__clx_deg"}, {"rad", "__clx_rad"}
+                        };
+                        auto _mit = _m.find(kname);
+                        if (_mit != _m.end())
+                            intrinsic_cname = _mit->second;
                     }
                 }
             } else if (ctx.nodes[expr].type == NodeType::Identifier) {
                 std::string_view fname(ctx.nodes[expr].as.ident.name, ctx.nodes[expr].as.ident.length);
-                if (fname == "type") intrinsic_id = static_cast<int>(Intrinsic::TypeFn);
-                else if (fname == "tostring") intrinsic_id = static_cast<int>(Intrinsic::ToStringFn);
+                intrinsic_cname = lookup_builtin("_G", fname);
             }
 
             ASTNode node;
-            if (intrinsic_id != -1) {
+            if (intrinsic_cname) {
                 node.type = NodeType::IntrinsicCall;
                 node.line = line;
-                node.as.intrinsic_call.func = intrinsic_id;
+                node.as.intrinsic_call.cname = intrinsic_cname;
                 node.as.intrinsic_call.first_arg = first_arg;
                 node.as.intrinsic_call.arg_count = args.size();
             } else {

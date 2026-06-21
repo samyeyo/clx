@@ -27,6 +27,9 @@ struct LocalVar {
 
 
 //------------------ CodeEmitter: generates C++ source from the AST
+//------------------ lookup_builtin: maps "module.func" to C++ function name
+const char* lookup_builtin(std::string_view module, std::string_view func);
+
 class CodeEmitter {
 public:
     //------------------ CodeEmitter: constructs emitter for a given AST context
@@ -72,6 +75,7 @@ public:
     static bool g_skip_block_braces;
     static std::unordered_map<uint32_t, std::string> g_hoisted_lookups;
     static std::unordered_map<std::string, std::string> g_hoisted_cfuncs;
+    static std::unordered_map<std::string, std::string> g_builtin_aliases;
 
     //------------------ Codegen emission state flags
     static bool g_emit_raw_lambda;
@@ -81,6 +85,8 @@ public:
     static bool g_expect_multivalue;
     static std::string_view g_current_fast_func;
     static std::string g_ref_capture;
+    static int g_cs_index;
+    static constexpr int g_cs_max = 4;
 };
 
 }
