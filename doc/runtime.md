@@ -12,7 +12,6 @@ The virtual machine core implements:
 - Table operations with inline caching
 - Metamethod handling
 - Function calls
-- Bitwise operations
 
 #### Value System
 
@@ -267,21 +266,6 @@ clx supports all standard Lua metamethods:
 | `__tostring` | tostring() |
 | `__gc` | garbage collection |
 | `__metatable` | getmetatable() |
-
-## Bitwise Operations
-
-clx implements bitwise operations via inline functions:
-
-| Function | Operator |
-|----------|----------|
-| `bit32.band` | & (bitwise AND) |
-| `bit32.bor` | \| (bitwise OR) |
-| `bit32.bxor` | ~ (bitwise XOR) |
-| `bit32.shl` | << (left shift) |
-| `bit32.shr` | >> (right shift) |
-| `bit32.bnot` | ~ (bitwise NOT) |
-
-These are available as `band`, `bor`, `bxor`, `shl`, `shr`, `bnot` in the runtime.
 
 ## Memory Layout
 
