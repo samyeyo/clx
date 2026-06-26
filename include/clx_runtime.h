@@ -21,17 +21,15 @@
 #include <unordered_map>
 #include <initializer_list>
 
-#if defined(_WIN32)
-#include <windows.h>
-#else
-#include <ucontext.h>
-#endif
+extern "C" {
+struct yafl_fiber;
+}
 
 #if defined(_MSC_VER)
-#define CLX_MUSTTAIL
+#define CLX_MUSTTAIL // [[msvc::musttail]]
 #elif defined(__has_cpp_attribute)
 #if __has_cpp_attribute(clang::musttail)
-#define CLX_MUSTTAIL [[clang::musttail]]
+#define CLX_MUSTTAIL // [[clang::musttail]]
 #elif __has_cpp_attribute(gnu::musttail)
 #define CLX_MUSTTAIL [[gnu::musttail]]
 #else
@@ -697,12 +695,7 @@ struct LThread : public LHeader {
     bool is_main;
     bool has_error;
     bool close_requested;
-#if defined(_WIN32)
-    LPVOID fiber;
-#else
-    ucontext_t ctx;
-    char* stack_memory;
-#endif
+    yafl_fiber* fiber;
 
     LThread();
     ~LThread();

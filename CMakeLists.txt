@@ -36,6 +36,8 @@ else()
     set(CMAKE_INSTALL_PREFIX /usr/local)
 endif()
 
+add_subdirectory(3rd/libyafl EXCLUDE_FROM_ALL)
+
 set(RUNTIME_SOURCES
     src/runtime/runtime.cpp 
     src/runtime/base.cpp 
@@ -48,9 +50,11 @@ set(RUNTIME_SOURCES
     src/runtime/utf8.cpp 
     src/runtime/io.cpp
     src/runtime/openlibs.cpp
+    $<TARGET_OBJECTS:yafl>
 )
 
 add_library(clx_static STATIC ${RUNTIME_SOURCES})
+target_include_directories(clx_static PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/3rd/libyafl/include)
 
 if(ipo_supported)
     set_property(TARGET clx_static PROPERTY INTERPROCEDURAL_OPTIMIZATION $<$<CONFIG:Release>:TRUE>)
@@ -72,6 +76,7 @@ if(ipo_supported)
 endif()
 
 target_include_directories(clx_static_size BEFORE PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(clx_static_size PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/3rd/libyafl/include)
 
 if(UNIX)
     set_target_properties(clx_static_size PROPERTIES OUTPUT_NAME "clx_size")

@@ -17,6 +17,8 @@
 #include <algorithm>
 #include <vector>
 
+#include <yafl.h>
+
 namespace clx {
     void register_static_preload(LState* L, const char* name, LValue (*open_func)(LState*));
 }
@@ -28,20 +30,12 @@ LThread::LThread() : state(nullptr), status(THREAD_SUSPENDED), caller(nullptr), 
     type = static_cast<uint8_t>(LType::Thread);
     marked = 0;
     next = nullptr;
-#if defined(_WIN32)
     fiber = nullptr;
-#else
-    stack_memory = nullptr;
-#endif
 }
 
 //------------------ LThread::~LThread — thread destructor
 LThread::~LThread() {
-#if defined(_WIN32)
-    if (fiber && !is_main) DeleteFiber(fiber);
-#else
-    if (stack_memory) delete[] stack_memory;
-#endif
+    if (fiber) yafl_fiber_destroy(fiber);
 }
 
 
@@ -71,26 +65,12 @@ static void fiber_entry_impl(LThread* t) {
     LThread* caller = t->caller;
     L->running_thread = caller;
     caller->status = THREAD_RUNNING;
-
-#if defined(_WIN32)
-    SwitchToFiber(caller->fiber);
-#else
-    swapcontext(&t->ctx, &caller->ctx);
-#endif
 }
 
-#if defined(_WIN32)
-
-static void WINAPI fiber_trampoline(LPVOID param) {
+static void* fiber_trampoline(void* param) {
     fiber_entry_impl(static_cast<LThread*>(param));
+    return nullptr;
 }
-#else
-static thread_local LThread* g_starting_thread = nullptr;
-
-static void fiber_trampoline() {
-    fiber_entry_impl(g_starting_thread);
-}
-#endif
 
 
 //------------------ create_thread: creates a new coroutine thread (public API)
@@ -99,17 +79,7 @@ LValue create_thread(LState* L, const LValue& func, double stack_size) {
     t->state = L;
     t->function = func;
 
-#if defined(_WIN32)
-    t->fiber = CreateFiber(static_cast<SIZE_T>(stack_size), fiber_trampoline, t);
-#else
-    getcontext(&t->ctx);
-    t->stack_memory = new char[static_cast<size_t>(stack_size)];
-    t->ctx.uc_stack.ss_sp = t->stack_memory;
-    t->ctx.uc_stack.ss_size = static_cast<size_t>(stack_size);
-    t->ctx.uc_link = nullptr;
-    g_starting_thread = t;
-    makecontext(&t->ctx, fiber_trampoline, 0);
-#endif
+    t->fiber = yafl_fiber_create(fiber_trampoline, static_cast<size_t>(stack_size), YAFL_STACK_FLAGS_VMEM);
 
     t->next = L->allocated_objects;
     L->allocated_objects = t;
@@ -127,11 +97,7 @@ MultiValue resume(LState* L, const LValue& thread, const LValue* args, size_t co
     t->status = THREAD_RUNNING;
     L->running_thread = t;
 
-#if defined(_WIN32)
-    SwitchToFiber(t->fiber);
-#else
-    swapcontext(&t->caller->ctx, &t->ctx);
-#endif
+    if (t->fiber) yafl_fiber_resume(t->fiber, t);
 
     std::vector<LValue> ret;
     ret.push_back(boolean(!t->has_error));
@@ -154,11 +120,7 @@ MultiValue yield(LState* L, const LValue* args, size_t count) {
     L->running_thread = caller;
     caller->status = THREAD_RUNNING;
 
-#if defined(_WIN32)
-    SwitchToFiber(caller->fiber);
-#else
-    swapcontext(&t->ctx, &caller->ctx);
-#endif
+    yafl_fiber_suspend(caller);
 
     if (t->close_requested) {
         t->close_requested = false;
@@ -1381,11 +1343,7 @@ LState* open(int argc, char* argv[]) {
     main_th->state = L;
     main_th->is_main = true;
     main_th->status = THREAD_RUNNING;
-#if defined(_WIN32)
-    main_th->fiber = ConvertThreadToFiber(nullptr);
-#else
-    getcontext(&main_th->ctx);
-#endif
+    main_th->fiber = nullptr;
     L->main_thread = main_th;
     L->running_thread = main_th;
 

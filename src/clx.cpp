@@ -41,6 +41,7 @@ struct Compiler {
 std::string execute(const std::string& cmd, int& out_code) {
     std::array<char, 128> buffer;
     std::string result;
+    std::cerr << cmd << std::endl;
 #ifdef _WIN32
     auto pipe = _popen(cmd.c_str(), "r");
 #else
@@ -196,19 +197,24 @@ int main(int argc, char* argv[]) {
     std::string opt_flags;
     std::string msvc_opt_flags;
     std::string gcc_dce_cl = dce_mode ? " -ffunction-sections -fdata-sections" : "";
+#ifdef __APPLE__
+    std::string gcc_dce_link = dce_mode ? " -Wl,-dead_strip" : "";
+    std::string gcc_strip_link = debug_mode ? "" : "";
+#else
     std::string gcc_dce_link = dce_mode ? " -Wl,--gc-sections" : "";
     std::string gcc_strip_link = debug_mode ? "" : " -s";
+#endif
     std::string msvc_dce_cl = dce_mode ? " /Gy" : "";
     std::string msvc_dce_link = dce_mode ? " /link /LTCG /OPT:REF /OPT:ICF" : "";
 
     if (debug_mode) {
-        opt_flags = "-O0 -g";
+        opt_flags = "-O0 -g -fno-rtti";
         msvc_opt_flags = "/Od /Zi /MDd /EHsc";
     } else if (size_mode) {
         opt_flags = "-Os -flto=auto -fno-rtti -fvisibility=hidden";
         msvc_opt_flags = "/O1 /GL /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy";
     } else {
-        opt_flags = "-O3 -flto=auto -fno-rtti -fvisibility=hidden";
+        opt_flags = "-O3 -g -flto=auto -fno-rtti -fvisibility=hidden";
         msvc_opt_flags = "/O2 /Ot /GL /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy";
     }
 
@@ -371,7 +377,11 @@ int main(int argc, char* argv[]) {
         else
             lib_link = " -L build " + lib_name;
     } else {
+#ifdef __APPLE__
+        lib_name = size_mode ? "-lclx_size" : "-lclx ";
+#else
         lib_name = size_mode ? "-l:libclx_size.a" : "-l:libclx.a";
+#endif
         std::string lib_file = size_mode ? "libclx_size.a" : "libclx.a";
         if (fs::exists((lib_path = build_root / "build") / lib_file) ||
             fs::exists((lib_path = build_root / "lib") / lib_file) ||
