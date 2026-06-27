@@ -31,7 +31,9 @@
 #define CLX_MUSTTAIL
 #elif defined(__has_cpp_attribute)
 #if __has_cpp_attribute(clang::musttail)
-#define CLX_MUSTTAIL [[clang::musttail]]
+// Disabling due to following error: tail call requires that the return value, all parameters, and any temporaries created by the expression are trivially destructible
+// Caused by destructor of MultiValue
+#define CLX_MUSTTAIL // [[clang::musttail]]
 #elif __has_cpp_attribute(gnu::musttail)
 #define CLX_MUSTTAIL [[gnu::musttail]]
 #else
