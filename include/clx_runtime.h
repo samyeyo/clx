@@ -24,6 +24,9 @@
 #if defined(_WIN32)
 #include <windows.h>
 #else
+#if defined(__APPLE__)
+#define _XOPEN_SOURCE
+#endif
 #include <ucontext.h>
 #endif
 
