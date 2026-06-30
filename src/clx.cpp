@@ -20,6 +20,9 @@
 #ifndef _WIN32
 #include <unistd.h>
 #endif
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 #include "syntax/parser.h"
 #include "codegen/codegen.h"
 
@@ -73,7 +76,13 @@ Compiler detect_compiler() {
     if (code == 0) return {"clang", "clang++"};
 
     execute("g++ --version" + redirect, code);
-    if (code == 0) return {"gcc", "g++"};
+    if (code == 0) {
+#ifdef __APPLE__
+        return {"clang", "g++"};
+#else
+        return {"gcc", "g++"};
+#endif
+    }
 
 #ifdef _WIN32
     execute("cl" + redirect, code);
@@ -196,8 +205,20 @@ int main(int argc, char* argv[]) {
     std::string opt_flags;
     std::string msvc_opt_flags;
     std::string gcc_dce_cl = dce_mode ? " -ffunction-sections -fdata-sections" : "";
-    std::string gcc_dce_link = dce_mode ? " -Wl,--gc-sections" : "";
-    std::string gcc_strip_link = debug_mode ? "" : " -s";
+    std::string gcc_dce_link = dce_mode
+#ifdef __APPLE__
+        ? " -Wl,-dead_strip"
+#else
+        ? " -Wl,--gc-sections"
+#endif
+        : "";
+    std::string gcc_strip_link =
+#ifndef __APPLE__
+        debug_mode ? "" : " -s"
+#else
+        ""
+#endif
+        ;
     std::string msvc_dce_cl = dce_mode ? " /Gy" : "";
     std::string msvc_dce_link = dce_mode ? " /link /LTCG /OPT:REF /OPT:ICF" : "";
 
@@ -205,10 +226,10 @@ int main(int argc, char* argv[]) {
         opt_flags = "-O0 -g";
         msvc_opt_flags = "/Od /Zi /MDd /EHsc";
     } else if (size_mode) {
-        opt_flags = "-Os -flto=auto -fno-rtti -fvisibility=hidden";
+        opt_flags = "-Os -flto=auto -fvisibility=hidden";
         msvc_opt_flags = "/O1 /GL /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy";
     } else {
-        opt_flags = "-O3 -flto=auto -fno-rtti -fvisibility=hidden";
+        opt_flags = "-O3 -flto=auto -fvisibility=hidden";
         msvc_opt_flags = "/O2 /Ot /GL /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy";
     }
 
@@ -323,7 +344,21 @@ int main(int argc, char* argv[]) {
 #else
     {
         char buf[4096];
-        ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+        ssize_t len = -1;
+#ifdef __APPLE__
+        uint32_t bufsize = sizeof(buf);
+        if (_NSGetExecutablePath(buf, &bufsize) == 0) {
+            char real[4096];
+            if (realpath(buf, real)) {
+                len = static_cast<ssize_t>(strlen(real));
+                memcpy(buf, real, static_cast<size_t>(len) + 1);
+            } else {
+                len = static_cast<ssize_t>(bufsize > sizeof(buf) ? sizeof(buf) : bufsize);
+            }
+        }
+#else
+        len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+#endif
         if (len != -1) {
             buf[len] = '\0';
             exe_dir = fs::path(buf).parent_path();
@@ -360,26 +395,22 @@ int main(int argc, char* argv[]) {
         include_opt = " -I include";
     }
 
-    fs::path lib_path;
-    std::string lib_name;
-    if (false) {
-        lib_name = "-lclx";
-        if (fs::exists((lib_path = build_root / "build") / "libclx.so") ||
-            fs::exists((lib_path = build_root / "lib") / "libclx.so") ||
-            fs::exists((lib_path = build_root / "lib64") / "libclx.so"))
-            lib_link = " -L " + lib_path.string() + " " + lib_name;
-        else
-            lib_link = " -L build " + lib_name;
-    } else {
-        lib_name = size_mode ? "-l:libclx_size.a" : "-l:libclx.a";
+    {
         std::string lib_file = size_mode ? "libclx_size.a" : "libclx.a";
+        fs::path lib_path;
+        std::string lib_dir;
         if (fs::exists((lib_path = build_root / "build") / lib_file) ||
             fs::exists((lib_path = build_root / "lib") / lib_file) ||
             fs::exists((lib_path = build_root / "lib64") / lib_file) ||
             fs::exists((lib_path = build_root / "lib" / "x86_64-linux-gnu") / lib_file))
-            lib_link = " -L " + lib_path.string() + " " + lib_name;
-        else
-            lib_link = " -L build " + lib_name;
+            lib_dir = lib_path.string();
+#ifdef __APPLE__
+        lib_link = lib_dir.empty() ? (size_mode ? " -lclx_size" : " -lclx")
+                                   : " -L " + lib_dir + (size_mode ? " -lclx_size" : " -lclx");
+#else
+        lib_link = lib_dir.empty() ? " -l:" + lib_file
+                                   : " -L " + lib_dir + " -l:" + lib_file;
+#endif
     }
 #endif
 
@@ -418,27 +449,16 @@ int main(int argc, char* argv[]) {
         for (const auto& dir : mod_search_dirs) {
             fs::path full = dir / target_lib;
             if (fs::exists(full)) {
-#ifdef _WIN32
                 if (dir == fs::current_path())
                     all_cpp_files += "\"" + target_lib + "\" ";
                 else
                     all_cpp_files += "\"" + fs::absolute(full).string() + "\" ";
-#else
-                if (dir == fs::current_path())
-                    all_cpp_files += "\"" + full.string() + "\" ";
-                else
-                    all_cpp_files += " -L \"" + dir.string() + "\" -l:" + target_lib + " ";
-#endif
                 found = true;
                 break;
             }
         }
         if (!found) {
-#ifdef _WIN32
             all_cpp_files += "\"" + target_lib + "\" ";
-#else
-            all_cpp_files += "-l:" + target_lib + " ";
-#endif
         }
     }
 
