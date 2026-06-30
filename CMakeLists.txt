@@ -131,9 +131,9 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
 endif()
 
 if(APPLE)
-    target_compile_definitions(clx PRIVATE _XOPEN_SOURCE)
-    target_compile_definitions(clx_static PRIVATE _XOPEN_SOURCE)
-    target_compile_definitions(clx_static_size PRIVATE _XOPEN_SOURCE)
+    target_compile_options(clx PRIVATE -Wno-deprecated-declarations)
+    target_compile_options(clx_static PRIVATE -Wno-deprecated-declarations)
+    target_compile_options(clx_static_size PRIVATE -Wno-deprecated-declarations)
 endif()
 
 install(TARGETS clx RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
