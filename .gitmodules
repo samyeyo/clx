@@ -1,0 +1,3 @@
+[submodule "3rd/libyafl"]
+	path = 3rd/libyafl
+	url = https://github.com/kyle-github/libyafl.git

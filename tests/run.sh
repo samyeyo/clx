@@ -30,22 +30,27 @@ for dir in conformance regression stress edge_cases; do
         compile_log="$bin.compile.log"
         output_log="$bin.output.log"
 
-        "$COMPILER" "$file" --output "$bin" > "$compile_log" 2>&1
+        "$COMPILER" "$file" --output "$bin" --debug > "$compile_log" 2>&1
+        "$COMPILER" "$file" --output "$bin" --cpp
 
         if [ -f "$bin" ]; then
             "$bin" > "$output_log" 2>&1
+            exit_code=$?
             cat "$output_log"
 
-            if grep -q "\[FAIL\]" "$output_log"; then
+            if grep -q "\[FAIL\]" "$output_log" || [ "$exit_code" -ne "0" ]; then
                 echo "[FAIL] $dir/$name"
                 FAIL=$((FAIL + 1))
             else
                 echo "[PASS] $dir/$name"
                 PASS=$((PASS + 1))
             fi
-            rm -f "$bin" "$compile_log" "$output_log"
+            # rm -f "$compile_log" "$output_log"
+            # rm -f "$bin" "$compile_log" "$output_log"
         else
             echo "[FAIL] $dir/$name -- compilation failed"
+            "$COMPILER" "$file" --output "$bin" --cpp
+            echo "compile log:"
             cat "$compile_log"
             FAIL=$((FAIL + 1))
             rm -f "$compile_log"
@@ -67,8 +72,9 @@ if [ -f "$NATIVE_SRC" ] && [ -f "$NATIVE_TEST_LUA" ]; then
         "$COMPILER" "$NATIVE_TEST_LUA" --modules native_mod --output "$NATIVE_BIN" 2>/dev/null
         if [ -f "$NATIVE_BIN" ]; then
             "$NATIVE_BIN" > "$NATIVE_OUT" 2>&1
+            exit_code=$?
             cat "$NATIVE_OUT"
-            if grep -q "\[FAIL\]" "$NATIVE_OUT"; then
+            if grep -q "\[FAIL\]" "$NATIVE_OUT" || [ "$exit_code" -ne "0" ]; then
                 echo "[FAIL] native_mod"
                 FAIL=$((FAIL + 1))
             else
@@ -89,8 +95,9 @@ PKG_BIN="$SCRIPT_DIR/package_mymod_test"
 "$COMPILER" "$SCRIPT_DIR/conformance/package.lua" "$SCRIPT_DIR/conformance/mymod.lua" --output "$PKG_BIN" 2>"$SCRIPT_DIR/package_compile.log"
 if [ -f "$PKG_BIN" ]; then
     "$PKG_BIN" > "$SCRIPT_DIR/package_output.log" 2>&1
+    exit_code=$?
     cat "$SCRIPT_DIR/package_output.log"
-    if grep -q "\[FAIL\]" "$SCRIPT_DIR/package_output.log"; then
+    if grep -q "\[FAIL\]" "$SCRIPT_DIR/package_output.log" || [ "$exit_code" -ne "0" ]; then
         echo "[FAIL] package+mymod"
         FAIL=$((FAIL + 1))
     else
