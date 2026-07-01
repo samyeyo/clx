@@ -354,21 +354,6 @@ void CodeEmitter::emit(uint32_t root_node, std::string_view module_name) {
 
     out << "#include <clx.h>\n";
     out << "#include <atomic>\n\n";
-    out << "#ifndef CLX_MUSTTAIL\n";
-    out << "#if defined(_MSC_VER)\n";
-    out << "#define CLX_MUSTTAIL\n";
-    out << "#elif defined(__has_cpp_attribute)\n";
-    out << "#if __has_cpp_attribute(clang::musttail)\n";
-    out << "#define CLX_MUSTTAIL [[clang::musttail]]\n";
-    out << "#elif __has_cpp_attribute(gnu::musttail)\n";
-    out << "#define CLX_MUSTTAIL [[gnu::musttail]]\n";
-    out << "#else\n";
-    out << "#define CLX_MUSTTAIL\n";
-    out << "#endif\n";
-    out << "#else\n";
-    out << "#define CLX_MUSTTAIL\n";
-    out << "#endif\n";
-    out << "#endif\n\n";
 
     if (!CodeEmitter::g_string_pool.empty()) {
         out << "static clx::LValue cstr_[" << CodeEmitter::g_string_pool.size() << "];\n";
