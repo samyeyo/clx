@@ -81,8 +81,7 @@ General guidelines:
 Run the test suite before submitting changes:
 
 ```bash
-cd tests
-./runtests.sh
+./tests/run.sh
 ```
 
 Please add new tests whenever fixing a bug.
