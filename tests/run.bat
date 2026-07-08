@@ -40,15 +40,21 @@ for %%D in (conformance regression stress compiler_killers edge_cases) do (
             if exist "!prefix!.exe" (
                 echo --- %%D\%%F ---
                 "!prefix!.exe" > "!prefix!_output.log" 2>&1
+                set "EXIT_CODE=!errorlevel!"
                 type "!prefix!_output.log"
 
-                findstr /c:"[FAIL]" "!prefix!_output.log" >nul 2>&1
-                if !errorlevel! equ 0 (
-                    echo [FAIL] %%D/!name!
+                if !EXIT_CODE! neq 0 (
+                    echo [FAIL] %%D/!name! -- runtime exit code !EXIT_CODE!
                     set /a FAIL+=1
                 ) else (
-                    echo [PASS] %%D/!name!
-                    set /a PASS+=1
+                    findstr /c:"[FAIL]" "!prefix!_output.log" >nul 2>&1
+                    if !errorlevel! equ 0 (
+                        echo [FAIL] %%D/!name!
+                        set /a FAIL+=1
+                    ) else (
+                        echo [PASS] %%D/!name!
+                        set /a PASS+=1
+                    )
                 )
                 del /f /q "!prefix!.exe" >nul 2>&1
                 del /f /q "!prefix!_compile.log" >nul 2>&1
@@ -109,9 +115,15 @@ if exist "%NATIVE_SRC%" if exist "%NATIVE_TEST%" (
     )
     if defined NATIVE_OK (
         "%NATIVE_BIN%" > "%SCRIPT_DIR%\native_mod_out.log" 2>&1
+        set "NATIVE_EXIT=!errorlevel!"
         type "%SCRIPT_DIR%\native_mod_out.log"
-        findstr /c:"[FAIL]" "%SCRIPT_DIR%\native_mod_out.log" >nul 2>&1
-        if !errorlevel! equ 0 ( echo [FAIL] native_mod & set /a FAIL+=1 ) else ( echo [PASS] native_mod & set /a PASS+=1 )
+        if !NATIVE_EXIT! neq 0 (
+            echo [FAIL] native_mod -- runtime exit code !NATIVE_EXIT!
+            set /a FAIL+=1
+        ) else (
+            findstr /c:"[FAIL]" "%SCRIPT_DIR%\native_mod_out.log" >nul 2>&1
+            if !errorlevel! equ 0 ( echo [FAIL] native_mod & set /a FAIL+=1 ) else ( echo [PASS] native_mod & set /a PASS+=1 )
+        )
         del /f /q "%NATIVE_BIN%" >nul 2>&1
         del /f /q "%SCRIPT_DIR%\native_mod_out.log" >nul 2>&1
     ) else (
@@ -131,9 +143,15 @@ set "MULTI_BIN=%SCRIPT_DIR%\package_mymod_test.exe"
 "%COMPILER%" "%SCRIPT_DIR%\conformance\package.lua" "%SCRIPT_DIR%\conformance\mymod.lua" --output "%MULTI_BIN%" > "%SCRIPT_DIR%\package_compile.log" 2>&1
 if exist "%MULTI_BIN%" (
     "%MULTI_BIN%" > "%SCRIPT_DIR%\package_output.log" 2>&1
+    set "MULTI_EXIT=!errorlevel!"
     type "%SCRIPT_DIR%\package_output.log"
-    findstr /c:"[FAIL]" "%SCRIPT_DIR%\package_output.log" >nul 2>&1
-    if !errorlevel! equ 0 ( echo [FAIL] package+mymod & set /a FAIL+=1 ) else ( echo [PASS] package+mymod & set /a PASS+=1 )
+    if !MULTI_EXIT! neq 0 (
+        echo [FAIL] package+mymod -- runtime exit code !MULTI_EXIT!
+        set /a FAIL+=1
+    ) else (
+        findstr /c:"[FAIL]" "%SCRIPT_DIR%\package_output.log" >nul 2>&1
+        if !errorlevel! equ 0 ( echo [FAIL] package+mymod & set /a FAIL+=1 ) else ( echo [PASS] package+mymod & set /a PASS+=1 )
+    )
     del /f /q "%MULTI_BIN%" >nul 2>&1
     del /f /q "%SCRIPT_DIR%\package_output.log" >nul 2>&1
 ) else (

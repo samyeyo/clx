@@ -34,9 +34,13 @@ for dir in conformance regression stress edge_cases; do
 
         if [ -f "$bin" ]; then
             "$bin" > "$output_log" 2>&1
+            exit_code=$?
             cat "$output_log"
 
-            if grep -q "\[FAIL\]" "$output_log"; then
+            if [ "$exit_code" -ne 0 ]; then
+                echo "[FAIL] $dir/$name -- runtime exit code $exit_code"
+                FAIL=$((FAIL + 1))
+            elif grep -q "\[FAIL\]" "$output_log"; then
                 echo "[FAIL] $dir/$name"
                 FAIL=$((FAIL + 1))
             else
@@ -67,8 +71,12 @@ if [ -f "$NATIVE_SRC" ] && [ -f "$NATIVE_TEST_LUA" ]; then
         "$COMPILER" "$NATIVE_TEST_LUA" --modules native_mod --output "$NATIVE_BIN" 2>/dev/null
         if [ -f "$NATIVE_BIN" ]; then
             "$NATIVE_BIN" > "$NATIVE_OUT" 2>&1
+            native_exit=$?
             cat "$NATIVE_OUT"
-            if grep -q "\[FAIL\]" "$NATIVE_OUT"; then
+            if [ "$native_exit" -ne 0 ]; then
+                echo "[FAIL] native_mod -- runtime exit code $native_exit"
+                FAIL=$((FAIL + 1))
+            elif grep -q "\[FAIL\]" "$NATIVE_OUT"; then
                 echo "[FAIL] native_mod"
                 FAIL=$((FAIL + 1))
             else
@@ -89,8 +97,12 @@ PKG_BIN="$SCRIPT_DIR/package_mymod_test"
 "$COMPILER" "$SCRIPT_DIR/conformance/package.lua" "$SCRIPT_DIR/conformance/mymod.lua" --output "$PKG_BIN" 2>"$SCRIPT_DIR/package_compile.log"
 if [ -f "$PKG_BIN" ]; then
     "$PKG_BIN" > "$SCRIPT_DIR/package_output.log" 2>&1
+    pkg_exit=$?
     cat "$SCRIPT_DIR/package_output.log"
-    if grep -q "\[FAIL\]" "$SCRIPT_DIR/package_output.log"; then
+    if [ "$pkg_exit" -ne 0 ]; then
+        echo "[FAIL] package+mymod -- runtime exit code $pkg_exit"
+        FAIL=$((FAIL + 1))
+    elif grep -q "\[FAIL\]" "$SCRIPT_DIR/package_output.log"; then
         echo "[FAIL] package+mymod"
         FAIL=$((FAIL + 1))
     else
