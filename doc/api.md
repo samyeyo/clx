@@ -18,7 +18,7 @@ close(L);                           // cleanup
 
 ## Values (`LValue`)
 
-LValue is a 64-bit nan-boxed tagged union. Construct via factory functions:
+LValue is a 16-byte value (8-byte payload + separate `ValueType` tag). Construct via factory functions:
 
 | Function | Returns |
 |---|---|
@@ -26,13 +26,13 @@ LValue is a 64-bit nan-boxed tagged union. Construct via factory functions:
 | `boolean(bool)` | LType::Bool |
 | `number(double)` | LType::Number |
 | `integer(int64_t)` | LType::Integer |
-| `string(L, s)` / `string(L, s, len)` | LType::String (interned; ≤5 bytes are TAG_ISTR inline) |
+| `string(L, s)` / `string(L, s, len)` | LType::String (interned; ≤6 bytes are TAG_ISTR inline) |
 | `table(L, asize, hsize)` | LType::Table |
 | `cfunction(L, func)` | LType::Function (CFunctionType) |
 | `thread(LThread*)` | LType::Thread |
 | `lightuserdata(void*)` | LType::Userdata |
 
-Strings ≤5 bytes are stored directly in the LValue (TAG_ISTR) — no heap allocation, no interning.
+Strings ≤6 bytes are stored directly in the LValue (TAG_ISTR) — no heap allocation, no interning.
 `as_string()` returns a valid C string pointer for both inline and heap strings.
 
 ### Raw member access (from `clx_runtime.h`)
@@ -321,7 +321,7 @@ MultiValue  close_thread(L, thread);         // close a suspended coroutine
 
 ```
 LType         — tagged type enum
-LValue        — nan-boxed value (with TAG_ISTR for strings ≤5 bytes)
+LValue        — 16-byte value (TValue payload + ValueType tag)
 MultiValue    — multi-return container (count, operator[])
 LState        — VM state (opaque)
 LThread       — coroutine (opaque, use create_thread/resume/yield/close_thread)
@@ -343,7 +343,7 @@ LValue(double);
 LValue(int64_t);
 LValue(const char*);         // raw interned string pointer (or string literal)
 LValue(LType, LHeader*);     // GC object
-LValue::istr(s, len);        // static — inline string (≤5 bytes, no interning)
+LValue::istr(s, len);        // static — inline string (≤6 bytes, no interning)
 ```
 
 ### `MultiValue`

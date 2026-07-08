@@ -15,17 +15,16 @@ local y = "hello" .. " " .. "world"  -- Compiled as: local y = "hello world"
 
 ### Numeric fast-path
 
-clx distinguishes between `Integer` and `Number` types in its nan-boxed value representation.
+clx distinguishes between `Integer` and `Number` types in its value representation (separate `ValueType` tag + 8-byte payload).
 The runtime LValue arithmetic functions dispatch to native double or int64 operations internally.
-At the codegen level, all numeric literals are emitted as C++ doubles (the LValue runtime
-handles type dispatch):
+At the codegen level, integer literals and variables provably holding integers are emitted as C++ `int64_t`, while float literals and mixed expressions use native `double`:
 
 ```lua
--- Numeric literal:
-local i = 1 + 2  -- Compiled as: double arithmetic via LValue
+-- Integer literal:
+local i = 1 + 2  -- Compiled as: int64_t arithmetic via LValue
 
 -- Float literal:
-local f = 1.5 + 2.3  -- Same LValue arithmetic path
+local f = 1.5 + 2.3  -- Compiled as: double arithmetic via LValue
 
 -- Mixed (promotes to double):
 local m = 1 + 2.5  -- Integer converted to double
@@ -44,15 +43,70 @@ local result = a + b  -- Uses clx::LValue arithmetic with type checks
 local result = a + b  -- When a and b are known numbers, uses add directly
 ```
 
+### Int64 overflow safety
+
+Integer arithmetic (`add`, `sub`, `mul`) with two `Int64` operands uses native C++ integer
+operations for speed. Each operation checks for overflow before returning:
+
+- **add**: Detects same-sign inputs producing a different-sign result
+- **sub**: Detects different-sign inputs where the result sign matches the subtrahend
+- **mul**: Verifies `result / operand == other_operand`, with special-case for `INT64_MIN * -1`
+
+On overflow, the result is promoted to `double` (matching Lua 5.5 semantics). `mod`, `idiv`,
+`pow`, and `unm` always promote to double for all numeric inputs.
+
+### Non-fast function parameter numeric promotion
+
+Functions with mixed parameter types (e.g., `decode(str, pos, ...)` where `str` is a string
+but `pos` is a number) cannot be fast functions — not all parameters are numeric. But every
+`pos + 1`, `pos - 1` still went through `clx::add`/`clx::sub` runtime calls.
+
+The optimizer detects parameters used in arithmetic operations (directly or through call chains)
+and marks them as numeric. The codegen emits them as `double l_param = args[i].as_number()`
+instead of `clx::LValue l_param = args[i]`, enabling native arithmetic even in non-fast
+functions.
+
+```lua
+-- Before: pos + 1 uses clx::add runtime call
+local function decode(str, pos, ...)
+    return str:sub(pos, pos + 1)
+end
+
+-- After: pos is a native double, pos + 1 is C++ arithmetic
+```
+
+### Function parameter numeric-record array inference
+
+When a function receives a table as a parameter (e.g., `advance(bodies, dt)` where `bodies`
+is an array of record-like tables), the optimizer cannot prove that `bodies[i].x` yields a
+number without tracing the pattern.
+
+Pass 3 in the optimizer detects `local bi = bodies[i]` where `bodies` is a function parameter,
+then traces field accesses (`bi.x`, `bi.y`) in BinaryOp nodes to infer numeric fields. Both
+the parameter name and the local name are registered in `g_numeric_table_fields` so
+`yields_number()` proves field reads yield numbers.
+
+```lua
+-- Before: bodies[i].x goes through clx::table_get → as_number()
+local function advance(bodies, dt)
+    for i = 1, #bodies do
+        local bi = bodies[i]
+        bi.x = bi.x + bi.vx * dt
+    end
+end
+
+-- After: bi.x is a native double, bi.x + bi.vx * dt is C++ arithmetic
+```
+
 ### Local variable optimization
 
-Local variables that hold numbers are stored as unboxed C++ doubles:
+Local variables that hold numbers are stored as unboxed C++ `int64_t` or `double`:
 
 ```lua
 local function sum(n)
-    local total = 0  -- Stored as double, not LValue
+    local total = 0  -- Stored as int64_t
     for i = 1, n do
-        total = total + i  -- Direct double arithmetic
+        total = total + i  -- Direct int64_t arithmetic
     end
     return total
 end
@@ -88,6 +142,25 @@ the version to detect stale cached values, preventing incorrect reads after muta
 
 **GC safety**: Only non-GC values (numbers, integers, booleans, nil) are cached to avoid
 dangling pointers after garbage collection.
+
+**Non-global tables**: CacheSlot works for any identifier table — globals, locals, and function
+parameters — not just globals. This enables caching for patterns like `bodies[i].x` where
+`bodies` is a function parameter.
+
+## 2.5 SIMD runtime scans
+
+`ValueType` is a `uint8_t` enum, so 16 type tags fit in a single 128-bit SIMD register.
+The runtime uses SSE2 (x64) or NEON (ARM64) to accelerate hot type-array scans:
+
+| Site | What it does |
+|---|---|
+| `rawlen()` | Finds first nil in table array — determines array length |
+| `next()` | Finds first non-nil after a given index |
+| `table_concat` validation | Validates all elements are String/Double/Int64 in 16-byte chunks |
+| GC mark loop | Skips nil entries in the array part, only marking non-nil values |
+
+Scalar tail handles remaining elements for non-16-byte-aligned sizes.
+Portability: SSE2 (all x86_64), NEON (all ARM64), scalar fallback for others.
 
 ## 3. String optimizations
 

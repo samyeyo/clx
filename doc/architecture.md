@@ -12,7 +12,7 @@ clx is a Lua-to-C++ compiler that transpiles Lua source code into optimized C++ 
 ├──────────────────────────────────────────────────────────────┤
 │                                                              │
 │  ┌─────────┐     ┌──────────┐    ┌────────────┐              │
-│  │  CLI    │───▶│  Parser  │───▶│   AST      │              │
+│  │  CLI    │───▶ │  Parser  │───▶│   AST      │              │
 │  │         │     │          │    │            │              │
 │  └─────────┘     └──────────┘    └─────┬──────┘              │
 │                                       │                      │
@@ -41,7 +41,7 @@ clx is a Lua-to-C++ compiler that transpiles Lua source code into optimized C++ 
                    ▼                                           ▼
           ┌──────────────────┐                     ┌───────────────────────┐
           │   C++ Compiler   │                     │      Runtime Lib      │
-          │ (clang/gcc/msvc) │                     │  (libclx / clx.lib)   │
+          │ (gcc/clang/msvc) │                     │  (libclx / clx.lib)   │
           └────────┬─────────┘                     └───────────────────────┘
                    │
                    ▼
@@ -58,7 +58,8 @@ clx/
 ├── build.sh / build.bat        # Convenience build scripts
 ├── include/
 │   ├── clx.h                   # Public C++ API (value ctors, type queries, helpers)
-│   └── clx_runtime.h           # Internal runtime (types, GC, tables, inline ops)
+│   ├── clx_runtime.h           # Internal runtime (types, GC, tables, inline ops)
+│   └── clx_simd.h              # Cross-platform SIMD helpers for type-array scans
 ├── src/
 │   ├── clx.cpp                  # Compiler driver / CLI
 │   ├── syntax/
@@ -109,7 +110,7 @@ clx/
 The command-line interface handles:
 - Argument parsing (`--executable`, `--object`, `--static`, `--debug`, `--cpp`, `--output`)
 - File I/O and multiple lua files compilation
-- Invoking the C++ compiler (gcc, clang, or MSVC auto-detected)
+- Invoking the C++ compiler (fixed at build time via CMake; gcc preferred for TCO support)
 - Output file management and temp file cleanup
 - Dead code elimination by default via `-ffunction-sections -Wl,--gc-sections` (gcc/clang) or `/Gy /link /OPT:REF /OPT:ICF` (MSVC)
 - Default optimization flags if none provided : `-O3 -flto=auto -fno-rtti -fvisibility=hidden` (gcc/clang) or `/O2 /Ot /GL /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy` (MSVC)
@@ -152,6 +153,8 @@ Optimization passes analyze the AST and annotate nodes with optimization hints:
 - Constant folding preparation
 - Shape version tracking for inline cache invalidation
 - `yields_number` analysis for numeric for loops
+- Non-fast function parameter numeric detection (marks params used in arithmetic as native doubles)
+- Function parameter numeric-record array inference (traces `local bi = bodies[i]` + field accesses to prove numeric fields)
 
 ### 6. Code Generator (src/codegen/codegen.cpp)
 
@@ -172,7 +175,7 @@ The runtime library implements Lua semantics:
  - `table.cpp` - Table library (insert, remove, concat, sort, unpack, pack, move)
  - `math.cpp` - Math library
  - `strings.cpp` - String library (len, sub, reverse, lower, upper, rep, byte, char, format, find, match, gmatch, gsub)
- - `coroutine.cpp` - Coroutine support (OS-level fibers/ucontext)
+ - `coroutine.cpp` - Coroutine support (OS-level fibers; hand-written ARM64 assembly on macOS Apple Silicon replacing buggy ucontext)
  - `io.cpp` - I/O library
  - `os.cpp` - OS library (clock, time, date, difftime, execute, tmpname, getenv)
  - `utf8.cpp` - UTF-8 library
@@ -205,6 +208,7 @@ Per-call-site cache slots for string-keyed table access. Each access site in the
 one `CacheSlot` that caches the last table pointer and value. Uses `shape_version` to detect
 stale cached values after table writes. Only caches non-GC values to avoid dangling pointers
 after collection. States: valid/invalid based on table pointer and shape version match.
+Works for any `NodeType::Identifier` table (globals, locals, and function parameters).
 
 #### StringBuilder
 
@@ -239,10 +243,10 @@ to detect stale cached values, preventing incorrect reads after table mutations.
 
 ### Value Representation
 
-clx uses nan-boxing to store Lua values in 64 bits:
+clx uses a 16-byte `LValue` (8-byte payload + separate `ValueType` tag) to store Lua values:
 - Numbers: Direct double representation (IEEE 754)
-- Integers: Tagged 48-bit payload for integer fast paths
- - Strings: Either TAG_ISTR inline (≤5 bytes, stored directly in `val`) or pointer to heap-allocated interned string (via StringPool)
+- Integers: 64-bit signed integer in TValue payload
+ - Strings: Either TAG_ISTR inline (≤6 bytes, stored directly in `val`) or pointer to heap-allocated interned string (via StringPool)
 - Tables: Pointer to heap-allocated table
 - Functions: Pointer to function closure
 - Nil/Boolean: Special sentinel values

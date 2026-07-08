@@ -7,7 +7,7 @@ The clx runtime library (`libclx.a`) implements Lua's core semantics in C++. It 
 ### 1. Core VM (src/runtime/runtime.cpp)
 
 The virtual machine core implements:
-- Value representation (nan-boxing with Integer type and TAG_ISTR inline strings)
+- Value representation (separate `ValueType` tag + 8-byte payload, with Integer type and TAG_ISTR inline strings)
 - Garbage collection (stop-the-world mark-and-sweep)
 - Table operations with inline caching
 - Metamethod handling
@@ -15,7 +15,7 @@ The virtual machine core implements:
 
 #### Value System
 
-clx uses nan-boxing to represent all Lua values in 64 bits:
+clx uses a 16-byte `LValue` (8-byte payload + separate `ValueType` tag) to represent all Lua values:
 
 ```
 ┌─────────────────────────────────────┐
@@ -24,31 +24,32 @@ clx uses nan-boxing to represent all Lua values in 64 bits:
 │ │ 64-bit IEEE 754 floating point  │ │
 │ └─────────────────────────────────┘ │
 ├─────────────────────────────────────┤
-│ Integer (small integers)            │
+│ Integer                             │
 │ ┌─────────────────────────────────┐ │
-│ │ 62-bit integer + 2-bit type tag │ │
+│ │ 64-bit signed integer           │ │
 │ └─────────────────────────────────┘ │
 ├─────────────────────────────────────┤
 │ Pointer (strings, tables, etc.)     │
 │ ┌─────────────────────────────────┐ │
-│ │ 62-bit pointer + 2-bit tag      │ │
+│ │ 64-bit heap address             │ │
 │ └─────────────────────────────────┘ │
 ├─────────────────────────────────────┤
-│ TAG_ISTR (inline strings ≤5 bytes)  │
+│ TAG_ISTR (inline strings ≤6 bytes)  │
 │ ┌─────────────────────────────────┐ │
-│ │ 16-bit tag + 48-bit char data   │ │
-│ │ tag = 0xFFF9 + len (0-5)        │ │
+│ │ [len:8][pad:8][char5..char0:48] │ │
+│ │ bytes 0–5: up to 6 chars        │ │
+│ │ byte 7: length (0–6)            │ │
 │ └─────────────────────────────────┘ │
 ├─────────────────────────────────────┤
 │ Special (nil, true, false)          │
 └─────────────────────────────────────┘
 ```
 
-The `LType` enum distinguishes between Number (double), Integer (native int64), and other types. Integer arithmetic uses native operations without floating-point conversion.
+The `LType` enum distinguishes between Number (double), Integer (native int64), and other types. Integer arithmetic uses native operations without floating-point conversion. Overflow in `add`, `sub`, `mul` promotes to double (matching Lua 5.5 semantics).
 
 ##### TAG_ISTR — Inline Strings
 
-Strings ≤5 bytes are stored directly in the LValue's 64-bit `val` field (no heap allocation, no interning):
+Strings ≤6 bytes are stored directly in the LValue's 64-bit `val` field (no heap allocation, no interning):
 
 - **Tag**: top 16 bits (63-48) = `0xFFF9 + len`, where len = 0-5
 - **Data**: bytes 0-5 (bits 0-47) store characters contiguously from byte 0 upward, null-terminated at byte `len`
@@ -56,7 +57,7 @@ Strings ≤5 bytes are stored directly in the LValue's 64-bit `val` field (no he
 - **`string_len()`**: reads length from tag for TAG_ISTR, or from baked header for TAG_STRING
 - **Equality**: `val == val` works for identically-typed strings with same content; cross-type (TAG_ISTR vs TAG_STRING) falls back to `memcmp`
 - **Hashing**: `lvalue_hash` for TAG_ISTR uses `swar_hash_8()` (loads all ≤8 bytes into one register with a single `memcpy`) so hashes match TAG_STRING for the same content
-- **`clx::string(L, s)`**: returns `LValue::istr()` for `len ≤ 5`, falls back to interned string for longer
+- **`clx::string(L, s)`**: returns `LValue::istr()` for `len ≤ 6`, falls back to interned string for longer
 
 #### Garbage Collection
 
@@ -130,7 +131,9 @@ Full coroutine support using OS-level fibers/context:
 | `coroutine.isyieldable` | Check if coroutine can yield |
 | `coroutine.close` | Close a suspended coroutine |
 
-Implementation uses `ucontext` on Linux/macOS and Windows Fibers on Windows.
+Implementation uses `ucontext` on Linux, Windows Fibers on Windows, and hand-written ARM64
+assembly (`src/runtime/coro_switch_aarch64.s`) on macOS Apple Silicon — the stock `ucontext`
+shim on Darwin ARM64 is deprecated and corrupts the stack.
 
 ### 5. String Library (src/runtime/strings.cpp)
 
@@ -197,12 +200,14 @@ Full `goto` / `::label::` support with proper lexical scoping:
 
 ### 11. String Pool & Inlining (src/runtime/runtime.cpp + LValue)
 
-Strings ≤5 bytes use **TAG_ISTR** — stored inline in the LValue (no heap allocation):
+Strings ≤6 bytes use **TAG_ISTR** — stored inline in the LValue (no heap allocation):
 
 ```
-Bits: [16-bit tag (0xFFF9 + len)] [char0] [char1] [char2] [char3] [char4] [pad\0]
-                             63←48  47←40  39←32  31←24  23←16  15←8    7←0
+Byte layout (8 bytes): [len] [pad] [char5] [char4] [char3] [char2] [char1] [char0]
+Bits:                   63←56 55←48  47←40   39←32   31←24   23←16   15←8    7←0
 ```
+
+The top byte stores the length (0–6). Bytes 0–5 store up to 6 characters. Byte 6 is unused padding.
 
 Longer strings are interned via the StringPool:
 
@@ -241,6 +246,9 @@ Caches are only valid when:
 1. The table pointer matches
 2. The `shape_version` hasn't changed (table hasn't been mutated)
 3. The cached value is not a GC object (to avoid dangling pointers)
+
+Works for any `NodeType::Identifier` table — globals, locals, and function parameters.
+Up to 8 CacheSlots per call site (`g_cs_max`).
 
 ## Metamethods
 
@@ -315,9 +323,19 @@ Length is at `ptr[-4..ptr[-1]` and hash is at `ptr[-8..ptr[-5]]`.
 | String concatenation | O(n) per operation |
 | Numeric for loop | O(n) with SIMD |
 | Function call | O(1) setup + body |
-| GC pause | Incremental, 512-byte step budget |
+| GC pause | Incremental, 512-byte step budget, SIMD array scan |
 | String interning | O(1) average, one probe |
 | Pattern matching | O(n*m) worst case |
+
+## SIMD Runtime Scans
+
+The runtime uses SSE2 (x64) or NEON (ARM64) to accelerate type-array scans where 16 `ValueType`
+bytes fit in a single 128-bit register. Scalar fallback handles non-16-byte-aligned remainders:
+
+- **`rawlen()`** — finds first nil in the array part to determine sequence length
+- **`next()`** — finds first non-nil after a given key index
+- **`table_concat` validation** — validates all elements are String/Double/Int64 in 16-byte chunks
+- **GC mark loop** — skips nil entries in the array part when tracing reachable objects
 
 ## Pre-interned Metamethods
 

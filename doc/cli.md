@@ -141,7 +141,7 @@ clx respects these environment variables:
 
 | Variable | Description |
 |----------|-------------|
-| `CXX` | (Not currently read — compiler auto-detected) |
+| `CXX` | (Not read — compiler fixed at build time) |
 
 ## Exit Codes
 
@@ -149,16 +149,17 @@ clx respects these environment variables:
 |------|-------------|
 | 0 | Success |
 | 1 | Usage or compilation error |
-| 2 | No C++ compiler found |
 
 ## Platform-Specific
 
 ### Linux/macOS
 
-- Default compiler: `clang++` (falls back to `g++`)
+- Compiler is fixed at build time via CMake (the same compiler that built `clx` is used for Lua script compilation).
+- **Note:** GCC is recommended over Clang because GCC supports tail call optimization (TCO) for clx, which Clang does not. TCO is critical for recursive Lua functions like `fib()`.
 
-- Windows:
-- Default compiler: `clang++` (falls back to `g++`, then `cl` MSVC)
+### Windows
+
+- Compiler is fixed at build time via CMake (the same compiler that built `clx` is used for Lua script compilation).
 - Output executable: `<name>.exe`
 - Object file: `<name>.obj`
 - Static library: `<name>.lib`
