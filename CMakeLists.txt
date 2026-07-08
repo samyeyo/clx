@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(clx VERSION 0.1.0 LANGUAGES CXX)
+project(clx VERSION 0.2.0 LANGUAGES CXX ASM)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -50,6 +50,11 @@ set(RUNTIME_SOURCES
     src/runtime/openlibs.cpp
 )
 
+string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _LOWER_PROC)
+if(APPLE AND _LOWER_PROC MATCHES "arm64|aarch64")
+    list(APPEND RUNTIME_SOURCES src/runtime/coro_switch_aarch64.s)
+endif()
+
 add_library(clx_static STATIC ${RUNTIME_SOURCES})
 
 if(ipo_supported)
@@ -93,6 +98,11 @@ add_executable(clx ${SOURCES})
 target_include_directories(clx PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_include_directories(clx PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+target_compile_definitions(clx PRIVATE
+    CLX_DEFAULT_CXX="${CMAKE_CXX_COMPILER}"
+    CLX_DEFAULT_CXX_NAME="${CMAKE_CXX_COMPILER_ID}"
+)
+
 string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" SYSTEM_PROC)
 if(SYSTEM_PROC MATCHES "amd64|x86_64")
     set(ARCH_IS_X86 TRUE)
@@ -102,18 +112,18 @@ endif()
 
 if(ipo_supported)
     set_target_properties(clx PROPERTIES INTERPROCEDURAL_OPTIMIZATION $<$<CONFIG:Release>:TRUE>)
-    endif()
+endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     if(ARCH_IS_X86)
         target_compile_options(clx PRIVATE $<$<CONFIG:Release>:-O3;-flto=auto;-ffloat-store;-fno-math-errno;-mavx2>)
         target_compile_options(clx_static PRIVATE $<$<CONFIG:Release>:-O3;-flto=auto;-ffloat-store;-fno-math-errno;-mavx2>)
         target_compile_options(clx_static_size PRIVATE $<$<CONFIG:Release>:-Os;-flto=auto;-ffloat-store;-fno-math-errno;-mavx2>)
-            elseif(ARCH_IS_ARM)
+    elseif(ARCH_IS_ARM)
         target_compile_options(clx PRIVATE $<$<CONFIG:Release>:-O3;-flto=auto;-fstrict-aliasing;-fno-math-errno;-mcpu=native>)
         target_compile_options(clx_static PRIVATE $<$<CONFIG:Release>:-O3;-flto=auto;-fstrict-aliasing;-fno-math-errno;-mcpu=native>)
         target_compile_options(clx_static_size PRIVATE $<$<CONFIG:Release>:-Os;-flto=auto;-fstrict-aliasing;-fno-math-errno;-mcpu=native>)
-            endif()
+    endif()
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     set_target_properties(clx PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     set_target_properties(clx_static PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
@@ -123,11 +133,11 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
         target_compile_options(clx PRIVATE $<$<CONFIG:Release>:/O2;/Ob2;/arch:AVX2;/fp:strict>)
         target_compile_options(clx_static PRIVATE $<$<CONFIG:Release>:/O2;/Ob2;/arch:AVX2;/fp:strict>)
         target_compile_options(clx_static_size PRIVATE $<$<CONFIG:Release>:/O1;/Ob1;/arch:AVX2;/fp:strict>)
-            elseif(ARCH_IS_ARM)
+    elseif(ARCH_IS_ARM)
         target_compile_options(clx PRIVATE $<$<CONFIG:Release>:/O2;/Ob2;/fp:strict>)
         target_compile_options(clx_static PRIVATE $<$<CONFIG:Release>:/O2;/Ob2;/fp:strict>)
         target_compile_options(clx_static_size PRIVATE $<$<CONFIG:Release>:/O1;/Ob1;/fp:strict>)
-            endif()
+    endif()
 endif()
 
 if(APPLE)
