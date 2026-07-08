@@ -169,10 +169,6 @@ inline bool yields_number(const ASTContext& ctx, uint32_t node_idx,
             { result = true; goto done; }
         if (known_numbers  && known_numbers->count(name))  { result = true; goto done; }
         if (param_numbers  && param_numbers->count(name))  { result = true; goto done; }
-
-
-
-
     }
 
     result = false;
