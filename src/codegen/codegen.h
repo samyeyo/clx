@@ -12,6 +12,7 @@
 #include <fstream>
 #include <string_view>
 #include <vector>
+#include <functional>
 #include <set>
 #include <map>
 #include <unordered_map>
@@ -46,19 +47,21 @@ private:
     bool is_local(std::string_view name, bool& out_is_boxed);
     //------------------ emit_node: emits C++ for a single AST node
     void emit_node(uint32_t node_idx);
+    //------------------ var_reassigned_non_int: checks if a variable receives any non-integer value in a block
+    static bool var_reassigned_non_int(const ASTContext& ctx, std::string_view name, uint32_t block_idx);
 
 public:
     //------------------ Optimization analysis state (populated before codegen)
     static std::vector<std::string_view> g_native_numbers;
     static std::vector<std::string_view> g_string_pool;
     static std::set<std::string_view> g_native_return_funcs;
-    static std::set<std::string> g_param_numbers;
+    static std::map<uint32_t, std::set<std::string>> g_param_numbers;
     static std::vector<std::string> g_param_names;
     static std::map<uint32_t, uint32_t> g_table_presize;
     static std::map<std::string_view, double> g_global_constants;
     static std::set<uint32_t> g_bce_safe_nodes;
     static std::set<std::string_view> g_pure_numeric_arrays;
-    static std::set<std::string_view> g_native_integers;
+    static std::set<std::string, std::less<>> g_native_integers;
     //------------------ Per-function analysis data
     static std::map<std::string_view, std::set<std::string_view>> g_numeric_table_fields;
     static std::set<std::string_view> g_direct_callables;
@@ -86,7 +89,8 @@ public:
     static std::string_view g_current_fast_func;
     static std::string g_ref_capture;
     static int g_cs_index;
-    static constexpr int g_cs_max = 4;
+    static constexpr int g_cs_max = 8;
+    static uint32_t g_current_func_body;
 };
 
 }
