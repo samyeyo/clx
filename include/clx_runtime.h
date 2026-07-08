@@ -23,6 +23,23 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#elif defined(__APPLE__) && defined(__aarch64__)
+
+// ARM64 callee-saved register save area for coroutine context switching.
+// Layout matches the offsets used in src/runtime/coro_switch_aarch64.s.
+struct CoroutineContext {
+    uint64_t x19, x20, x21, x22, x23, x24, x25, x26, x27, x28;
+    uint64_t fp;
+    uint64_t lr;
+    uint64_t sp;
+    uint64_t d8, d9, d10, d11, d12, d13, d14, d15;
+};
+
+extern "C" {
+    void clx_coro_save(CoroutineContext* ctx);
+    void clx_coro_switch(CoroutineContext* from, CoroutineContext* to);
+    void clx_coro_init(CoroutineContext* ctx, void* stack_top, void* entry);
+}
 #else
 #if defined(__APPLE__)
 #define _XOPEN_SOURCE
@@ -93,33 +110,34 @@ static CLX_INLINE_HOT uint64_t clx_umul128(uint64_t a, uint64_t b, uint64_t* hi)
 }
 #endif
 
-//------------------ Value type enum
-enum class LType : uint8_t {
-    Number = 0, Nil = 1, Bool = 2, Integer = 3, String = 4,
-    Table = 5, Function = 6, Userdata = 7, Thread = 8
+//------------------ Value type enum (shadow type discriminator)
+enum class ValueType : uint8_t {
+    Nil      = 0,
+    Boolean  = 1,
+    Int64    = 2,
+    Double   = 3,
+    String   = 4,
+    Table    = 5,
+    Function = 6,
+    UserData = 7,
+    Thread   = 8
 };
 
-//------------------ Type name strings by LType index
-static constexpr const char* TYPE_NAMES[] = {
-    "number", "nil", "boolean", "number", "string", "table", "function", "userdata", "thread"
+//------------------ ValueType short aliases (clx::Nil, clx::String, etc.)
+constexpr auto Nil      = ValueType::Nil;
+constexpr auto Boolean  = ValueType::Boolean;
+constexpr auto Int64    = ValueType::Int64;
+constexpr auto Double   = ValueType::Double;
+constexpr auto String   = ValueType::String;
+constexpr auto Table    = ValueType::Table;
+constexpr auto Function = ValueType::Function;
+constexpr auto UserData = ValueType::UserData;
+constexpr auto Thread   = ValueType::Thread;
+
+//------------------ Type name strings by ValueType index
+static constexpr const char* VALUE_TYPE_NAMES[] = {
+    "nil", "boolean", "integer", "number", "string", "table", "function", "userdata", "thread"
 };
-
-//------------------ NaN-boxing tag constants
-constexpr uint64_t TAG_NAN     = 0xFFF0000000000000ULL;
-constexpr uint64_t TAG_NIL     = TAG_NAN | (static_cast<uint64_t>(LType::Nil) << 48);
-constexpr uint64_t TAG_BOOL    = TAG_NAN | (static_cast<uint64_t>(LType::Bool) << 48);
-constexpr uint64_t TAG_INTEGER = TAG_NAN | (static_cast<uint64_t>(LType::Integer) << 48);
-constexpr uint64_t TAG_STRING  = TAG_NAN | (static_cast<uint64_t>(LType::String) << 48);
-constexpr uint64_t TAG_TABLE   = TAG_NAN | (static_cast<uint64_t>(LType::Table) << 48);
-constexpr uint64_t TAG_FUNCTION= TAG_NAN | (static_cast<uint64_t>(LType::Function) << 48);
-constexpr uint64_t TAG_USERDATA= TAG_NAN | (static_cast<uint64_t>(LType::Userdata) << 48);
-constexpr uint64_t TAG_THREAD  = TAG_NAN | (static_cast<uint64_t>(LType::Thread) << 48);
-
-//------------------ Inline-string base tag
-constexpr uint64_t TAG_ISTR_BASE = TAG_NAN | (0x9ULL << 48);
-
-//------------------ Payload mask (lower 48 bits)
-constexpr uint64_t PAYLOAD_MASK = 0x0000FFFFFFFFFFFFULL;
 
 //------------------ GC object header
 struct LHeader {
@@ -128,91 +146,111 @@ struct LHeader {
     LHeader* next;
 };
 
-//------------------ Forward declarations
 struct LState;
+struct TValue;
 struct LValue;
 
 //------------------ Binary metamethod dispatcher
 LValue call_bin_metamethod(LState* L, const LValue& a, const LValue& b, const char* event);
 
-//------------------ Tagged value (NaN-boxed)
+//------------------ 8-byte value payload --- pure data, no type bits
+union alignas(8) TValuePayload {
+    uint64_t u64;
+    int64_t  i64;
+    double   f64;
+    void*    ptr;
+};
+
+struct TValue {
+    TValuePayload payload;
+
+    CLX_INLINE_HOT TValue() { payload.u64 = 0; }
+    CLX_INLINE_HOT TValue(int64_t i) { payload.i64 = i; }
+    CLX_INLINE_HOT TValue(double d) { payload.f64 = d; }
+    CLX_INLINE_HOT TValue(void* p) { payload.ptr = p; }
+    CLX_INLINE_HOT TValue(uint64_t u) { payload.u64 = u; }
+};
+
+//------------------ Shadow stack slot (payload pointer + type pointer)
+struct TypedSlot {
+    TValue*    val;
+    ValueType* type;
+    CLX_INLINE_HOT TypedSlot() : val(nullptr), type(nullptr) {}
+    CLX_INLINE_HOT TypedSlot(TValue* v, ValueType* t) : val(v), type(t) {}
+};
+
+//------------------ 16-byte convenience wrapper (runtime C++ API)
 struct LValue {
-    uint64_t val;
+    TValue   val;
+    ValueType type;
 
-    CLX_INLINE_HOT LValue() : val(TAG_NIL) {}
-    CLX_INLINE_HOT explicit LValue(bool b) : val(TAG_BOOL | (b ? 1ULL : 0ULL)) {}
-    CLX_INLINE_HOT explicit LValue(double n) : val(std::bit_cast<uint64_t>(n)) {
-        if (val == 0xFFF8000000000000ULL) val = 0x7FF8000000000000ULL;
-    }
-    CLX_INLINE_HOT explicit LValue(int64_t i) : val(TAG_INTEGER | (static_cast<uint64_t>(i) & PAYLOAD_MASK)) {}
-    CLX_INLINE_HOT explicit LValue(const char* s) : val(TAG_STRING | (reinterpret_cast<uint64_t>(s) & PAYLOAD_MASK)) {}
-    CLX_INLINE_HOT explicit LValue(LType t, LHeader* p) : val(TAG_NAN | (static_cast<uint64_t>(t) << 48) | (reinterpret_cast<uint64_t>(p) & PAYLOAD_MASK)) {}
-
-    CLX_INLINE_HOT explicit LValue(LHeader* p) : val(TAG_NAN | (static_cast<uint64_t>(p->type) << 48) | (reinterpret_cast<uint64_t>(p) & PAYLOAD_MASK)) {}
-
-    CLX_INLINE_HOT bool is_istr() const {
-        return (val >> 48) >= 0xFFF9;
-    }
-
-    CLX_INLINE_HOT uint32_t istr_len() const {
-        return static_cast<uint32_t>((val >> 48) - 0xFFF9);
-    }
+    CLX_INLINE_HOT LValue() : val(), type(ValueType::Nil) {}
+    CLX_INLINE_HOT explicit LValue(bool b) : val(static_cast<uint64_t>(b ? 1ULL : 0ULL)), type(ValueType::Boolean) {}
+    CLX_INLINE_HOT explicit LValue(double n) : val(n), type(ValueType::Double) {}
+    CLX_INLINE_HOT explicit LValue(int64_t i) : val(i), type(ValueType::Int64) {}
+    CLX_INLINE_HOT explicit LValue(const char* s) : type(ValueType::String) { val.payload.ptr = const_cast<char*>(s); }
+    CLX_INLINE_HOT LValue(const TValue& v, ValueType t) : val(v), type(t) {}
+    CLX_INLINE_HOT explicit LValue(ValueType t, LHeader* p) : val(static_cast<void*>(p)), type(t) {}
+    CLX_INLINE_HOT explicit LValue(LHeader* p) : val(static_cast<void*>(p)), type(static_cast<ValueType>(p->type)) {}
+    CLX_INLINE_HOT explicit LValue(std::nullptr_t) : val(), type(ValueType::Nil) {}
 
     CLX_INLINE_HOT bool is_gc_obj() const {
-        uint16_t top = val >> 48;
-        return top >= 0xFFF5 && top <= 0xFFF8;
+        uint8_t t = static_cast<uint8_t>(type);
+        return t >= static_cast<uint8_t>(ValueType::Table) && t <= static_cast<uint8_t>(ValueType::Thread);
     }
-
-     CLX_INLINE_HOT LType type() const {
-         uint16_t top = val >> 48;
-         if (top < 0xFFF1) [[likely]] return LType::Number;
-         if (top <= 0xFFF8) return static_cast<LType>(top & 0xF);
-         if (top <= 0xFFFE) return LType::String;
-         return LType::Number;
-     }
 
     CLX_INLINE_HOT double as_number() const {
-        if (type() == LType::Integer) return static_cast<double>(as_integer());
-        return std::bit_cast<double>(val);
+        if (type == ValueType::Int64) return static_cast<double>(val.payload.i64);
+        if (type == ValueType::Double) return val.payload.f64;
+        return 0.0;
     }
     CLX_INLINE_HOT int64_t as_integer() const {
-        uint64_t payload = val & PAYLOAD_MASK;
-        if (payload & 0x0000800000000000ULL) return static_cast<int64_t>(payload | 0xFFFF000000000000ULL);
-        return static_cast<int64_t>(payload);
+        if (type == ValueType::Int64) return val.payload.i64;
+        if (type == ValueType::Double) return static_cast<int64_t>(val.payload.f64);
+        return 0;
     }
     CLX_INLINE_HOT bool as_bool() const {
-        if (type() == LType::Nil) return false;
-        if (type() == LType::Bool) return (val & 1) != 0;
+        if (type == ValueType::Nil) return false;
+        if (type == ValueType::Boolean) return val.payload.u64 != 0;
         return true;
     }
     CLX_INLINE_HOT const char* as_string() const {
-        if (is_istr())
-            return reinterpret_cast<const char*>(&val);
-        return reinterpret_cast<const char*>(val & PAYLOAD_MASK);
+        if (type == ValueType::String && (val.payload.u64 >> 56))
+            return reinterpret_cast<const char*>(&val.payload.u64);
+        if (type == ValueType::String && val.payload.u64 == 0)
+            return "";
+        return static_cast<const char*>(val.payload.ptr);
     }
-    CLX_INLINE_HOT LHeader* as_pointer() const { return reinterpret_cast<LHeader*>(val & PAYLOAD_MASK); }
+    CLX_INLINE_HOT LHeader* as_pointer() const {
+        return static_cast<LHeader*>(val.payload.ptr);
+    }
 
     CLX_INLINE_HOT uint32_t string_len() const {
-        if (is_istr()) return istr_len();
-        uint32_t len;
-        clx_memcpy(&len, as_string() - 4, 4);
-        return len;
+        if (type == ValueType::String) {
+            uint64_t top = val.payload.u64 >> 56;
+            if (top) return static_cast<uint32_t>(top);
+            if (val.payload.u64 == 0) return 0;
+            uint32_t len;
+            clx_memcpy(&len, static_cast<const char*>(val.payload.ptr) - 4, 4);
+            return len;
+        }
+        return 0;
     }
 
     static CLX_INLINE_HOT LValue istr(const char* s, size_t len) {
-        uint64_t tag = TAG_ISTR_BASE + (static_cast<uint64_t>(len) << 48);
-        uint64_t payload = 0;
-        for (size_t i = 0; i < len && i < 5; i++)
-            payload |= static_cast<uint64_t>(static_cast<uint8_t>(s[i])) << (i * 8);
         LValue v;
-        v.val = tag | payload;
+        v.type = ValueType::String;
+        v.val.payload.u64 = 0;
+        for (size_t i = 0; i < len && i < 6; i++)
+            v.val.payload.u64 |= static_cast<uint64_t>(static_cast<uint8_t>(s[i])) << (i * 8);
+        v.val.payload.u64 |= static_cast<uint64_t>(len) << 56;
         return v;
     }
 
     CLX_INLINE_HOT bool to_number(double& out) const {
-        if (type() == LType::Number) { out = as_number(); return true; }
-        if (type() == LType::Integer) { out = static_cast<double>(as_integer()); return true; }
-        if (type() == LType::String) {
+        if (type == ValueType::Double) { out = val.payload.f64; return true; }
+        if (type == ValueType::Int64) { out = static_cast<double>(val.payload.i64); return true; }
+        if (type == ValueType::String) {
             char* end;
             out = std::strtod(as_string(), &end);
             return end != as_string();
@@ -221,19 +259,30 @@ struct LValue {
     }
 
     CLX_INLINE_HOT LValue operator==(const LValue& other) const {
-        if (val == other.val) return LValue(true);
-        if (type() == LType::Number && other.type() == LType::Number) return LValue(as_number() == other.as_number());
+        if (val.payload.u64 == other.val.payload.u64 && type == other.type)
+            return LValue(true);
+        if (type == ValueType::Double && other.type == ValueType::Double)
+            return LValue(val.payload.f64 == other.val.payload.f64);
+        if (type == ValueType::Int64 && other.type == ValueType::Int64)
+            return LValue(val.payload.i64 == other.val.payload.i64);
+        if (type == ValueType::Int64 && other.type == ValueType::Double)
+            return LValue(static_cast<double>(val.payload.i64) == other.val.payload.f64);
+        if (type == ValueType::Double && other.type == ValueType::Int64)
+            return LValue(val.payload.f64 == static_cast<double>(other.val.payload.i64));
         return slow_eq(other);
     }
     CLX_INLINE_HOT LValue operator!=(const LValue& other) const {
         return LValue(!(operator==(other)).as_bool());
     }
     CLX_INLINE_HOT LValue operator<(const LValue& other) const {
-        if (type() == LType::Integer && other.type() == LType::Integer) return LValue(as_integer() < other.as_integer());
-        if (type() == LType::Number && other.type() == LType::Number) return LValue(as_number() < other.as_number());
-        if ((type() == LType::Number || type() == LType::Integer) && (other.type() == LType::Number || other.type() == LType::Integer)) {
-            double l = (type() == LType::Integer) ? static_cast<double>(as_integer()) : as_number();
-            double r = (other.type() == LType::Integer) ? static_cast<double>(other.as_integer()) : other.as_number();
+        if (type == ValueType::Int64 && other.type == ValueType::Int64)
+            return LValue(val.payload.i64 < other.val.payload.i64);
+        if (type == ValueType::Double && other.type == ValueType::Double)
+            return LValue(val.payload.f64 < other.val.payload.f64);
+        if ((type == ValueType::Int64 || type == ValueType::Double) &&
+            (other.type == ValueType::Int64 || other.type == ValueType::Double)) {
+            double l = (type == ValueType::Int64) ? static_cast<double>(val.payload.i64) : val.payload.f64;
+            double r = (other.type == ValueType::Int64) ? static_cast<double>(other.val.payload.i64) : other.val.payload.f64;
             return LValue(l < r);
         }
         return slow_lt(other);
@@ -242,11 +291,14 @@ struct LValue {
         return other.operator<(*this);
     }
     CLX_INLINE_HOT LValue operator<=(const LValue& other) const {
-        if (type() == LType::Integer && other.type() == LType::Integer) return LValue(as_integer() <= other.as_integer());
-        if (type() == LType::Number && other.type() == LType::Number) return LValue(as_number() <= other.as_number());
-        if ((type() == LType::Number || type() == LType::Integer) && (other.type() == LType::Number || other.type() == LType::Integer)) {
-            double l = (type() == LType::Integer) ? static_cast<double>(as_integer()) : as_number();
-            double r = (other.type() == LType::Integer) ? static_cast<double>(other.as_integer()) : other.as_number();
+        if (type == ValueType::Int64 && other.type == ValueType::Int64)
+            return LValue(val.payload.i64 <= other.val.payload.i64);
+        if (type == ValueType::Double && other.type == ValueType::Double)
+            return LValue(val.payload.f64 <= other.val.payload.f64);
+        if ((type == ValueType::Int64 || type == ValueType::Double) &&
+            (other.type == ValueType::Int64 || other.type == ValueType::Double)) {
+            double l = (type == ValueType::Int64) ? static_cast<double>(val.payload.i64) : val.payload.f64;
+            double r = (other.type == ValueType::Int64) ? static_cast<double>(other.val.payload.i64) : other.val.payload.f64;
             return LValue(l <= r);
         }
         return slow_le(other);
@@ -262,6 +314,7 @@ private:
     LValue slow_lt(const LValue& other) const;
     LValue slow_le(const LValue& other) const;
 };
+static_assert(sizeof(LValue) == 16, "LValue must be 16 bytes");
 
 //------------------ Multi-value return container
 struct MultiValue {
@@ -344,7 +397,6 @@ struct MultiValue {
     }
 };
 
-//------------------ Forward declarations
 struct LState;
 struct LTable;
 
@@ -379,7 +431,7 @@ struct LCFunction : public LHeader {
 
 //------------------ Fast path for LCFunction direct calls
 CLX_INLINE_HOT MultiValue call_direct(LState* L, const LValue& func, const LValue* args, size_t count) {
-    if (func.type() == LType::Function) {
+    if (func.type == ValueType::Function) {
         LCFunction* f = static_cast<LCFunction*>(func.as_pointer());
         if (f->direct) return f->direct(L, args, count);
     }
@@ -414,15 +466,17 @@ struct LazyReg {
 static constexpr uint64_t HASH_EMPTY     = 0xFFFFFFFFFFFFFFFFULL;
 static constexpr uint64_t HASH_TOMBSTONE = 0xFFFFFFFFFFFFFFFEULL;
 
-
-struct HashEntry {
-    uint64_t key;
-    LValue   val;
+struct alignas(8) HashEntry {
+    TValue    key;
+    TValue    val;
+    ValueType ktype;
+    ValueType vtype;
 };
-static_assert(sizeof(HashEntry) == 16, "HashEntry must be 16 bytes");
+static_assert(sizeof(HashEntry) == 24, "HashEntry must be 24 bytes");
 
 struct LTable : public LHeader {
-    LValue*    array;
+    TValue*    array;
+    ValueType* array_types;
     size_t     array_size;
     size_t     array_cap;
 
@@ -439,7 +493,7 @@ struct LTable : public LHeader {
     LTable();
     ~LTable();
 
-    LValue* gettable(const LValue& key);
+    LValue gettable(const LValue& key);
     void settable(const LValue& key, const LValue& val);
 
     LValue get_value(LState* L, const LValue& key);
@@ -465,7 +519,7 @@ static CLX_INLINE_HOT uint32_t wyhash64(uint64_t v) {
     return static_cast<uint32_t>(lo ^ hi);
 }
 
-//------------------ SWAR hash for ≤8 byte strings
+//------------------ SWAR hash for <=8 byte strings
 static CLX_INLINE uint32_t swar_hash_8(const char* p, size_t len) {
     uint64_t data = 0;
     if (len > 0 && len <= 8) clx_memcpy(&data, p, len);
@@ -515,57 +569,48 @@ static CLX_INLINE_COLD uint32_t string_baked_hash(const char* ptr) {
 }
 
 //------------------ Hash an LValue by type
-static CLX_INLINE_HOT uint32_t lvalue_hash(uint64_t val) {
-    uint16_t top = static_cast<uint16_t>(val >> 48);
-    if (top == static_cast<uint16_t>(TAG_STRING >> 48)) {
-        const char* ptr = reinterpret_cast<const char*>(val & PAYLOAD_MASK);
+static CLX_INLINE_HOT uint32_t lvalue_hash(const LValue& key) {
+    if (key.type == ValueType::String) {
+        if (key.val.payload.u64 >> 56) {
+            uint32_t len = static_cast<uint32_t>(key.val.payload.u64 >> 56);
+            const char* data = reinterpret_cast<const char*>(&key.val.payload.u64);
+            return swar_hash_8(data, len);
+        }
+        if (key.val.payload.u64 == 0) return swar_hash_8("", 0);
+        const char* ptr = static_cast<const char*>(key.val.payload.ptr);
         uint32_t h;
         clx_memcpy(&h, ptr - 8, 4);
         return h;
     }
-    if (top >= 0xFFF9) {
-        uint32_t len = static_cast<uint32_t>(top - 0xFFF9);
-        const char* ptr = reinterpret_cast<const char*>(&val);
-        return swar_hash_8(ptr, len);
+    if (key.type == ValueType::Int64) {
+        uint64_t v = std::bit_cast<uint64_t>(static_cast<double>(key.val.payload.i64));
+        v ^= WY_SECRET0;
+        uint64_t lo, hi;
+        lo = clx_umul128(v, v ^ WY_SECRET1, &hi);
+        return static_cast<uint32_t>(lo ^ hi);
     }
-    if (top == static_cast<uint16_t>(TAG_INTEGER >> 48)) {
-        int64_t i = static_cast<int64_t>(val & PAYLOAD_MASK);
-        if (i & 0x0000800000000000LL) i |= 0xFFFF000000000000LL;
-        val = std::bit_cast<uint64_t>(static_cast<double>(i));
-    }
-    val ^= WY_SECRET0;
+    uint64_t v = key.val.payload.u64 ^ (static_cast<uint64_t>(static_cast<uint8_t>(key.type)) << 56);
+    v ^= WY_SECRET0;
     uint64_t lo, hi;
-    lo = clx_umul128(val, val ^ WY_SECRET1, &hi);
+    lo = clx_umul128(v, v ^ WY_SECRET1, &hi);
     return static_cast<uint32_t>(lo ^ hi);
 }
 
-//------------------ Fast cross-type equality (string/int/number)
-static CLX_INLINE_HOT bool lvalue_eq_fast(uint64_t a, uint64_t b) {
-    if (a == b) return true;
-    uint16_t ta = static_cast<uint16_t>(a >> 48);
-    uint16_t tb = static_cast<uint16_t>(b >> 48);
-    bool a_istr = ta >= 0xFFF9;
-    bool b_istr = tb >= 0xFFF9;
-    bool a_str = ta == static_cast<uint16_t>(TAG_STRING >> 48);
-    bool b_str = tb == static_cast<uint16_t>(TAG_STRING >> 48);
-    if ((a_istr && b_str) || (a_str && b_istr)) {
-        LValue va, vb;
-        va.val = a;
-        vb.val = b;
-        uint32_t alen = va.string_len();
-        uint32_t blen = vb.string_len();
-        return alen == blen && clx_memcmp(va.as_string(), vb.as_string(), alen) == 0;
+//------------------ Fast cross-type equality (string/int/number/double)
+static CLX_INLINE_HOT bool lvalue_eq_fast(const LValue& a, const LValue& b) {
+    if (a.val.payload.u64 == b.val.payload.u64 && a.type == b.type)
+        return true;
+    bool a_str = a.type == ValueType::String;
+    bool b_str = b.type == ValueType::String;
+    if (a_str && b_str) {
+        uint32_t al = a.string_len();
+        uint32_t bl = b.string_len();
+        return al == bl && clx_memcmp(a.as_string(), b.as_string(), al) == 0;
     }
-    uint16_t tag_int_top = static_cast<uint16_t>(TAG_INTEGER >> 48);
-    bool a_int = ta == tag_int_top;
-    bool b_int = tb == tag_int_top;
-    bool a_num = ta < 0xFFF1;
-    bool b_num = tb < 0xFFF1;
-    if ((a_int && b_num) || (a_num && b_int)) {
-        LValue va, vb;
-        va.val = a;
-        vb.val = b;
-        return va.as_number() == vb.as_number();
+    if ((a.type == ValueType::Int64 && b.type == ValueType::Double) ||
+        (a.type == ValueType::Double && b.type == ValueType::Int64)) {
+        double da = a.as_number(), db = b.as_number();
+        return da == db;
     }
     return false;
 }
@@ -582,10 +627,11 @@ struct StringPool {
     Slot*  slots    = nullptr;
     size_t capacity = 0;
     size_t count    = 0;
+    uint64_t guard = 0xDEADBEEFCAFEBABEULL;
 
     static constexpr size_t INIT_CAP = 64;
 
-    StringPool() { rehash(INIT_CAP); }
+    StringPool() { guard = 0xDEADBEEFCAFEBABEULL; rehash(INIT_CAP); }
     ~StringPool() {
         if (!slots) return;
         for (size_t i = 0; i < capacity; ++i)
@@ -700,6 +746,9 @@ struct LThread : public LHeader {
     bool close_requested;
 #if defined(_WIN32)
     LPVOID fiber;
+#elif defined(__APPLE__) && defined(__aarch64__)
+    CoroutineContext ctx;
+    char* stack_memory;
 #else
     ucontext_t ctx;
     char* stack_memory;
@@ -721,7 +770,7 @@ struct LState {
     LThread* running_thread;
 
     static constexpr size_t MAX_SHADOW_STACK = 262144;
-    LValue* shadow_stack[MAX_SHADOW_STACK];
+    TypedSlot shadow_stack[MAX_SHADOW_STACK];
     size_t shadow_top;
 
     void* stack_bottom;
@@ -749,6 +798,13 @@ struct LState {
 
     StringPool string_pool;
 
+    CLX_INLINE LValue intern_lvalue(const char* str, size_t len) {
+        if (len <= 6) return LValue::istr(str, len);
+        return LValue(intern_string(str, len));
+    }
+    CLX_INLINE LValue intern_lvalue(const std::string& s) {
+        return intern_lvalue(s.data(), s.size());
+    }
     CLX_INLINE const char* intern_string(const char* str, size_t len) {
         uint32_t h = len <= 8 ? swar_hash_8(str, len) : wyhash_str(str, len);
         return string_pool.intern(str, len, h);
@@ -888,24 +944,28 @@ public:
     }
 
     CLX_INLINE StringBuilder& append(LState* L, const LValue& v) {
-        if (v.type() == LType::String) {
+        if (v.type == ValueType::String) {
+            if (v.val.payload.u64 >> 56) {
+                const char* s = L->intern_string(v.as_string(), v.string_len());
+                return append(s, v.string_len());
+            }
             return append(v.as_string(), v.string_len());
         }
-        if (v.type() == LType::Integer) {
+        if (v.type == ValueType::Int64) {
             char buf[32];
             size_t n = static_cast<size_t>(std::snprintf(buf, sizeof(buf), "%lld",
-                static_cast<long long>(v.as_integer())));
+                static_cast<long long>(v.val.payload.i64)));
             char* s = new char[n]; clx_memcpy(s, buf, n);
             return append(s, static_cast<uint32_t>(n));
         }
-        if (v.type() == LType::Number) {
+        if (v.type == ValueType::Double) {
             char buf[32];
-            size_t n = static_cast<size_t>(std::snprintf(buf, sizeof(buf), "%.14g", v.as_number()));
+            size_t n = static_cast<size_t>(std::snprintf(buf, sizeof(buf), "%.14g", v.val.payload.f64));
             char* s = new char[n]; clx_memcpy(s, buf, n);
             return append(s, static_cast<uint32_t>(n));
         }
-        if (v.type() == LType::Nil) return append("nil", 3);
-        if (v.type() == LType::Bool) return append(v.as_bool() ? "true" : "false", v.as_bool() ? 4 : 5);
+        if (v.type == ValueType::Nil) return append("nil", 3);
+        if (v.type == ValueType::Boolean) return append(v.as_bool() ? "true" : "false", v.as_bool() ? 4 : 5);
         return append("(unknown)", 9);
     }
 
@@ -926,6 +986,20 @@ public:
 
     CLX_INLINE_HOT size_t size() const { return total_len; }
     CLX_INLINE_HOT bool empty() const { return count == 0; }
+
+    CLX_INLINE LValue to_lvalue(LState* L) const {
+        if (count == 0) return LValue::istr("", 0);
+        if (total_len <= 6) {
+            char buf[8];
+            char* p = buf;
+            for (size_t i = 0; i < count; ++i) {
+                clx_memcpy(p, parts[i], lens[i]);
+                p += lens[i];
+            }
+            return LValue::istr(buf, static_cast<uint32_t>(total_len));
+        }
+        return LValue(to_string(L));
+    }
 };
 
 //------------------ Runtime error exception
@@ -963,40 +1037,44 @@ struct CloseGuard {
 
 //------------------ Reads a variable from environment table (shared_ptr upvalue)
 inline LValue get_env_var(LState* L, LUpValue env, const char* name) {
-    LTable* t = static_cast<LTable*>((*env).as_pointer());
+    LTable* t = static_cast<LTable*>((*env).val.payload.ptr);
     LValue key = LValue(L->intern_string(name));
-    LValue* val = t->gettable(key);
-    return val ? *val : LValue();
+    return t->gettable(key);
 }
 
 //------------------ Reads a variable from environment table (direct LValue)
 inline LValue get_env_var(LState* L, const LValue& env, const char* name) {
-    LTable* t = static_cast<LTable*>(env.as_pointer());
+    LTable* t = static_cast<LTable*>(env.val.payload.ptr);
     LValue key = LValue(L->intern_string(name));
-    LValue* val = t->gettable(key);
-    return val ? *val : LValue();
+    return t->gettable(key);
 }
 
 //------------------ Writes a variable to environment table (shared_ptr upvalue)
 inline void set_env_var(LState* L, LUpValue env, const char* name, const LValue& val) {
-    LTable* t = static_cast<LTable*>((*env).as_pointer());
+    LTable* t = static_cast<LTable*>((*env).val.payload.ptr);
     LValue key = LValue(L->intern_string(name));
     t->settable(key, val);
 }
 
 //------------------ Writes a variable to environment table (direct LValue)
 inline void set_env_var(LState* L, const LValue& env, const char* name, const LValue& val) {
-    LTable* t = static_cast<LTable*>(env.as_pointer());
+    LTable* t = static_cast<LTable*>(env.val.payload.ptr);
     LValue key = LValue(L->intern_string(name));
     t->settable(key, val);
 }
 
 //------------------ Addition with metamethod fallback
   CLX_INLINE_HOT LValue add(LState* L, const LValue& a, const LValue& b) {
-     if (a.type() == LType::Integer && b.type() == LType::Integer) [[likely]] return LValue(a.as_integer() + b.as_integer());
-     if ((a.type() == LType::Number || a.type() == LType::Integer) && (b.type() == LType::Number || b.type() == LType::Integer)) [[likely]] {
-         double l = (a.type() == LType::Integer) ? static_cast<double>(a.as_integer()) : a.as_number();
-         double r = (b.type() == LType::Integer) ? static_cast<double>(b.as_integer()) : b.as_number();
+     if (a.type == ValueType::Int64 && b.type == ValueType::Int64) [[likely]] {
+         int64_t ai = a.val.payload.i64, bi = b.val.payload.i64;
+         int64_t r = ai + bi;
+         if (((ai ^ bi) >= 0) && ((ai ^ r) < 0))
+             return LValue(static_cast<double>(ai) + static_cast<double>(bi));
+         return LValue(r);
+     }
+     if ((a.type == ValueType::Double || a.type == ValueType::Int64) && (b.type == ValueType::Double || b.type == ValueType::Int64)) [[likely]] {
+         double l = (a.type == ValueType::Int64) ? static_cast<double>(a.val.payload.i64) : a.val.payload.f64;
+         double r = (b.type == ValueType::Int64) ? static_cast<double>(b.val.payload.i64) : b.val.payload.f64;
          return LValue(l + r);
      }
      double l, r;
@@ -1005,10 +1083,16 @@ inline void set_env_var(LState* L, const LValue& env, const char* name, const LV
  }
 
  CLX_INLINE_HOT LValue sub(LState* L, const LValue& a, const LValue& b) {
-     if (a.type() == LType::Integer && b.type() == LType::Integer) [[likely]] return LValue(a.as_integer() - b.as_integer());
-     if ((a.type() == LType::Number || a.type() == LType::Integer) && (b.type() == LType::Number || b.type() == LType::Integer)) [[likely]] {
-         double l = (a.type() == LType::Integer) ? static_cast<double>(a.as_integer()) : a.as_number();
-         double r = (b.type() == LType::Integer) ? static_cast<double>(b.as_integer()) : b.as_number();
+     if (a.type == ValueType::Int64 && b.type == ValueType::Int64) [[likely]] {
+         int64_t ai = a.val.payload.i64, bi = b.val.payload.i64;
+         int64_t r = ai - bi;
+         if (((ai ^ bi) < 0) && ((bi ^ r) < 0))
+             return LValue(static_cast<double>(ai) - static_cast<double>(bi));
+         return LValue(r);
+     }
+     if ((a.type == ValueType::Double || a.type == ValueType::Int64) && (b.type == ValueType::Double || b.type == ValueType::Int64)) [[likely]] {
+         double l = (a.type == ValueType::Int64) ? static_cast<double>(a.val.payload.i64) : a.val.payload.f64;
+         double r = (b.type == ValueType::Int64) ? static_cast<double>(b.val.payload.i64) : b.val.payload.f64;
          return LValue(l - r);
      }
      double l, r;
@@ -1017,10 +1101,19 @@ inline void set_env_var(LState* L, const LValue& env, const char* name, const LV
  }
 
  CLX_INLINE_HOT LValue mul(LState* L, const LValue& a, const LValue& b) {
-     if (a.type() == LType::Integer && b.type() == LType::Integer) [[likely]] return LValue(a.as_integer() * b.as_integer());
-     if ((a.type() == LType::Number || a.type() == LType::Integer) && (b.type() == LType::Number || b.type() == LType::Integer)) [[likely]] {
-         double l = (a.type() == LType::Integer) ? static_cast<double>(a.as_integer()) : a.as_number();
-         double r = (b.type() == LType::Integer) ? static_cast<double>(b.as_integer()) : b.as_number();
+     if (a.type == ValueType::Int64 && b.type == ValueType::Int64) [[likely]] {
+         int64_t ai = a.val.payload.i64, bi = b.val.payload.i64;
+         if (ai == 0 || bi == 0) return LValue(int64_t(0));
+         if (ai == INT64_MIN && bi == -1)
+             return LValue(static_cast<double>(ai) * static_cast<double>(bi));
+         int64_t r = ai * bi;
+         if (r / bi != ai)
+             return LValue(static_cast<double>(ai) * static_cast<double>(bi));
+         return LValue(r);
+     }
+     if ((a.type == ValueType::Double || a.type == ValueType::Int64) && (b.type == ValueType::Double || b.type == ValueType::Int64)) [[likely]] {
+         double l = (a.type == ValueType::Int64) ? static_cast<double>(a.val.payload.i64) : a.val.payload.f64;
+         double r = (b.type == ValueType::Int64) ? static_cast<double>(b.val.payload.i64) : b.val.payload.f64;
          return LValue(l * r);
      }
      double l, r;
@@ -1029,9 +1122,9 @@ inline void set_env_var(LState* L, const LValue& env, const char* name, const LV
  }
 
  CLX_INLINE_HOT LValue div(LState* L, const LValue& a, const LValue& b) {
-     if ((a.type() == LType::Number || a.type() == LType::Integer) && (b.type() == LType::Number || b.type() == LType::Integer)) [[likely]] {
-         double l = (a.type() == LType::Integer) ? static_cast<double>(a.as_integer()) : a.as_number();
-         double r = (b.type() == LType::Integer) ? static_cast<double>(b.as_integer()) : b.as_number();
+     if ((a.type == ValueType::Double || a.type == ValueType::Int64) && (b.type == ValueType::Double || b.type == ValueType::Int64)) [[likely]] {
+         double l = (a.type == ValueType::Int64) ? static_cast<double>(a.val.payload.i64) : a.val.payload.f64;
+         double r = (b.type == ValueType::Int64) ? static_cast<double>(b.val.payload.i64) : b.val.payload.f64;
          return LValue(l / r);
      }
      double l, r;
@@ -1041,28 +1134,47 @@ inline void set_env_var(LState* L, const LValue& env, const char* name, const LV
 
 //------------------ Equality with metamethod fallback
 CLX_INLINE_HOT LValue eq(LState* L, const LValue& a, const LValue& b) {
-    if (a.val == b.val) return LValue(true);
-    if (a.type() == LType::Integer && b.type() == LType::Number) return LValue(static_cast<double>(a.as_integer()) == b.as_number());
-    if (a.type() == LType::Number && b.type() == LType::Integer) return LValue(a.as_number() == static_cast<double>(b.as_integer()));
-    if (a.type() == b.type()) {
-        if (a.type() == LType::Integer) return LValue(a.as_integer() == b.as_integer());
-        if (a.type() == LType::Number) return LValue(a.as_number() == b.as_number());
-        if (a.type() == LType::String) return LValue(std::string_view(a.as_string()) == std::string_view(b.as_string()));
-        if (a.type() == LType::Bool) return LValue(a.as_bool() == b.as_bool());
-        if (a.type() == LType::Nil) return LValue(true);
-        if (a.as_pointer() == b.as_pointer()) return LValue(true);
+    if (a.val.payload.u64 == b.val.payload.u64 && a.type == b.type)
+        return LValue(true);
+    if (a.type == ValueType::Int64 && b.type == ValueType::Double)
+        return LValue(static_cast<double>(a.val.payload.i64) == b.val.payload.f64);
+    if (a.type == ValueType::Double && b.type == ValueType::Int64)
+        return LValue(a.val.payload.f64 == static_cast<double>(b.val.payload.i64));
+    if (a.type == b.type) {
+        if (a.type == ValueType::Int64) return LValue(a.val.payload.i64 == b.val.payload.i64);
+        if (a.type == ValueType::Double) return LValue(a.val.payload.f64 == b.val.payload.f64);
+        if (a.type == ValueType::String) {
+            uint32_t al = a.string_len(), bl = b.string_len();
+            return LValue(al == bl && clx_memcmp(a.as_string(), b.as_string(), al) == 0);
+        }
+        if (a.type == ValueType::Boolean) return LValue(a.val.payload.u64 == b.val.payload.u64);
+        if (a.type == ValueType::Nil) return LValue(true);
+        if (a.type == ValueType::Table || a.type == ValueType::UserData) {
+            LTable* mt = (a.type == ValueType::Table)
+                ? static_cast<LTable*>(a.as_pointer())->metatable
+                : static_cast<LUserdata*>(a.as_pointer())->metatable;
+            LTable* mt_b = (b.type == ValueType::Table)
+                ? static_cast<LTable*>(b.as_pointer())->metatable
+                : static_cast<LUserdata*>(b.as_pointer())->metatable;
+            if (mt && mt == mt_b) {
+                LValue mm = mt->gettable(LValue(L->intern_string("__eq")));
+                if (mm.type != ValueType::Nil)
+                    return call_bin_metamethod(L, a, b, "__eq");
+            }
+        }
+        return LValue(a.val.payload.ptr == b.val.payload.ptr);
     }
     return call_bin_metamethod(L, a, b, "__eq");
 }
 
 //------------------ Safe integer conversion (no metamethods)
 CLX_INLINE bool to_integer(const LValue& v, int64_t& out) {
-    if (v.type() == LType::Integer) {
-        out = v.as_integer();
+    if (v.type == ValueType::Int64) {
+        out = v.val.payload.i64;
         return true;
     }
-    if (v.type() == LType::Number) {
-        double d = v.as_number();
+    if (v.type == ValueType::Double) {
+        double d = v.val.payload.f64;
         if (std::floor(d) == d) {
             out = static_cast<int64_t>(d);
             return true;
@@ -1114,62 +1226,62 @@ CLX_INLINE LValue bnot(LState* L, const LValue& a) {
 }
 
  CLX_INLINE LValue lt(LState* L, const LValue& a, const LValue& b) {
-     if (a.type() == LType::Integer && b.type() == LType::Integer) [[likely]] return LValue(a.as_integer() < b.as_integer());
-     if ((a.type() == LType::Number || a.type() == LType::Integer) && (b.type() == LType::Number || b.type() == LType::Integer)) [[likely]] {
-         double l = (a.type() == LType::Integer) ? static_cast<double>(a.as_integer()) : a.as_number();
-         double r = (b.type() == LType::Integer) ? static_cast<double>(b.as_integer()) : b.as_number();
+     if (a.type == ValueType::Int64 && b.type == ValueType::Int64) [[likely]] return LValue(a.val.payload.i64 < b.val.payload.i64);
+     if ((a.type == ValueType::Double || a.type == ValueType::Int64) && (b.type == ValueType::Double || b.type == ValueType::Int64)) [[likely]] {
+         double l = (a.type == ValueType::Int64) ? static_cast<double>(a.val.payload.i64) : a.val.payload.f64;
+         double r = (b.type == ValueType::Int64) ? static_cast<double>(b.val.payload.i64) : b.val.payload.f64;
          return LValue(l < r);
      }
-     if (a.type() == LType::String && b.type() == LType::String) return a < b;
+     if (a.type == ValueType::String && b.type == ValueType::String) return a < b;
      return call_bin_metamethod(L, a, b, "__lt");
  }
 
  CLX_INLINE LValue le(LState* L, const LValue& a, const LValue& b) {
-     if (a.type() == LType::Integer && b.type() == LType::Integer) [[likely]] return LValue(a.as_integer() <= b.as_integer());
-     if ((a.type() == LType::Number || a.type() == LType::Integer) && (b.type() == LType::Number || b.type() == LType::Integer)) [[likely]] {
-         double l = (a.type() == LType::Integer) ? static_cast<double>(a.as_integer()) : a.as_number();
-         double r = (b.type() == LType::Integer) ? static_cast<double>(b.as_integer()) : b.as_number();
+     if (a.type == ValueType::Int64 && b.type == ValueType::Int64) [[likely]] return LValue(a.val.payload.i64 <= b.val.payload.i64);
+     if ((a.type == ValueType::Double || a.type == ValueType::Int64) && (b.type == ValueType::Double || b.type == ValueType::Int64)) [[likely]] {
+         double l = (a.type == ValueType::Int64) ? static_cast<double>(a.val.payload.i64) : a.val.payload.f64;
+         double r = (b.type == ValueType::Int64) ? static_cast<double>(b.val.payload.i64) : b.val.payload.f64;
          return LValue(l <= r);
      }
-     if (a.type() == LType::String && b.type() == LType::String) return a <= b;
+     if (a.type == ValueType::String && b.type == ValueType::String) return a <= b;
      return call_bin_metamethod(L, a, b, "__le");
  }
 
 //------------------ Length operator with metamethod fallback
 CLX_INLINE_COLD LValue len(LState* L, const LValue& a) {
-    if (a.type() == LType::String) {
+    if (a.type == ValueType::String) {
         return LValue(static_cast<int64_t>(a.string_len()));
     }
 
-    if (a.type() != LType::Table) return call_bin_metamethod(L, a, a, "__len");
+    if (a.type != ValueType::Table) return call_bin_metamethod(L, a, a, "__len");
     LTable* t = static_cast<LTable*>(a.as_pointer());
 
     if (t->metatable) {
-        LValue* mm = t->metatable->gettable(LValue(L->intern_string("__len", 5)));
-        if (mm && mm->type() != LType::Nil) return call_bin_metamethod(L, a, a, "__len");
+        LValue mm = t->metatable->gettable(LValue(L->intern_string("__len", 5)));
+        if (mm.type != ValueType::Nil) return call_bin_metamethod(L, a, a, "__len");
     }
 
     int64_t lo = 0;
     int64_t hi = static_cast<int64_t>(t->array_size) + 1;
     while (true) {
-        LValue* p = t->gettable(LValue(hi));
-        if (!p || p->type() == LType::Nil) break;
+        LValue p = t->gettable(LValue(static_cast<int64_t>(hi)));
+        if (p.type == ValueType::Nil) break;
         lo = hi;
         hi = (hi < 8) ? 8 : hi * 2;
     }
     while (hi - lo > 1) {
         int64_t mid = lo + (hi - lo) / 2;
-        LValue* p = t->gettable(LValue(mid));
-        if (p && p->type() != LType::Nil) lo = mid; else hi = mid;
+        LValue p = t->gettable(LValue(static_cast<int64_t>(mid)));
+        if (p.type != ValueType::Nil) lo = mid; else hi = mid;
     }
     return LValue(lo);
 }
 
 //------------------ Modulo with metamethod fallback
 CLX_INLINE LValue mod(LState* L, const LValue& a, const LValue& b) {
-    if ((a.type() == LType::Number || a.type() == LType::Integer) && (b.type() == LType::Number || b.type() == LType::Integer)) {
-        double l = (a.type() == LType::Integer) ? static_cast<double>(a.as_integer()) : a.as_number();
-        double r = (b.type() == LType::Integer) ? static_cast<double>(b.as_integer()) : b.as_number();
+    if ((a.type == ValueType::Double || a.type == ValueType::Int64) && (b.type == ValueType::Double || b.type == ValueType::Int64)) {
+        double l = (a.type == ValueType::Int64) ? static_cast<double>(a.val.payload.i64) : a.val.payload.f64;
+        double r = (b.type == ValueType::Int64) ? static_cast<double>(b.val.payload.i64) : b.val.payload.f64;
         return LValue(l - std::floor(l / r) * r);
     }
     double l, r;
@@ -1179,9 +1291,9 @@ CLX_INLINE LValue mod(LState* L, const LValue& a, const LValue& b) {
 
 //------------------ Floor-division with metamethod fallback
 CLX_INLINE LValue idiv(LState* L, const LValue& a, const LValue& b) {
-    if ((a.type() == LType::Number || a.type() == LType::Integer) && (b.type() == LType::Number || b.type() == LType::Integer)) {
-        double l = (a.type() == LType::Integer) ? static_cast<double>(a.as_integer()) : a.as_number();
-        double r = (b.type() == LType::Integer) ? static_cast<double>(b.as_integer()) : b.as_number();
+    if ((a.type == ValueType::Double || a.type == ValueType::Int64) && (b.type == ValueType::Double || b.type == ValueType::Int64)) {
+        double l = (a.type == ValueType::Int64) ? static_cast<double>(a.val.payload.i64) : a.val.payload.f64;
+        double r = (b.type == ValueType::Int64) ? static_cast<double>(b.val.payload.i64) : b.val.payload.f64;
         return LValue(std::floor(l / r));
     }
     double l, r;
@@ -1191,9 +1303,9 @@ CLX_INLINE LValue idiv(LState* L, const LValue& a, const LValue& b) {
 
 //------------------ Power with metamethod fallback
 CLX_INLINE LValue pow(LState* L, const LValue& a, const LValue& b) {
-    if ((a.type() == LType::Number || a.type() == LType::Integer) && (b.type() == LType::Number || b.type() == LType::Integer)) {
-        double l = (a.type() == LType::Integer) ? static_cast<double>(a.as_integer()) : a.as_number();
-        double r = (b.type() == LType::Integer) ? static_cast<double>(b.as_integer()) : b.as_number();
+    if ((a.type == ValueType::Double || a.type == ValueType::Int64) && (b.type == ValueType::Double || b.type == ValueType::Int64)) {
+        double l = (a.type == ValueType::Int64) ? static_cast<double>(a.val.payload.i64) : a.val.payload.f64;
+        double r = (b.type == ValueType::Int64) ? static_cast<double>(b.val.payload.i64) : b.val.payload.f64;
         return LValue(std::pow(l, r));
     }
     double l, r;
@@ -1203,8 +1315,8 @@ CLX_INLINE LValue pow(LState* L, const LValue& a, const LValue& b) {
 
 //------------------ Unary minus with metamethod fallback
 CLX_INLINE LValue unm(LState* L, const LValue& a) {
-    if (a.type() == LType::Integer) return LValue(-static_cast<double>(a.as_integer()));
-    if (a.type() == LType::Number) return LValue(-a.as_number());
+    if (a.type == ValueType::Int64) return LValue(-static_cast<double>(a.val.payload.i64));
+    if (a.type == ValueType::Double) return LValue(-a.val.payload.f64);
     double d;
     if (a.to_number(d)) return LValue(-d);
     return call_bin_metamethod(L, a, a, "__unm");
@@ -1222,25 +1334,35 @@ CLX_INLINE_COLD LValue concat_multi(LState* L, const LValue* args, size_t count)
         size_t  lens[8];
         size_t total_len = 0;
         for (size_t i = 0; i < count; ++i) {
-            if (args[i].type() != LType::String && args[i].type() > LType::Integer) {
+            if (args[i].type != ValueType::String && args[i].type != ValueType::Int64 && args[i].type != ValueType::Double) {
                 return call_bin_metamethod(L, args[i], args[i == count - 1 ? i - 1 : i + 1], "__concat");
             }
-            if (args[i].type() == LType::String) {
+            if (args[i].type == ValueType::String) {
                 ptrs[i] = args[i].as_string();
                 lens[i] = args[i].string_len();
             } else {
                 char buf[32];
-                if (args[i].type() == LType::Integer) {
+                if (args[i].type == ValueType::Int64) {
                     lens[i] = static_cast<size_t>(std::snprintf(buf, sizeof(buf), "%lld",
-                        static_cast<long long>(args[i].as_integer())));
+                        static_cast<long long>(args[i].val.payload.i64)));
                 } else {
-                    lens[i] = static_cast<size_t>(std::snprintf(buf, sizeof(buf), "%.14g", args[i].as_number()));
+                    lens[i] = static_cast<size_t>(std::snprintf(buf, sizeof(buf), "%.14g", args[i].val.payload.f64));
                 }
                 char* s = new char[lens[i]];
                 clx_memcpy(s, buf, lens[i]);
                 ptrs[i] = s;
             }
             total_len += lens[i];
+        }
+        if (total_len <= 6) {
+            char buf[8];
+            char* bp = buf;
+            for (size_t i = 0; i < count; ++i) {
+                clx_memcpy(bp, ptrs[i], lens[i]);
+                bp += lens[i];
+                if (args[i].type != ValueType::String) delete[] ptrs[i];
+            }
+            return LValue::istr(buf, static_cast<uint32_t>(total_len));
         }
         uint32_t len32 = static_cast<uint32_t>(total_len);
         char* mem = new char[8 + total_len + 1];
@@ -1250,7 +1372,7 @@ CLX_INLINE_COLD LValue concat_multi(LState* L, const LValue* args, size_t count)
         for (size_t i = 0; i < count; ++i) {
             clx_memcpy(p, ptrs[i], lens[i]);
             p += lens[i];
-            if (args[i].type() != LType::String) delete[] ptrs[i];
+            if (args[i].type != ValueType::String) delete[] ptrs[i];
         }
         *p = '\0';
         uint32_t h = total_len <= 8 ? swar_hash_8(mem + 8, total_len) : wyhash_str(mem + 8, total_len);
@@ -1263,7 +1385,7 @@ CLX_INLINE_COLD LValue concat_multi(LState* L, const LValue* args, size_t count)
     std::vector<std::string> parts;
     parts.reserve(count);
     for (size_t i = 0; i < count; ++i) {
-        if (args[i].type() != LType::String && args[i].type() > LType::Integer) {
+        if (args[i].type != ValueType::String && args[i].type != ValueType::Int64 && args[i].type != ValueType::Double) {
             return call_bin_metamethod(L, args[i], args[i == count - 1 ? i - 1 : i + 1], "__concat");
         }
         parts.push_back(args[i].to_string(L));
@@ -1275,55 +1397,80 @@ CLX_INLINE_COLD LValue concat_multi(LState* L, const LValue* args, size_t count)
     return LValue(L->intern_string(res));
 }
 
+//------------------ Creates a string LValue with inline encoding for short strings
+CLX_INLINE LValue make_string(LState* L, const char* s, size_t len) {
+    if (len <= 6) return LValue::istr(s, len);
+    return LValue(L->intern_string(s, len));
+}
+
+CLX_INLINE LValue make_string(LState* L, const char* s) {
+    size_t len = __builtin_strlen(s);
+    if (len <= 6) return LValue::istr(s, len);
+    return LValue(L->intern_string(s, len));
+}
+
+inline LValue make_string(LState* L, const std::string& s) {
+    return make_string(L, s.data(), s.size());
+}
+
 //------------------ Table read with __index fallback
 inline LValue table_get(LState* L, const LValue& obj, const LValue& key) {
     LTable* mt = nullptr;
     LValue direct;
 
-    if (obj.type() == LType::Table) {
+    if (obj.type == ValueType::Table) {
         LTable* t = static_cast<LTable*>(obj.as_pointer());
-        if (key.type() == LType::Integer) {
-            if (static_cast<uint64_t>(key.as_integer() - 1) < t->array_cap) direct = t->array[key.as_integer() - 1];
-        } else if (key.type() == LType::Number) {
-            double d = key.as_number();
+        if (key.type == ValueType::Int64) {
+            int64_t idx = key.val.payload.i64;
+            if (static_cast<uint64_t>(idx - 1) < t->array_cap) {
+                direct = LValue(t->array[idx - 1], t->array_types[idx - 1]);
+            }
+        } else if (key.type == ValueType::Double) {
+            double d = key.val.payload.f64;
             int64_t idx = static_cast<int64_t>(d);
-            if (d == static_cast<double>(idx) && static_cast<uint64_t>(idx - 1) < t->array_cap) direct = t->array[idx - 1];
+            if (d == static_cast<double>(idx) && static_cast<uint64_t>(idx - 1) < t->array_cap) {
+                direct = LValue(t->array[idx - 1], t->array_types[idx - 1]);
+            }
         }
-        if (direct.type() == LType::Nil) {
+        if (direct.type == ValueType::Nil) {
             if (t->hash_size > 0) {
                 uint32_t _mask = static_cast<uint32_t>(t->hash_size - 1);
-                uint32_t _h = lvalue_hash(key.val) & _mask;
+                uint32_t _h = lvalue_hash(key) & _mask;
                 for (;;) {
                     HashEntry& _e = t->entries[_h];
-                    if (_e.key == HASH_EMPTY) break;
-                    if (_e.key != HASH_TOMBSTONE && lvalue_eq_fast(_e.key, key.val)) {
-                        direct = _e.val;
-                        break;
+                    if (_e.ktype == ValueType::Nil) {
+                        if (_e.key.payload.u64 == HASH_EMPTY) break;
+                    } else {
+                        LValue _ek(_e.key, _e.ktype);
+                        if (lvalue_eq_fast(_ek, key)) {
+                            direct = LValue(_e.val, _e.vtype);
+                            break;
+                        }
                     }
                     _h = (_h + 1) & _mask;
                 }
             }
-            if (direct.type() == LType::Nil)
+            if (direct.type == ValueType::Nil)
                 direct = t->get_value(L, key);
         }
-        if (direct.type() != LType::Nil) return direct;
+        if (direct.type != ValueType::Nil) return direct;
         mt = t->metatable;
-    } else if (obj.type() == LType::Userdata) {
+    } else if (obj.type == ValueType::UserData) {
         LUserdata* ud = static_cast<LUserdata*>(obj.as_pointer());
         mt = ud->metatable;
-    } else if (obj.type() == LType::String) {
+    } else if (obj.type == ValueType::String) {
         mt = L->string_metatable;
         if (!mt) return LValue();
-        LValue* index = mt->gettable(LValue(L->intern_string("__index")));
-        if (!index) return LValue();
-        if (index->type() == LType::Table)
-            return table_get(L, *index, key);
-        if (index->type() == LType::Function) {
+        LValue index = mt->gettable(LValue(L->intern_string("__index")));
+        if (index.type == ValueType::Nil) return LValue();
+        if (index.type == ValueType::Table)
+            return table_get(L, index, key);
+        if (index.type == ValueType::Function) {
             LValue args[2] = { obj, key };
             size_t prev = L->shadow_top;
-            L->shadow_stack[L->shadow_top++] = &args[0];
-            L->shadow_stack[L->shadow_top++] = &args[1];
-            MultiValue mv = call_function(L, *index, args, 2, "__index", 0);
+            L->shadow_stack[L->shadow_top++] = {&args[0].val, &args[0].type};
+            L->shadow_stack[L->shadow_top++] = {&args[1].val, &args[1].type};
+            MultiValue mv = call_function(L, index, args, 2, "__index", 0);
             L->shadow_top = prev;
             return mv.count > 0 ? mv[0] : LValue();
         }
@@ -1333,19 +1480,19 @@ inline LValue table_get(LState* L, const LValue& obj, const LValue& key) {
     }
 
     if (!mt) return LValue();
-    LValue* index = mt->gettable(LValue(L->intern_string("__index")));
-    if (!index) return LValue();
-    if (index->type() == LType::Function) {
+    LValue index = mt->gettable(LValue(L->intern_string("__index")));
+    if (index.type == ValueType::Nil) return LValue();
+    if (index.type == ValueType::Function) {
         LValue args[2] = { obj, key };
         size_t prev = L->shadow_top;
-        L->shadow_stack[L->shadow_top++] = &args[0];
-        L->shadow_stack[L->shadow_top++] = &args[1];
-        MultiValue mv = call_function(L, *index, args, 2, "__index", 0);
+        L->shadow_stack[L->shadow_top++] = {&args[0].val, &args[0].type};
+        L->shadow_stack[L->shadow_top++] = {&args[1].val, &args[1].type};
+        MultiValue mv = call_function(L, index, args, 2, "__index", 0);
         L->shadow_top = prev;
         return mv.count > 0 ? mv[0] : LValue();
     }
-    if (index->type() == LType::Table)
-        return table_get(L, *index, key);
+    if (index.type == ValueType::Table)
+        return table_get(L, index, key);
     return LValue();
 }
 
@@ -1353,42 +1500,44 @@ inline LValue table_get(LState* L, const LValue& obj, const LValue& key) {
 inline void table_set(LState* L, const LValue& obj, const LValue& key, const LValue& val) {
     LTable* mt = nullptr;
 
-    if (obj.type() == LType::Table) {
+    if (obj.type == ValueType::Table) {
         LTable* t = static_cast<LTable*>(obj.as_pointer());
-        if (key.type() == LType::Integer) {
-            int64_t k = key.as_integer();
+        if (key.type == ValueType::Int64) {
+            int64_t k = key.val.payload.i64;
             if (static_cast<uint64_t>(k - 1) < t->array_cap) {
-                t->array[k - 1] = val;
-                if (static_cast<size_t>(k) > t->array_size) t->array_size = k;
+                t->array[k - 1] = val.val;
+                t->array_types[k - 1] = val.type;
+                if (static_cast<size_t>(k) > t->array_size) t->array_size = static_cast<size_t>(k);
                 return;
             }
-        } else if (key.type() == LType::Number) {
-            double d = key.as_number();
+        } else if (key.type == ValueType::Double) {
+            double d = key.val.payload.f64;
             int64_t idx = static_cast<int64_t>(d);
             if (d == static_cast<double>(idx) && static_cast<uint64_t>(idx - 1) < t->array_cap) {
-                t->array[idx - 1] = val;
-                if (static_cast<size_t>(idx) > t->array_size) t->array_size = idx;
+                t->array[idx - 1] = val.val;
+                t->array_types[idx - 1] = val.type;
+                if (static_cast<size_t>(idx) > t->array_size) t->array_size = static_cast<size_t>(idx);
                 return;
             }
         }
         t->set_value(L, key, val);
         return;
-    } else if (obj.type() == LType::Userdata) {
+    } else if (obj.type == ValueType::UserData) {
         LUserdata* ud = static_cast<LUserdata*>(obj.as_pointer());
         mt = ud->metatable;
         if (!mt) return;
-        LValue* newindex = mt->gettable(LValue(L->intern_string("__newindex")));
-        if (!newindex) return;
-        if (newindex->type() == LType::Function) {
+        LValue newindex = mt->gettable(LValue(L->intern_string("__newindex")));
+        if (newindex.type == ValueType::Nil) return;
+        if (newindex.type == ValueType::Function) {
             LValue args[3] = { obj, key, val };
             size_t prev = L->shadow_top;
-            L->shadow_stack[L->shadow_top++] = &args[0];
-            L->shadow_stack[L->shadow_top++] = &args[1];
-            L->shadow_stack[L->shadow_top++] = &args[2];
-            call_function(L, *newindex, args, 3, "__newindex", 0);
+            L->shadow_stack[L->shadow_top++] = {&args[0].val, &args[0].type};
+            L->shadow_stack[L->shadow_top++] = {&args[1].val, &args[1].type};
+            L->shadow_stack[L->shadow_top++] = {&args[2].val, &args[2].type};
+            call_function(L, newindex, args, 3, "__newindex", 0);
             L->shadow_top = prev;
-        } else if (newindex->type() == LType::Table) {
-            table_set(L, *newindex, key, val);
+        } else if (newindex.type == ValueType::Table) {
+            table_set(L, newindex, key, val);
         }
         return;
     }
@@ -1399,13 +1548,13 @@ inline LValue table_get_int(LState* L, const LValue& obj, size_t idx) {
     LTable* mt = nullptr;
     LValue key_val = LValue(static_cast<int64_t>(idx));
 
-    if (obj.type() == LType::Table) {
+    if (obj.type == ValueType::Table) {
         LTable* t = static_cast<LTable*>(obj.as_pointer());
-        if (idx - 1 < t->array_cap) return t->array[idx - 1];
+        if (idx - 1 < t->array_cap) return LValue(t->array[idx - 1], t->array_types[idx - 1]);
         LValue result = t->get_value(L, key_val);
-        if (result.type() != LType::Nil) return result;
+        if (result.type != ValueType::Nil) return result;
         mt = t->metatable;
-    } else if (obj.type() == LType::Userdata) {
+    } else if (obj.type == ValueType::UserData) {
         LUserdata* ud = static_cast<LUserdata*>(obj.as_pointer());
         mt = ud->metatable;
     } else {
@@ -1413,19 +1562,19 @@ inline LValue table_get_int(LState* L, const LValue& obj, size_t idx) {
     }
 
     if (!mt) return LValue();
-    LValue* index = mt->gettable(LValue(L->intern_string("__index")));
-    if (!index) return LValue();
-    if (index->type() == LType::Function) {
+    LValue index = mt->gettable(LValue(L->intern_string("__index")));
+    if (index.type == ValueType::Nil) return LValue();
+    if (index.type == ValueType::Function) {
         LValue args[2] = { obj, key_val };
         size_t prev = L->shadow_top;
-        L->shadow_stack[L->shadow_top++] = &args[0];
-        L->shadow_stack[L->shadow_top++] = &args[1];
-        MultiValue mv = call_function(L, *index, args, 2, "__index", 0);
+        L->shadow_stack[L->shadow_top++] = {&args[0].val, &args[0].type};
+        L->shadow_stack[L->shadow_top++] = {&args[1].val, &args[1].type};
+        MultiValue mv = call_function(L, index, args, 2, "__index", 0);
         L->shadow_top = prev;
         return mv.count > 0 ? mv[0] : LValue();
     }
-    if (index->type() == LType::Table)
-        return table_get(L, *index, key_val);
+    if (index.type == ValueType::Table)
+        return table_get(L, index, key_val);
     return LValue();
 }
 
@@ -1433,10 +1582,11 @@ inline LValue table_get_int(LState* L, const LValue& obj, size_t idx) {
 inline void table_set_int(LState* L, const LValue& obj, size_t idx, const LValue& val) {
     LValue key_val = LValue(static_cast<int64_t>(idx));
 
-    if (obj.type() == LType::Table) {
+    if (obj.type == ValueType::Table) {
         LTable* t = static_cast<LTable*>(obj.as_pointer());
         if (idx - 1 < t->array_cap) {
-            t->array[idx - 1] = val;
+            t->array[idx - 1] = val.val;
+            t->array_types[idx - 1] = val.type;
             if (static_cast<size_t>(idx) > t->array_size) t->array_size = idx;
             return;
         }
@@ -1444,29 +1594,29 @@ inline void table_set_int(LState* L, const LValue& obj, size_t idx, const LValue
         return;
     }
 
-    if (obj.type() == LType::Userdata) {
+    if (obj.type == ValueType::UserData) {
         LUserdata* ud = static_cast<LUserdata*>(obj.as_pointer());
         if (!ud->metatable) return;
-        LValue* newindex = ud->metatable->gettable(LValue(L->intern_string("__newindex")));
-        if (!newindex) return;
-        if (newindex->type() == LType::Function) {
+        LValue newindex = ud->metatable->gettable(LValue(L->intern_string("__newindex")));
+        if (newindex.type == ValueType::Nil) return;
+        if (newindex.type == ValueType::Function) {
             LValue args[3] = { obj, key_val, val };
             size_t prev = L->shadow_top;
-            L->shadow_stack[L->shadow_top++] = &args[0];
-            L->shadow_stack[L->shadow_top++] = &args[1];
-            L->shadow_stack[L->shadow_top++] = &args[2];
-            call_function(L, *newindex, args, 3, "__newindex", 0);
+            L->shadow_stack[L->shadow_top++] = {&args[0].val, &args[0].type};
+            L->shadow_stack[L->shadow_top++] = {&args[1].val, &args[1].type};
+            L->shadow_stack[L->shadow_top++] = {&args[2].val, &args[2].type};
+            call_function(L, newindex, args, 3, "__newindex", 0);
             L->shadow_top = prev;
-        } else if (newindex->type() == LType::Table) {
-            table_set(L, *newindex, key_val, val);
+        } else if (newindex.type == ValueType::Table) {
+            table_set(L, newindex, key_val, val);
         }
     }
 }
 
 //------------------ Cached table access slot
 struct CacheSlot {
-    uint64_t table_val    = 0;
-    uint64_t key_val      = 0;
+    TValue   table_val;
+    TValue   key_val;
     uint32_t hash_version = 0;
     LValue   cached;
     bool     valid        = false;
@@ -1474,13 +1624,13 @@ struct CacheSlot {
 
 //------------------ Cached slot table read
 CLX_INLINE_HOT LValue table_get_cs(LState* L, const LValue& obj, const LValue& key, CacheSlot* cs) {
-    if (obj.type() == LType::Table) {
-
-        if (key.type() == LType::Integer)
+    if (obj.type == ValueType::Table) {
+        if (key.type == ValueType::Int64)
             return table_get(L, obj, key);
-        LTable* t = static_cast<LTable*>(obj.as_pointer());
-        if (cs->valid && cs->table_val == obj.val &&
-            cs->key_val  == key.val &&
+        LTable* t = static_cast<LTable*>(obj.val.payload.ptr);
+        if (cs->valid &&
+            cs->table_val.payload.u64 == obj.val.payload.u64 &&
+            cs->key_val.payload.u64 == key.val.payload.u64 &&
             cs->hash_version == t->hash_version)
             return cs->cached;
         LValue result = table_get(L, obj, key);
@@ -1497,8 +1647,8 @@ CLX_INLINE_HOT LValue table_get_cs(LState* L, const LValue& obj, const LValue& k
 //------------------ Cached slot table write
 CLX_INLINE_HOT void table_set_cs(LState* L, const LValue& obj, const LValue& key, const LValue& val, CacheSlot* cs) {
     table_set(L, obj, key, val);
-    if (obj.type() == LType::Table && key.type() != LType::Integer) {
-        LTable* t        = static_cast<LTable*>(obj.as_pointer());
+    if (obj.type == ValueType::Table && key.type != ValueType::Int64) {
+        LTable* t        = static_cast<LTable*>(obj.val.payload.ptr);
         cs->valid        = true;
         cs->table_val    = obj.val;
         cs->key_val      = key.val;
@@ -1507,7 +1657,6 @@ CLX_INLINE_HOT void table_set_cs(LState* L, const LValue& obj, const LValue& key
     }
 }
 
-//------------------ String library function declarations
 MultiValue str_len(LState*, const LValue*, size_t);
 MultiValue str_sub(LState*, const LValue*, size_t);
 MultiValue str_reverse(LState*, const LValue*, size_t);
@@ -1526,7 +1675,6 @@ MultiValue str_pack(LState*, const LValue*, size_t);
 MultiValue str_packsize(LState*, const LValue*, size_t);
 MultiValue str_unpack(LState*, const LValue*, size_t);
 
-//------------------ Table library function declarations
 MultiValue table_concat(LState*, const LValue*, size_t);
 MultiValue table_insert(LState*, const LValue*, size_t);
 MultiValue table_remove(LState*, const LValue*, size_t);
@@ -1535,7 +1683,6 @@ MultiValue table_pack(LState*, const LValue*, size_t);
 MultiValue table_unpack(LState*, const LValue*, size_t);
 MultiValue table_move(LState*, const LValue*, size_t);
 
-//------------------ Standard library opener declarations
 void luastd_base(LState* L);
 void luastd_package(LState* L);
 void luastd_math(LState* L);
