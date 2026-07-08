@@ -8,6 +8,7 @@
 #include "parser.h"
 #include "../codegen/codegen.h"
 #include <stdexcept>
+#include <charconv>
 
 #define INVALID_NODE 0xFFFFFFFF
 
@@ -188,7 +189,9 @@ uint32_t Parser::parse_primary() {
             node.as.number.val = current_token.number_value;
         } else {
             node.type = NodeType::Integer;
-            node.as.integer.val = static_cast<int64_t>(current_token.number_value);
+            int64_t ival = 0;
+            auto [p, ec] = std::from_chars(current_token.text.data(), current_token.text.data() + current_token.text.size(), ival);
+            node.as.integer.val = ival;
         }
         advance();
         return add_node(node);
