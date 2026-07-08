@@ -67,12 +67,12 @@ The compiler is already capable of compiling non-trivial Lua applications, but c
 
 ## Requirements
 
-- **Linux**: `clang++` or `g++`
-- **macOS**: `clang++` (Xcode)
-- **Windows**: `clang++` (LLVM) or MSVC
+- **Linux**: `g++` (recommended for TCO) or `clang++`
+- **macOS**: `g++` (recommended for TCO) or `clang++` (Xcode)
+- **Windows**: `g++` (LLVM) or MSVC
 - **CMake 3.15+** for building
 
-> **Tip**: Clang is recommended for best performance. It enables advanced optimizations that produce the fastest executables.
+> **Note:** The compiler used to build `clx` is fixed at build time via CMake and used for all Lua script compilation. This ensures ABI compatibility between the runtime libraries and generated code. Rebuild clx with a different compiler if you need a different backend.
 
 ## Build
 
