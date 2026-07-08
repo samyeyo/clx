@@ -33,7 +33,7 @@ std::vector<std::string> precompiled_modules;
 //------------------ ENUM: BuildMode - output mode (executable binary, object file, or static library)
 enum class BuildMode { Executable, Object, Static };
 
-//------------------ STRUCT: Compiler - holds detected C++ compiler name and command
+//------------------ STRUCT: Compiler - holds C++ compiler name and command
 struct Compiler {
     std::string name;
     std::string cmd;
@@ -62,34 +62,15 @@ std::string execute(const std::string& cmd, int& out_code) {
 }
 
 
-//------------------ CLX: detect_compiler - auto-detects available C++ compiler (clang++/g++/cl)
-Compiler detect_compiler() {
-    int code = -1;
-
-#ifdef _WIN32
-    std::string redirect = " >nul 2>&1";
-#else
-    std::string redirect = " >/dev/null 2>&1";
+//------------------ CLX: get_compiler - returns the compiler used to build clx (embedded at build time)
+Compiler get_compiler() {
+#ifndef CLX_DEFAULT_CXX
+    #error "CLX_DEFAULT_CXX not defined — rebuild with CMake"
 #endif
-
-    execute("clang++ --version" + redirect, code);
-    if (code == 0) return {"clang", "clang++"};
-
-    execute("g++ --version" + redirect, code);
-    if (code == 0) {
-#ifdef __APPLE__
-        return {"clang", "g++"};
-#else
-        return {"gcc", "g++"};
+#ifndef CLX_DEFAULT_CXX_NAME
+    #error "CLX_DEFAULT_CXX_NAME not defined — rebuild with CMake"
 #endif
-    }
-
-#ifdef _WIN32
-    execute("cl" + redirect, code);
-    if (code == 0) return {"msvc", "cl"};
-#endif
-
-    return {"unknown", ""};
+    return {CLX_DEFAULT_CXX_NAME, CLX_DEFAULT_CXX};
 }
 
 
@@ -97,7 +78,7 @@ Compiler detect_compiler() {
 void print_help() {
     std::cout << "Usage: clx [options] <file.lua> [<compiler-options>]\n\n"
               << "clx Compiler Options:\n"
-              << "  --output <name>       Specify output file name\n"
+              << "  -o, --output <name>   Specify output file name\n"
               << "  --executable          Build executable (default)\n"
               << "  --object              Compile to object file (.o/.obj)\n"
                << "  --static              Compile to static library (.a/.lib)\n"
@@ -138,7 +119,7 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--version") {
             std::cout << "clx 0.1.0\nMIT License - Copyright (c) 2026 Tine Samir\n";
             return 0;
-        } else if (arg == "--output") {
+        } else if (arg == "--output" || arg == "-o") {
             if (i + 1 < argc) custom_output_name = argv[++i];
         } else if (arg == "--minimal") {
             minimal_active = true;
@@ -327,8 +308,8 @@ int main(int argc, char* argv[]) {
         appender << "}\n";
     }
 
-    Compiler cc = detect_compiler();
-    if (cc.name == "unknown") {
+    Compiler cc = get_compiler();
+    if (cc.cmd.empty()) {
         std::cerr << "Error: No C++ compiler found.\n";
         return 2;
     }
@@ -428,6 +409,13 @@ int main(int argc, char* argv[]) {
             mod_search_dirs.push_back(p);
     }
 #endif
+    for (const auto& opt : cc_options) {
+        if (opt.size() > 2 && opt[0] == '-' && opt[1] == 'L') {
+            std::string dir = opt.substr(2);
+            if (!dir.empty() && fs::is_directory(dir))
+                mod_search_dirs.push_back(fs::path(dir));
+        }
+    }
 
     std::string all_cpp_files = "";
     for (const auto& f : cpp_files) {
