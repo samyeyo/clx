@@ -239,9 +239,9 @@ static MultiValue math_randomseed(LState* L, const LValue* args, size_t count) {
 //------------------ math_type: returns "integer" or "float" for a number
 static MultiValue math_type(LState* L, const LValue* args, size_t count) {
     if (count == 0) return MultiValue();
-    LType t = args[0].type();
-    if (t == LType::Integer) return MultiValue(LValue(L->intern_string("integer")));
-    if (t == LType::Number) return MultiValue(LValue(L->intern_string("float")));
+    ValueType t = args[0].type;
+    if (t == Int64) return MultiValue(LValue(L->intern_string("integer")));
+    if (t == Double) return MultiValue(LValue(L->intern_string("float")));
     return MultiValue();
 }
 

@@ -26,6 +26,11 @@
 #include "sokol_glue.h"
 #include "util/sokol_gl.h"
 
+// Undefine macOS's nil macro (from MacTypes.h via AppKit) which conflicts with clx::nil()
+#ifdef nil
+#undef nil
+#endif
+
 namespace {
 
 clx::LState* g_L = nullptr;
@@ -75,7 +80,7 @@ static void init_cb(void* user_data) {
     sgl_matrix_mode_projection();
     sgl_ortho(0.0f, w, h, 0.0f, -1.0f, 1.0f);
 
-    if (g_init_fn.type() == clx::LType::Function) {
+    if (g_init_fn.type == clx::Function) {
         try {
             clx::call(g_L, g_init_fn);
         } catch (...) {}
@@ -87,7 +92,7 @@ static void frame_cb(void* user_data) {
     g_L = static_cast<clx::LState*>(user_data);
 
     
-    if (g_frame_fn.type() == clx::LType::Function) {
+    if (g_frame_fn.type == clx::Function) {
         try {
             double dt = sapp_frame_duration();
             clx::call(g_L, g_frame_fn, dt);
@@ -114,7 +119,7 @@ static void frame_cb(void* user_data) {
 //------------------ SOKOL: event_cb - sokol event callback, dispatches input events to Lua
 static void event_cb(const sapp_event* ev, void* user_data) {
     g_L = static_cast<clx::LState*>(user_data);
-    if (g_event_fn.type() != clx::LType::Function) return;
+    if (g_event_fn.type != clx::Function) return;
 
     clx::LValue t = clx::table(g_L);
 
@@ -231,7 +236,7 @@ static clx::MultiValue run(clx::LState* L, const clx::LValue* args, size_t n) {
     if (clx::is_number(hv)) h = static_cast<int>(hv.as_number());
 
     clx::LValue tv = clx::raw_get(L, cfg, "title");
-    const char* title = tv.type() == clx::LType::String ? tv.as_string() : "Pong";
+    const char* title = tv.type == clx::String ? tv.as_string() : "Pong";
 
     sapp_desc desc;
     std::memset(&desc, 0, sizeof(desc));

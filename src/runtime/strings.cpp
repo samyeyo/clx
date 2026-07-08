@@ -24,10 +24,10 @@ static const char* get_string(LState* L, const LValue* args, size_t count, size_
         std::snprintf(buf, sizeof(buf), "bad argument #%d to a string function (string expected, got no value)", idx);
         throw_runtime_error(buf);
     }
-    if (args[idx - 1].type() != LType::String) {
+    if (args[idx - 1].type != String) {
         char buf[128];
         std::snprintf(buf, sizeof(buf), "bad argument #%d to a string function (string expected, got %s)", idx,
-            args[idx - 1].type() == LType::Number ? "number" : "table");
+            args[idx - 1].type == Double ? "number" : "table");
         throw_runtime_error(buf);
     }
     len = args[idx - 1].string_len();
@@ -41,10 +41,10 @@ static const char* get_binary_string(LState* L, const LValue* args, size_t count
         std::snprintf(buf, sizeof(buf), "bad argument #%d to a string function (string expected, got no value)", idx);
         throw_runtime_error(buf);
     }
-    if (args[idx - 1].type() != LType::String) {
+    if (args[idx - 1].type != String) {
         char buf[128];
         std::snprintf(buf, sizeof(buf), "bad argument #%d to a string function (string expected, got %s)", idx,
-            args[idx - 1].type() == LType::Number ? "number" : "table");
+            args[idx - 1].type == Double ? "number" : "table");
         throw_runtime_error(buf);
     }
     len = args[idx - 1].string_len();
@@ -64,7 +64,7 @@ static int64_t get_integer(LState* L, const LValue* args, size_t count, int idx)
     if (args[idx - 1].to_number(d)) return (int64_t)d;
     char buf[128];
     std::snprintf(buf, sizeof(buf), "bad argument #%d to a string function (number expected, got %s)", idx,
-        args[idx - 1].type() == LType::String ? "string" : "table");
+        args[idx - 1].type == String ? "string" : "table");
     throw_runtime_error(buf);
 }
 
@@ -101,8 +101,8 @@ MultiValue str_len(LState* L, const LValue* args, size_t count) {
 MultiValue str_sub(LState* L, const LValue* args, size_t count) {
     size_t l;
     const char* s = get_string(L, args, count, l, 1);
-    int64_t start_i = (count >= 2 && args[1].type() != LType::Nil) ? get_integer(L, args, count, 2) : 1;
-    int64_t end_i   = (count >= 3 && args[2].type() != LType::Nil) ? get_integer(L, args, count, 3) : (int64_t)l;
+    int64_t start_i = (count >= 2 && args[1].type != Nil) ? get_integer(L, args, count, 2) : 1;
+    int64_t end_i   = (count >= 3 && args[2].type != Nil) ? get_integer(L, args, count, 3) : (int64_t)l;
 
 
     size_t start, end;
@@ -117,6 +117,9 @@ MultiValue str_sub(LState* L, const LValue* args, size_t count) {
     if (start <= end) {
         size_t subl     = end - start + 1;
         const char* src = s + start - 1;
+
+        if (subl <= 6)
+            return MultiValue(LValue::istr(src, subl));
 
         uint32_t h = subl <= 8 ? swar_hash_8(src, subl) : wyhash_str(src, subl);
 
@@ -139,6 +142,11 @@ MultiValue str_sub(LState* L, const LValue* args, size_t count) {
 MultiValue str_reverse(LState* L, const LValue* args, size_t count) {
     size_t l;
     const char* s = get_string(L, args, count, l, 1);
+    if (l <= 6) {
+        char buf[8];
+        for (size_t i = 0; i < l; i++) buf[i] = s[l - i - 1];
+        return MultiValue(LValue::istr(buf, static_cast<uint32_t>(l)));
+    }
     uint32_t len32 = static_cast<uint32_t>(l);
     char* mem = new char[8 + l + 1];
     clx_memcpy(mem + 4, &len32, 4);
@@ -160,6 +168,11 @@ MultiValue str_reverse(LState* L, const LValue* args, size_t count) {
 MultiValue str_lower(LState* L, const LValue* args, size_t count) {
     size_t l;
     const char* s = get_string(L, args, count, l, 1);
+    if (l <= 6) {
+        char buf[8];
+        for (size_t i = 0; i < l; i++) buf[i] = (char)std::tolower((unsigned char)s[i]);
+        return MultiValue(LValue::istr(buf, static_cast<uint32_t>(l)));
+    }
     uint32_t len32 = static_cast<uint32_t>(l);
     char* mem = new char[8 + l + 1];
     clx_memcpy(mem + 4, &len32, 4);
@@ -181,6 +194,11 @@ MultiValue str_lower(LState* L, const LValue* args, size_t count) {
 MultiValue str_upper(LState* L, const LValue* args, size_t count) {
     size_t l;
     const char* s = get_string(L, args, count, l, 1);
+    if (l <= 6) {
+        char buf[8];
+        for (size_t i = 0; i < l; i++) buf[i] = (char)std::toupper((unsigned char)s[i]);
+        return MultiValue(LValue::istr(buf, static_cast<uint32_t>(l)));
+    }
     uint32_t len32 = static_cast<uint32_t>(l);
     char* mem = new char[8 + l + 1];
     clx_memcpy(mem + 4, &len32, 4);
@@ -202,16 +220,26 @@ MultiValue str_upper(LState* L, const LValue* args, size_t count) {
 MultiValue str_rep(LState* L, const LValue* args, size_t count) {
     size_t len;
     const char* s = get_string(L, args, count, len, 1);
-    int64_t n = (count >= 2 && args[1].type() != LType::Nil) ? get_integer(L, args, count, 2) : 1;
+    int64_t n = (count >= 2 && args[1].type != Nil) ? get_integer(L, args, count, 2) : 1;
     size_t lsep = 0;
     const char* sep = "";
-    if (count >= 3 && args[2].type() == LType::String) {
+    if (count >= 3 && args[2].type == String) {
         sep = args[2].as_string();
         lsep = args[2].string_len();
     }
     if (n <= 0 || (len | lsep) == 0)
         return MultiValue(LValue(L->intern_string("", 0)));
     size_t totallen = ((size_t)n * (len + lsep)) - lsep;
+    if (totallen <= 6) {
+        char buf[8];
+        char* bp = buf;
+        for (int64_t i = 0; i < n - 1; i++) {
+            std::memcpy(bp, s, len); bp += len;
+            if (lsep > 0) { std::memcpy(bp, sep, lsep); bp += lsep; }
+        }
+        std::memcpy(bp, s, len);
+        return MultiValue(LValue::istr(buf, static_cast<uint32_t>(totallen)));
+    }
     uint32_t len32 = static_cast<uint32_t>(totallen);
     char* mem = new char[8 + totallen + 1];
     clx_memcpy(mem + 4, &len32, 4);
@@ -236,9 +264,9 @@ MultiValue str_rep(LState* L, const LValue* args, size_t count) {
 MultiValue str_byte(LState* L, const LValue* args, size_t count) {
     size_t l;
     const char* s = get_string(L, args, count, l, 1);
-    int64_t pi = (count >= 2 && args[1].type() != LType::Nil) ? get_integer(L, args, count, 2) : 1;
+    int64_t pi = (count >= 2 && args[1].type != Nil) ? get_integer(L, args, count, 2) : 1;
     size_t posi = posrelat(pi, l);
-    int64_t pe = (count >= 3 && args[2].type() != LType::Nil) ? get_integer(L, args, count, 3) : pi;
+    int64_t pe = (count >= 3 && args[2].type != Nil) ? get_integer(L, args, count, 3) : pi;
     size_t pose = getendpos(pe, l);
     if (posi > pose) return MultiValue();
     int n = (int)(pose - posi) + 1;
@@ -258,9 +286,21 @@ MultiValue str_byte(LState* L, const LValue* args, size_t count) {
 
 //------------------ str_char — string.char: build string from byte values
 MultiValue str_char(LState* L, const LValue* args, size_t count) {
-    uint32_t len32 = static_cast<uint32_t>(count);
+    if (count <= 6) {
+        char buf[8];
+        for (size_t i = 0; i < count; i++) {
+            int64_t c;
+            if (!to_integer(args[i], c) || c < 0 || c > 255) {
+                char buf[128];
+                std::snprintf(buf, sizeof(buf), "bad argument #%zu to 'char' (value out of range)", i + 1);
+                throw_runtime_error(buf);
+            }
+            buf[i] = (char)(unsigned char)c;
+        }
+        return MultiValue(LValue::istr(buf, count));
+    }
     char* mem = new char[8 + count + 1];
-    clx_memcpy(mem + 4, &len32, 4);
+    clx_memcpy(mem + 4, &count, 4);
     char* dst = mem + 8;
     for (size_t i = 0; i < count; i++) {
         int64_t c;
@@ -430,7 +470,7 @@ MultiValue str_format(LState* L, const LValue* args, size_t count) {
         if (written > 0)
             result.append(L->intern_string(buf, written), static_cast<uint32_t>(written));
     }
-    return MultiValue(LValue(result.to_string(L)));
+    return MultiValue(result.to_lvalue(L));
 }
 
 
@@ -748,7 +788,7 @@ static MultiValue str_find_aux(LState* L, const LValue* args, size_t count, int 
     size_t ls, lp;
     const char* s = get_string(L, args, count, ls, 1);
     const char* p = get_string(L, args, count, lp, 2);
-    int64_t init_i = (count >= 3 && args[2].type() != LType::Nil) ? get_integer(L, args, count, 3) : 1;
+    int64_t init_i = (count >= 3 && args[2].type != Nil) ? get_integer(L, args, count, 3) : 1;
     size_t init = posrelat(init_i, ls) - 1;
     if (init > ls) return MultiValue();
 
@@ -773,31 +813,31 @@ static MultiValue str_find_aux(LState* L, const LValue* args, size_t count, int 
             const char* res = match(&ms, s1, p);
             if (res) {
                 if (find) {
-                    std::vector<LValue> results;
-                    results.push_back(LValue(static_cast<int64_t>((s1 - s) + 1)));
-                    results.push_back(LValue(static_cast<int64_t>(res - s)));
+                    LValue results[LUA_MAXCAPTURES + 2];
+                    size_t rc = 0;
+                    results[rc++] = LValue(static_cast<int64_t>((s1 - s) + 1));
+                    results[rc++] = LValue(static_cast<int64_t>(res - s));
                     int nlevels = (ms.level == 0) ? 1 : ms.level;
                     for (int ci = 0; ci < nlevels; ci++) {
                         const char* cap;
                         ptrdiff_t capl = get_onecapture(&ms, ci, s1, res, &cap);
-                        if (capl == CAP_POSITION)
-                            results.push_back(LValue(static_cast<int64_t>((cap - s) + 1)));
-                        else
-                            results.push_back(LValue(L->intern_string(cap, (size_t)capl)));
+                        results[rc++] = (capl == CAP_POSITION)
+                            ? LValue(static_cast<int64_t>((cap - s) + 1))
+                            : L->intern_lvalue(cap, (size_t)capl);
                     }
-                    return MultiValue(results.data(), results.size());
+                    return MultiValue(results, rc);
                 } else {
                     int nlevels = (ms.level == 0) ? 1 : ms.level;
-                    std::vector<LValue> results;
+                    LValue results[LUA_MAXCAPTURES];
+                    size_t rc = 0;
                     for (int ci = 0; ci < nlevels; ci++) {
                         const char* cap;
                         ptrdiff_t capl = get_onecapture(&ms, ci, s1, res, &cap);
-                        if (capl == CAP_POSITION)
-                            results.push_back(LValue(static_cast<int64_t>((cap - s) + 1)));
-                        else
-                            results.push_back(LValue(L->intern_string(cap, (size_t)capl)));
+                        results[rc++] = (capl == CAP_POSITION)
+                            ? LValue(static_cast<int64_t>((cap - s) + 1))
+                            : L->intern_lvalue(cap, (size_t)capl);
                     }
-                    return MultiValue(results.data(), results.size());
+                    return MultiValue(results, rc);
                 }
             }
             s1++;
@@ -836,17 +876,17 @@ static MultiValue gmatch_aux(LState* L, const LValue* args, size_t count, void* 
         if ((e = match(&gm->ms, src, gm->p)) != NULL && e != gm->lastmatch) {
             gm->src = gm->lastmatch = e;
             int nlevels = (gm->ms.level == 0) ? 1 : gm->ms.level;
-            std::vector<LValue> results;
+            LValue results[LUA_MAXCAPTURES];
+            size_t rc = 0;
             for (int ci = 0; ci < nlevels; ci++) {
                 const char* cap;
                 ptrdiff_t capl = get_onecapture(&gm->ms, ci, src, e, &cap);
-                if (capl == CAP_POSITION)
-                    results.push_back(LValue(static_cast<int64_t>((cap - gm->ms.src_init) + 1)));
-                else
-                    results.push_back(LValue(L->intern_string(cap, (size_t)capl)));
+                results[rc++] = (capl == CAP_POSITION)
+                    ? LValue(static_cast<int64_t>((cap - gm->ms.src_init) + 1))
+                    : L->intern_lvalue(cap, (size_t)capl);
             }
-            if (results.size() == 1) return MultiValue(results[0]);
-            return MultiValue(results.data(), results.size());
+            if (rc == 1) return MultiValue(results[0]);
+            return MultiValue(results, rc);
         }
     }
     return MultiValue();
@@ -859,7 +899,7 @@ MultiValue str_gmatch(LState* L, const LValue* args, size_t count) {
     const char* p = get_string(L, args, count, lp, 2);
     s = L->intern_string(s, ls);
     p = L->intern_string(p, lp);
-    int64_t init_i = (count >= 3 && args[2].type() != LType::Nil) ? get_integer(L, args, count, 3) : 1;
+    int64_t init_i = (count >= 3 && args[2].type != Nil) ? get_integer(L, args, count, 3) : 1;
     size_t init = posrelat(init_i, ls) - 1;
     if (init > ls) init = ls + 1;
 
@@ -884,8 +924,8 @@ MultiValue str_gsub(LState* L, const LValue* args, size_t count) {
     const char* src = get_string(L, args, count, srcl, 1);
     const char* p   = get_string(L, args, count, lp, 2);
 
-    LType tr_type = (count >= 3) ? args[2].type() : LType::Nil;
-    int64_t max_s = (count >= 4 && args[3].type() != LType::Nil) ? get_integer(L, args, count, 4) : (int64_t)srcl + 1;
+    ValueType tr_type = (count >= 3) ? args[2].type : Nil;
+    int64_t max_s = (count >= 4 && args[3].type != Nil) ? get_integer(L, args, count, 4) : (int64_t)srcl + 1;
     int anchor = (*p == '^');
     if (anchor) { p++; lp--; }
 
@@ -907,7 +947,7 @@ MultiValue str_gsub(LState* L, const LValue* args, size_t count) {
             n++;
             changed = true;
 
-            if (tr_type == LType::String) {
+            if (tr_type == String) {
                 const char* news = args[2].as_string();
                 size_t l = args[2].string_len();
                 StringBuilder repl;
@@ -937,7 +977,7 @@ MultiValue str_gsub(LState* L, const LValue* args, size_t count) {
                 }
                 result.append(repl);
 
-            } else if (tr_type == LType::Function) {
+            } else if (tr_type == Function) {
                 int nlevels = (ms.level == 0) ? 1 : ms.level;
                 std::vector<LValue> fargs(nlevels);
                 for (int ci = 0; ci < nlevels; ci++) {
@@ -949,7 +989,7 @@ MultiValue str_gsub(LState* L, const LValue* args, size_t count) {
                         fargs[ci] = LValue(L->intern_string(cap, (size_t)capl));
                 }
                 MultiValue fret = call_function(L, args[2], fargs.data(), fargs.size(), "gsub", 0);
-                if (fret.count > 0 && fret[0].type() == LType::String) {
+                if (fret.count > 0 && fret[0].type == String) {
 
                     result.append(L, fret[0]);
                 } else {
@@ -957,15 +997,15 @@ MultiValue str_gsub(LState* L, const LValue* args, size_t count) {
                     result.append(src_pos, static_cast<uint32_t>(ml));
                 }
 
-            } else if (tr_type == LType::Table) {
+            } else if (tr_type == Table) {
                 const char* cap;
                 ptrdiff_t capl = get_onecapture(&ms, 0, src_pos, e, &cap);
                 LValue key = (capl == CAP_POSITION)
                     ? LValue(static_cast<int64_t>((cap - src) + 1))
                     : LValue(L->intern_string(cap, (size_t)capl));
-                LValue* val = static_cast<LTable*>(args[2].as_pointer())->gettable(key);
-                if (val && val->type() == LType::String) {
-                    result.append(L, *val);
+                LValue val = static_cast<LTable*>(args[2].as_pointer())->gettable(key);
+                if (val.type == String) {
+                    result.append(L, val);
                 } else {
                     size_t ml = e - src_pos;
                     result.append(src_pos, static_cast<uint32_t>(ml));
@@ -992,7 +1032,7 @@ MultiValue str_gsub(LState* L, const LValue* args, size_t count) {
         result.append(L->intern_string(src_pos, tail), static_cast<uint32_t>(tail));
 
     return MultiValue({
-        LValue(result.to_string(L)),
+        result.to_lvalue(L),
         LValue(static_cast<int64_t>(n))
     });
 }
@@ -1339,7 +1379,7 @@ MultiValue str_unpack(LState* L, const LValue* args, size_t count) {
     const char* fmt = get_string(L, args, count, fmt_len, 1);
     size_t ld;
     const char* data = get_binary_string(L, args, count, ld, 2);
-    int64_t pos_i = (count >= 3 && args[2].type() != LType::Nil) ? get_integer(L, args, count, 3) : 1;
+    int64_t pos_i = (count >= 3 && args[2].type != Nil) ? get_integer(L, args, count, 3) : 1;
     size_t pos = posrelat(pos_i, ld) - 1;
     if (pos > ld)
         throw_runtime_error("initial position out of string");

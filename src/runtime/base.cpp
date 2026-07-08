@@ -6,6 +6,7 @@
 // └─────────────────────────────────────────────┘
 
 #include "clx.h"
+#include "../include/clx_simd.h"
 #include <algorithm>
 #include <cstdio>
 #include <iostream>
@@ -23,7 +24,7 @@ clx::MultiValue lua_error(clx::LState* L, const clx::LValue* args, size_t count)
         level = static_cast<int>(clx::to_number(args[1], 1.0));
     }
 
-    if (err_val.type() == clx::LType::String && level > 0) {
+    if (err_val.type == clx::String && level > 0) {
         std::string prefix = "";
         if (L->current_file && L->current_file[0] != '\0') {
             prefix = std::string(L->current_file) + ":" + std::to_string(L->current_line) + ": ";
@@ -72,7 +73,7 @@ clx::MultiValue lua_xpcall(clx::LState* L, const clx::LValue* args, size_t count
         clx::MultiValue msgh_ret;
 
         try {
-            L->shadow_stack[L->shadow_top++] = &err_obj;
+            L->shadow_stack[L->shadow_top++] = TypedSlot(&err_obj.val, &err_obj.type);
             msgh_ret = clx::call_function(L, msgh, &err_obj, 1, L->current_file, L->current_line);
             L->shadow_top--;
         } catch (...) {
@@ -86,7 +87,7 @@ clx::MultiValue lua_xpcall(clx::LState* L, const clx::LValue* args, size_t count
         clx::MultiValue msgh_ret;
 
         try {
-            L->shadow_stack[L->shadow_top++] = &err_obj;
+            L->shadow_stack[L->shadow_top++] = TypedSlot(&err_obj.val, &err_obj.type);
             msgh_ret = clx::call_function(L, msgh, &err_obj, 1, L->current_file, L->current_line);
             L->shadow_top--;
         } catch (...) {
@@ -189,8 +190,8 @@ static MultiValue type(LState* L, const LValue* args, size_t count) {
     if (count == 0) {
         clx::error(L, "bad argument #1 to 'type' (value expected)");
     }
-    static const char* names[] = {"number", "nil", "boolean", "number", "string", "table", "function", "userdata", "thread"};
-    return MultiValue(clx::string(L, names[static_cast<uint8_t>(args[0].type())]));
+    static const char* names[] = {"nil", "boolean", "number", "number", "string", "table", "function", "userdata", "thread"};
+    return MultiValue(clx::string(L, names[static_cast<uint8_t>(args[0].type)]));
 }
 
 //------------------ clx_assert: asserts a condition (global assert function)
@@ -208,19 +209,19 @@ static MultiValue tostring(LState* L, const LValue* args, size_t count) {
     if (count == 0)
         return MultiValue(LValue::istr("", 0));
     const LValue& v = args[0];
-    switch (v.type()) {
-        case LType::String:
+    switch (v.type) {
+        case String:
             return MultiValue(v);
-        case LType::Nil:
+        case Nil:
             return MultiValue(LValue::istr("nil", 3));
-        case LType::Bool:
+        case Boolean:
             return MultiValue(LValue::istr(v.as_bool() ? "true" : "false", v.as_bool() ? 4 : 5));
-        case LType::Number: {
+        case Double: {
             char buf[64];
             int n = std::snprintf(buf, sizeof(buf), "%.17g", v.as_number());
             return MultiValue(clx::string(L, buf, (size_t)n));
         }
-        case LType::Integer: {
+        case Int64: {
             char buf[32];
             int n = std::snprintf(buf, sizeof(buf), "%lld", (long long)v.as_integer());
             return MultiValue(clx::string(L, buf, (size_t)n));
@@ -234,7 +235,7 @@ static MultiValue tostring(LState* L, const LValue* args, size_t count) {
 static MultiValue tonumber(LState* L, const LValue* args, size_t count) {
     if (count == 0) return MultiValue();
     const LValue& v = args[0];
-    if (v.type() == LType::Number) return MultiValue(v);
+    if (v.type == Double) return MultiValue(v);
     if (clx::is_string(v)) {
         double d;
         if (v.to_number(d)) return MultiValue(clx::number(d));
@@ -277,14 +278,12 @@ static MultiValue lua_rawlen(LState* L, const LValue* args, size_t count) {
     }
     if (clx::is_table(v)) {
         LTable* t = static_cast<LTable*>(v.as_pointer());
-        size_t n = 0;
-        size_t as = t->array_size;
-        while (n < as && t->array[n].type() != LType::Nil) n++;
-        if (n < as) return MultiValue(clx::integer(static_cast<int64_t>(n)));
-        int64_t len = static_cast<int64_t>(as);
+        size_t n = clx_rawlen_array(reinterpret_cast<const uint8_t*>(t->array_types), t->array_size);
+        if (n < t->array_size) return MultiValue(clx::integer(static_cast<int64_t>(n)));
+        int64_t len = static_cast<int64_t>(t->array_size);
         while (true) {
-            LValue* p = t->gettable(LValue(static_cast<double>(len + 1)));
-            if (!p || p->type() == LType::Nil) break;
+            LValue p = t->gettable(LValue(static_cast<double>(len + 1)));
+            if (p.type == Nil) break;
             len++;
         }
         return MultiValue(clx::integer(len));
@@ -344,10 +343,10 @@ static MultiValue pairs(LState* L, const LValue* args, size_t count) {
     if (clx::is_table(t)) {
         LTable* tbl = static_cast<LTable*>(t.as_pointer());
         if (tbl->metatable) {
-            LValue* mt_pairs = tbl->metatable->gettable(L->str_pairs);
-            if (mt_pairs && mt_pairs->type() == LType::Function) {
-                L->shadow_stack[L->shadow_top++] = &t;
-                MultiValue ret = call_function(L, *mt_pairs, &t, 1, __FILE__, __LINE__);
+            LValue mt_pairs = tbl->metatable->gettable(L->str_pairs);
+            if (mt_pairs.type == Function) {
+                L->shadow_stack[L->shadow_top++] = TypedSlot(&t.val, &t.type);
+                MultiValue ret = call_function(L, mt_pairs, &t, 1, __FILE__, __LINE__);
                 L->shadow_top--;
                 return ret;
             }
@@ -403,18 +402,18 @@ static MultiValue ipairs_iter(LState* L, const LValue* args, size_t count) {
     if (count < 2 || !clx::is_table(args[0])) return MultiValue();
 
     LTable* t = static_cast<LTable*>(args[0].as_pointer());
-    int64_t idx = args[1].type() == LType::Integer ? args[1].as_integer() : static_cast<int64_t>(args[1].as_number());
+    int64_t idx = args[1].type == Int64 ? args[1].as_integer() : static_cast<int64_t>(args[1].as_number());
     idx++;
 
     LValue val;
     if (idx >= 1 && static_cast<size_t>(idx) <= t->array_size) {
-        val = t->array[idx - 1];
+        val = LValue(t->array[idx - 1], t->array_types[idx - 1]);
     } else {
-        LValue* hash_val = t->gettable(LValue(static_cast<double>(idx)));
-        if (hash_val) val = *hash_val;
+        LValue hash_val = t->gettable(LValue(static_cast<double>(idx)));
+        if (hash_val.type != Nil) val = hash_val;
     }
 
-    if (val.type() == LType::Nil) return MultiValue();
+    if (val.type == Nil) return MultiValue();
     return MultiValue({clx::number(static_cast<double>(idx)), val});
 }
 
@@ -428,10 +427,10 @@ static MultiValue ipairs(LState* L, const LValue* args, size_t count) {
     if (clx::is_table(t)) {
         LTable* tbl = static_cast<LTable*>(t.as_pointer());
         if (tbl->metatable) {
-            LValue* mt_ipairs = tbl->metatable->gettable(LValue(L->intern_string("__ipairs")));
-            if (mt_ipairs && mt_ipairs->type() == LType::Function) {
-                L->shadow_stack[L->shadow_top++] = &t;
-                MultiValue ret = call_function(L, *mt_ipairs, &t, 1, __FILE__, __LINE__);
+            LValue mt_ipairs = tbl->metatable->gettable(LValue(L->intern_string("__ipairs")));
+            if (mt_ipairs.type == Function) {
+                L->shadow_stack[L->shadow_top++] = TypedSlot(&t.val, &t.type);
+                MultiValue ret = call_function(L, mt_ipairs, &t, 1, __FILE__, __LINE__);
                 L->shadow_top--;
                 return ret;
             }
@@ -440,7 +439,7 @@ static MultiValue ipairs(LState* L, const LValue* args, size_t count) {
 
     LValue ipairs_iter_val = get_global(L, "_ipairs_iter");
     if (clx::is_nil(ipairs_iter_val)) {
-        LValue g = LValue(LType::Table, L->_G);
+        LValue g = LValue(Table, L->_G);
         clx::set_function(L, g, "_ipairs_iter", ipairs_iter);
         ipairs_iter_val = get_global(L, "_ipairs_iter");
     }
@@ -452,7 +451,7 @@ static MultiValue ipairs(LState* L, const LValue* args, size_t count) {
 
 //------------------ luastd_base: registers all base library functions into the global table
 void luastd_base(LState* L) {
-    LValue g = LValue(LType::Table, L->_G);
+    LValue g = LValue(Table, L->_G);
     clx::set_functions(L, g, {
         {"print", print},
         {"require", require},

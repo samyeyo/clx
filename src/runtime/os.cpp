@@ -50,7 +50,7 @@ static MultiValue os_clock(LState* L, const LValue* args, size_t count) {
 static MultiValue os_date(LState* L, const LValue* args, size_t count) {
     const char* format = opt_string(L, count >= 1 ? args[0] : LValue(), "%c");
     time_t t = std::time(nullptr);
-    if (count >= 2 && args[1].type() != LType::Nil) {
+    if (count >= 2 && args[1].type != Nil) {
         int64_t ti = check_integer(L, args[1]);
         t = static_cast<time_t>(ti);
     }
@@ -103,7 +103,7 @@ static MultiValue os_difftime(LState* L, const LValue* args, size_t count) {
 
 //------------------ os_execute: executes a system command
 static MultiValue os_execute(LState* L, const LValue* args, size_t count) {
-    if (count == 0 || args[0].type() == LType::Nil) {
+    if (count == 0 || args[0].type == Nil) {
         int r = std::system(nullptr);
         return MultiValue(clx::boolean(r != 0));
     }
@@ -115,7 +115,7 @@ static MultiValue os_execute(LState* L, const LValue* args, size_t count) {
 //------------------ os_exit: terminates the program with a status code
 static MultiValue os_exit(LState* L, const LValue* args, size_t count) {
     int64_t code = 0;
-    if (count >= 1 && args[0].type() != LType::Nil) {
+    if (count >= 1 && args[0].type != Nil) {
         code = check_integer(L, args[0]);
     }
     std::exit(static_cast<int>(code));
@@ -173,7 +173,7 @@ static MultiValue os_setlocale(LState* L, const LValue* args, size_t count) {
     }
     const char* locale = check_string(L, args[0]);
     int category = LC_ALL;
-    if (count >= 2 && args[1].type() != LType::Nil) {
+    if (count >= 2 && args[1].type != Nil) {
         const char* cat = check_string(L, args[1]);
         if (std::strcmp(cat, "all") == 0) category = LC_ALL;
         else if (std::strcmp(cat, "collate") == 0) category = LC_COLLATE;
@@ -194,17 +194,17 @@ static MultiValue os_setlocale(LState* L, const LValue* args, size_t count) {
 
 //------------------ os_time: returns current time or converts a table to a time value
 static MultiValue os_time(LState* L, const LValue* args, size_t count) {
-    if (count == 0 || args[0].type() == LType::Nil) {
+    if (count == 0 || args[0].type == Nil) {
         return MultiValue(clx::number(static_cast<double>(std::time(nullptr))));
     }
     LTable* tbl = check_table(L, args[0]);
     struct tm tm;
     std::memset(&tm, 0, sizeof(tm));
     auto get_field = [&](const char* name) -> int {
-        LValue* p = tbl->gettable(LValue(L->intern_string(name)));
-        if (p && p->type() != LType::Nil) {
+        LValue p = tbl->gettable(LValue(L->intern_string(name)));
+        if (p.type != Nil) {
             double d;
-            if (p->to_number(d)) return static_cast<int>(d);
+            if (p.to_number(d)) return static_cast<int>(d);
         }
         return 0;
     };

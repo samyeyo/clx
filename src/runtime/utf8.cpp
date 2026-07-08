@@ -25,10 +25,10 @@ static const char* get_string(LState* L, const LValue* args, size_t count, size_
         std::snprintf(buf, sizeof(buf), "bad argument #%d to a string function (string expected, got no value)", idx);
         throw_runtime_error(buf);
     }
-    if (args[idx - 1].type() != LType::String) {
+    if (args[idx - 1].type != String) {
         char buf[128];
         std::snprintf(buf, sizeof(buf), "bad argument #%d to a string function (string expected, got %s)", idx,
-            args[idx - 1].type() == LType::Number ? "number" : "table");
+            args[idx - 1].type == Double ? "number" : "table");
         throw_runtime_error(buf);
     }
     len = args[idx - 1].string_len();
@@ -100,7 +100,7 @@ static MultiValue utf8_char(LState* L, const LValue* args, size_t count) {
         int n = utf8_encode(cp, buf);
         sb.append(L, LValue(L->intern_string(buf, static_cast<size_t>(n))));
     }
-    return MultiValue(LValue(sb.to_string(L)));
+    return MultiValue(sb.to_lvalue(L));
 }
 
 //------------------ codes_iter: iterator function for utf8.codes
@@ -123,9 +123,9 @@ static MultiValue utf8_codes(LState* L, const LValue* args, size_t count) {
     if (count == 0)
         throw_runtime_error("bad argument #1 to 'codes' (string expected, got no value)");
     size_t len;
-    const char* s = get_string(L, args, count, len, 1);
+    const char* s = L->intern_string(get_string(L, args, count, len, 1), len);
     LValue u_lv = newuserdata(L, sizeof(CodesUd));
-    L->shadow_stack[L->shadow_top++] = &u_lv;
+    L->shadow_stack[L->shadow_top++] = {&u_lv.val, &u_lv.type};
     LUserdata* u = static_cast<LUserdata*>(u_lv.as_pointer());
     CodesUd* ud = static_cast<CodesUd*>(u->data());
     ud->pos = 0;
@@ -143,10 +143,10 @@ static MultiValue utf8_codepoint(LState* L, const LValue* args, size_t count) {
     size_t len;
     const char* s = get_string(L, args, count, len, 1);
     size_t i = 1;
-    if (count >= 2 && args[1].type() != LType::Nil)
+    if (count >= 2 && args[1].type != Nil)
         i = static_cast<size_t>(check_integer(L, args[1]));
     size_t j = i;
-    if (count >= 3 && args[2].type() != LType::Nil)
+    if (count >= 3 && args[2].type != Nil)
         j = static_cast<size_t>(check_integer(L, args[2]));
     if (i < 1) i = 1;
     if (j > len) j = len;
@@ -184,10 +184,10 @@ static MultiValue utf8_len(LState* L, const LValue* args, size_t count) {
     size_t len;
     const char* s = get_string(L, args, count, len, 1);
     size_t i = 1;
-    if (count >= 2 && args[1].type() != LType::Nil)
+    if (count >= 2 && args[1].type != Nil)
         i = static_cast<size_t>(check_integer(L, args[1]));
     size_t j = len;
-    if (count >= 3 && args[2].type() != LType::Nil)
+    if (count >= 3 && args[2].type != Nil)
         j = static_cast<size_t>(check_integer(L, args[2]));
     if (i < 1) i = 1;
     if (j > len) j = len;
@@ -217,7 +217,7 @@ static MultiValue utf8_offset(LState* L, const LValue* args, size_t count) {
     const char* s = get_string(L, args, count, len, 1);
     int64_t n = check_integer(L, count >= 2 ? args[1] : LValue());
     size_t i = 1;
-    if (count >= 3 && args[2].type() != LType::Nil)
+    if (count >= 3 && args[2].type != Nil)
         i = static_cast<size_t>(check_integer(L, args[2]));
     if (i < 1 || i > len)
         throw_runtime_error("bad argument #3 to 'offset' (position out of range)");
