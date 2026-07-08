@@ -18,14 +18,14 @@
 #include <vector>
 
 namespace clx {
-    void register_static_preload(LState* L, const char* name, LValue (*open_func)(LState*));
+    void register_static_preload(LState* L, const char* name, LValue (open_func)(LState*));
 }
 
 namespace clx {
 
 //------------------ LThread::LThread — thread constructor
 LThread::LThread() : state(nullptr), status(THREAD_SUSPENDED), caller(nullptr), is_main(false), has_error(false), close_requested(false) {
-    type = static_cast<uint8_t>(LType::Thread);
+    type = static_cast<uint8_t>(Thread);
     marked = 0;
     next = nullptr;
 #if defined(_WIN32)
@@ -54,7 +54,7 @@ static void fiber_entry_impl(LThread* t) {
         t->resume_args = MultiValue();
 
         size_t prev_top = L->shadow_top;
-        for(size_t i = 0; i < argc; ++i) L->shadow_stack[L->shadow_top++] = &args[i];
+        for(size_t i = 0; i < argc; ++i) L->shadow_stack[L->shadow_top++]= TypedSlot(&args[i].val, &args[i].type);
         t->yield_args = call_function(L, t->function, args, argc, "coroutine", 0);
         L->shadow_top = prev_top;
         t->status = THREAD_DEAD;
@@ -74,6 +74,8 @@ static void fiber_entry_impl(LThread* t) {
 
 #if defined(_WIN32)
     SwitchToFiber(caller->fiber);
+#elif defined(__APPLE__) && defined(__aarch64__)
+    clx_coro_switch(&t->ctx, &caller->ctx);
 #else
     swapcontext(&t->ctx, &caller->ctx);
 #endif
@@ -101,6 +103,10 @@ LValue create_thread(LState* L, const LValue& func, double stack_size) {
 
 #if defined(_WIN32)
     t->fiber = CreateFiber(static_cast<SIZE_T>(stack_size), fiber_trampoline, t);
+#elif defined(__APPLE__) && defined(__aarch64__)
+    t->stack_memory = new char[static_cast<size_t>(stack_size)];
+    clx_coro_init(&t->ctx, t->stack_memory + static_cast<size_t>(stack_size), (void*)fiber_trampoline);
+    g_starting_thread = t;
 #else
     getcontext(&t->ctx);
     t->stack_memory = new char[static_cast<size_t>(stack_size)];
@@ -114,7 +120,7 @@ LValue create_thread(LState* L, const LValue& func, double stack_size) {
     t->next = L->allocated_objects;
     L->allocated_objects = t;
     L->object_count++;
-    return LValue(LType::Thread, t);
+    return LValue(Thread, t);
 }
 
 
@@ -129,6 +135,8 @@ MultiValue resume(LState* L, const LValue& thread, const LValue* args, size_t co
 
 #if defined(_WIN32)
     SwitchToFiber(t->fiber);
+#elif defined(__APPLE__) && defined(__aarch64__)
+    clx_coro_switch(&t->caller->ctx, &t->ctx);
 #else
     swapcontext(&t->caller->ctx, &t->ctx);
 #endif
@@ -156,6 +164,8 @@ MultiValue yield(LState* L, const LValue* args, size_t count) {
 
 #if defined(_WIN32)
     SwitchToFiber(caller->fiber);
+#elif defined(__APPLE__) && defined(__aarch64__)
+    clx_coro_switch(&t->ctx, &caller->ctx);
 #else
     swapcontext(&t->ctx, &caller->ctx);
 #endif
@@ -209,48 +219,48 @@ const char* LRuntimeException::what() const noexcept {
 
 //------------------ LValue::to_string — convert value to string
 std::string LValue::to_string(LState* L) const {
-    if (L && type() == LType::Table) {
+    if (L && type == Table) {
         LTable* t = static_cast<LTable*>(as_pointer());
         if (t->metatable) {
             LValue meta_key = L->str_tostring;
-            LValue* meta_func = t->metatable->gettable(meta_key);
+            LValue meta_func = t->metatable->gettable(meta_key);
 
-            if (meta_func && meta_func->type() == LType::Function) {
+            if (meta_func.type != Nil && meta_func.type == Function) {
                 LValue args[1];
                 args[0] = *this;
 
-                L->shadow_stack[L->shadow_top++] = &args[0];
-                MultiValue ret = call_function(L, *meta_func, args, 1, __FILE__, __LINE__);
+                L->shadow_stack[L->shadow_top++]= TypedSlot(&args[0].val, &args[0].type);
+                MultiValue ret = call_function(L, meta_func, args, 1, __FILE__, __LINE__);
                 L->shadow_top--;
 
-                if (ret.count > 0 && ret[0].type() == LType::String) {
+                if (ret.count > 0 && ret[0].type == String) {
                     return std::string(ret[0].as_string());
                 }
             }
         }
     }
 
-    switch (type()) {
-        case LType::Nil:      return "nil";
-        case LType::Bool:     return as_bool() ? "true" : "false";
-        case LType::Number: {
+    switch (type) {
+        case Nil:      return "nil";
+        case Boolean:     return as_bool() ? "true" : "false";
+        case Double: {
             char buf[32];
             std::snprintf(buf, sizeof(buf), "%.17g", as_number());
             return std::string(buf);
         }
-        case LType::Integer:  return std::to_string(as_integer());
-        case LType::String:   return std::string(as_string());
-        case LType::Table: {
+        case Int64:  return std::to_string(as_integer());
+        case String:   return std::string(as_string(), string_len());
+        case Table: {
             const char* prefix = "table";
             if (L && static_cast<LTable*>(as_pointer())->metatable) {
-                LValue* n = static_cast<LTable*>(as_pointer())->metatable->gettable(LValue(L->intern_string("__name")));
-                if (n && n->type() == LType::String) prefix = n->as_string();
+                LValue n = static_cast<LTable*>(as_pointer())->metatable->gettable(LValue(L->intern_string("__name")));
+                if (n.type != Nil && n.type == String) prefix = n.as_string();
             }
             char buf[64];
             std::snprintf(buf, sizeof(buf), "%s: %p", prefix, as_pointer());
             return std::string(buf);
         }
-        case LType::Function: {
+        case Function: {
             char buf[32];
             std::snprintf(buf, sizeof(buf), "function: %p", as_pointer());
             return std::string(buf);
@@ -261,8 +271,8 @@ std::string LValue::to_string(LState* L) const {
 
 //------------------ LValue::slow_eq — equality comparison
 LValue LValue::slow_eq(const LValue& other) const {
-    if (type() != other.type()) return LValue(false);
-    if (type() == LType::String) {
+    if (type != other.type) return LValue(false);
+    if (type == String) {
         return LValue(std::string_view(as_string()) == std::string_view(other.as_string()));
     }
     return LValue(false);
@@ -270,13 +280,13 @@ LValue LValue::slow_eq(const LValue& other) const {
 
 //------------------ LValue::slow_lt — less-than comparison
 LValue LValue::slow_lt(const LValue& other) const {
-    if ((type() == LType::Number || type() == LType::Integer) &&
-        (other.type() == LType::Number || other.type() == LType::Integer)) {
-        double l = (type() == LType::Integer) ? (double)as_integer() : as_number();
-        double r = (other.type() == LType::Integer) ? (double)other.as_integer() : other.as_number();
+    if ((type == Double || type == Int64) &&
+        (other.type == Double || other.type == Int64)) {
+        double l = (type == Int64) ? (double)as_integer() : as_number();
+        double r = (other.type == Int64) ? (double)other.as_integer() : other.as_number();
         return LValue(l < r);
     }
-    if (type() == LType::String && other.type() == LType::String) {
+    if (type == String && other.type == String) {
         return LValue(std::string_view(as_string()) < std::string_view(other.as_string()));
     }
     return LValue(false);
@@ -284,13 +294,13 @@ LValue LValue::slow_lt(const LValue& other) const {
 
 //------------------ LValue::slow_le — less-or-equal comparison
 LValue LValue::slow_le(const LValue& other) const {
-    if ((type() == LType::Number || type() == LType::Integer) &&
-        (other.type() == LType::Number || other.type() == LType::Integer)) {
-        double l = (type() == LType::Integer) ? (double)as_integer() : as_number();
-        double r = (other.type() == LType::Integer) ? (double)other.as_integer() : other.as_number();
+    if ((type == Double || type == Int64) &&
+        (other.type == Double || other.type == Int64)) {
+        double l = (type == Int64) ? (double)as_integer() : as_number();
+        double r = (other.type == Int64) ? (double)other.as_integer() : other.as_number();
         return LValue(l <= r);
     }
-    if (type() == LType::String && other.type() == LType::String) {
+    if (type == String && other.type == String) {
         return LValue(std::string_view(as_string()) <= std::string_view(other.as_string()));
     }
     return LValue(false);
@@ -298,7 +308,7 @@ LValue LValue::slow_le(const LValue& other) const {
 
 //------------------ LCFunction::LCFunction — C function wrapper constructor
 LCFunction::LCFunction(CFunctionType f) : func(std::move(f)) {
-    type = static_cast<uint8_t>(LType::Function);
+    type = static_cast<uint8_t>(Function);
     marked = 0;
     next = nullptr;
 }
@@ -335,11 +345,11 @@ static CLX_INLINE_COLD size_t next_pow2(size_t n) {
 
 //------------------ LTable::LTable — table constructor
 LTable::LTable()
-    : array(nullptr), array_size(0), array_cap(0),
+    : array(nullptr), array_types(nullptr), array_size(0), array_cap(0),
       entries(nullptr), hash_size(0), hash_count(0), hash_tombs(0),
       hash_version(0), array_version(0), metatable(nullptr)
 {
-    type = static_cast<uint8_t>(LType::Table);
+    type = static_cast<uint8_t>(Table);
     marked = 0;
     next = nullptr;
 }
@@ -347,6 +357,7 @@ LTable::LTable()
 //------------------ LTable::~LTable — table destructor
 LTable::~LTable() {
     if (array)   delete[] array;
+    if (array_types) delete[] array_types;
     if (entries) delete[] entries;
 }
 
@@ -356,18 +367,19 @@ void LTable::resize_hash(size_t new_size) {
     new_size = next_pow2(new_size);
 
     HashEntry* new_entries = new HashEntry[new_size];
-    for (size_t i = 0; i < new_size; ++i) new_entries[i].key = HASH_EMPTY;
+    for (size_t i = 0; i < new_size; ++i) { new_entries[i].key.payload.u64 = HASH_EMPTY; new_entries[i].ktype = Nil; }
 
     uint32_t mask = static_cast<uint32_t>(new_size - 1);
     if (entries) {
         for (size_t i = 0; i < hash_size; ++i) {
-            uint64_t k = entries[i].key;
-            if (k == HASH_EMPTY || k == HASH_TOMBSTONE) continue;
-            uint32_t h = lvalue_hash(k) & mask;
-            while (new_entries[h].key != HASH_EMPTY)
+            if (entries[i].ktype == Nil) continue;
+            uint32_t h = lvalue_hash(LValue(entries[i].key, entries[i].ktype)) & mask;
+            while (new_entries[h].ktype != Nil)
                 h = (h + 1) & mask;
-            new_entries[h].key = k;
+            new_entries[h].key = entries[i].key;
+            new_entries[h].ktype = entries[i].ktype;
             new_entries[h].val = entries[i].val;
+            new_entries[h].vtype = entries[i].vtype;
         }
         delete[] entries;
     }
@@ -380,25 +392,26 @@ void LTable::resize_hash(size_t new_size) {
 
 
 //------------------ LTable::gettable — get value by key
-LValue* LTable::gettable(const LValue& key) {
-    if (key.type() == LType::Integer) {
+LValue LTable::gettable(const LValue& key) {
+    if (key.type == Int64) {
         int64_t idx = key.as_integer();
         if (static_cast<uint64_t>(idx - 1) < array_cap)
-            return &array[idx - 1];
-    } else if (key.type() == LType::Number) {
+            return LValue(array[idx - 1], array_types[idx - 1]);
+    } else if (key.type == Double) {
         double d = key.as_number();
         int64_t idx = static_cast<int64_t>(d);
         if (d == static_cast<double>(idx) && static_cast<uint64_t>(idx - 1) < array_cap)
-            return &array[idx - 1];
+            return LValue(array[idx - 1], array_types[idx - 1]);
     }
-    if (hash_size == 0) return nullptr;
+    if (hash_size == 0) return LValue();
     uint32_t mask = static_cast<uint32_t>(hash_size - 1);
-    uint32_t h    = lvalue_hash(key.val) & mask;
+    uint32_t h    = lvalue_hash(key) & mask;
     for (;;) {
         HashEntry& e = entries[h];
-        if (e.key == HASH_EMPTY)     return nullptr;
-        if (e.key != HASH_TOMBSTONE && lvalue_eq_fast(e.key, key.val))
-            return &e.val;
+        if (e.ktype == Nil) {
+            if (e.key.payload.u64 == HASH_EMPTY) return LValue();
+        } else if (lvalue_eq_fast(LValue(e.key, e.ktype), key))
+            return LValue(e.val, e.vtype);
         h = (h + 1) & mask;
     }
 }
@@ -407,39 +420,41 @@ LValue* LTable::gettable(const LValue& key) {
 //------------------ LTable::settable — set value by key
 void LTable::settable(const LValue& key, const LValue& val) {
 
-    if (key.type() == LType::Integer) {
+    if (key.type == Int64) {
         int64_t idx = key.as_integer();
         if (static_cast<uint64_t>(idx - 1) < array_cap) {
-            array[idx - 1] = val;
+            array[idx - 1] = val.val; array_types[idx - 1] = val.type;
             if (static_cast<size_t>(idx) > array_size) array_size = static_cast<size_t>(idx);
             array_version++;
             return;
         }
         if (idx == static_cast<int64_t>(array_size + 1)) {
             size_t new_cap = (array_cap == 0) ? 8 : array_cap * 2;
-            LValue* new_arr = new LValue[new_cap];
-            if (array_cap) std::memcpy(new_arr, array, array_cap * sizeof(LValue));
+            TValue* new_arr = new TValue[new_cap]; ValueType* new_types = new ValueType[new_cap]();
+            if (array_cap) { std::memcpy(new_arr, array, array_cap * sizeof(TValue)); std::memcpy(new_types, array_types, array_cap * sizeof(ValueType)); }
             delete[] array;
+            delete[] array_types;
             array = new_arr;
-            array[array_size] = val;
+            array_types = new_types;
+            array[array_size] = val.val; array_types[array_size] = val.type;
             array_size++;
             array_cap = new_cap;
             array_version++;
             if (hash_size > 0) {
                 for (size_t i = 0; i < hash_size; ++i) {
-                    uint64_t k = entries[i].key;
-                    if (k == HASH_EMPTY || k == HASH_TOMBSTONE) continue;
-                    LValue kv; kv.val = k;
+                    if (entries[i].ktype == Nil) continue;
+                    LValue kv(entries[i].key, entries[i].ktype);
                     int64_t hidx = -1;
-                    if (kv.type() == LType::Integer) hidx = kv.as_integer();
-                    else if (kv.type() == LType::Number) {
+                    if (kv.type == Int64) hidx = kv.as_integer();
+                    else if (kv.type == Double) {
                         double d = kv.as_number(); int64_t t = static_cast<int64_t>(d);
                         if (d == static_cast<double>(t)) hidx = t;
                     }
                     if (hidx > 0 && hidx != idx && static_cast<uint64_t>(hidx - 1) < new_cap) {
-                        array[hidx - 1] = entries[i].val;
-                        entries[i].key = HASH_TOMBSTONE;
-                        entries[i].val = LValue();
+                        array[hidx - 1] = entries[i].val; array_types[hidx - 1] = entries[i].vtype;
+                        entries[i].key.payload.u64 = HASH_TOMBSTONE;
+                        entries[i].ktype = Nil;
+                        entries[i].val = TValue(); entries[i].vtype = Nil;
                         hash_count--;
                         hash_tombs++;
                         hash_version++;
@@ -448,41 +463,43 @@ void LTable::settable(const LValue& key, const LValue& val) {
             }
             return;
         }
-    } else if (key.type() == LType::Number) {
+    } else if (key.type == Double) {
         double d = key.as_number();
         int64_t idx = static_cast<int64_t>(d);
         if (d == static_cast<double>(idx)) {
             if (static_cast<uint64_t>(idx - 1) < array_cap) {
-                array[idx - 1] = val;
+                array[idx - 1] = val.val; array_types[idx - 1] = val.type;
                 if (static_cast<size_t>(idx) > array_size) array_size = static_cast<size_t>(idx);
                 array_version++;
                 return;
             }
             if (idx == static_cast<int64_t>(array_size + 1)) {
                 size_t new_cap = (array_cap == 0) ? 8 : array_cap * 2;
-                LValue* new_arr = new LValue[new_cap];
-                if (array_cap) std::memcpy(new_arr, array, array_cap * sizeof(LValue));
+                TValue* new_arr = new TValue[new_cap]; ValueType* new_types = new ValueType[new_cap]();
+                if (array_cap) { std::memcpy(new_arr, array, array_cap * sizeof(TValue)); std::memcpy(new_types, array_types, array_cap * sizeof(ValueType)); }
                 delete[] array;
-                array = new_arr;
-                array[array_size] = val;
+            delete[] array_types;
+            array = new_arr;
+            array_types = new_types;
+            array[array_size] = val.val; array_types[array_size] = val.type;
                 array_size++;
                 array_cap = new_cap;
                 array_version++;
                 if (hash_size > 0) {
                     for (size_t i = 0; i < hash_size; ++i) {
-                        uint64_t k = entries[i].key;
-                        if (k == HASH_EMPTY || k == HASH_TOMBSTONE) continue;
-                        LValue kv; kv.val = k;
+                        if (entries[i].ktype == Nil) continue;
+                        LValue kv(entries[i].key, entries[i].ktype);
                         int64_t hidx = -1;
-                        if (kv.type() == LType::Integer) hidx = kv.as_integer();
-                        else if (kv.type() == LType::Number) {
+                        if (kv.type == Int64) hidx = kv.as_integer();
+                        else if (kv.type == Double) {
                             double dd = kv.as_number(); int64_t t = static_cast<int64_t>(dd);
                             if (dd == static_cast<double>(t)) hidx = t;
                         }
                         if (hidx > 0 && hidx != idx && static_cast<uint64_t>(hidx - 1) < new_cap) {
-                            array[hidx - 1] = entries[i].val;
-                            entries[i].key = HASH_TOMBSTONE;
-                            entries[i].val = LValue();
+                            array[hidx - 1] = entries[i].val; array_types[hidx - 1] = entries[i].vtype;
+                            entries[i].key.payload.u64 = HASH_TOMBSTONE;
+                            entries[i].ktype = Nil;
+                            entries[i].val = TValue(); entries[i].vtype = Nil;
                             hash_count--;
                             hash_tombs++;
                             hash_version++;
@@ -495,16 +512,18 @@ void LTable::settable(const LValue& key, const LValue& val) {
     }
 
 
-    if (val.type() == LType::Nil) {
+    if (val.type == Nil) {
         if (hash_size == 0) return;
         uint32_t mask = static_cast<uint32_t>(hash_size - 1);
-        uint32_t h = lvalue_hash(key.val) & mask;
+        uint32_t h = lvalue_hash(key) & mask;
         for (;;) {
             HashEntry& e = entries[h];
-            if (e.key == HASH_EMPTY) return;
-            if (e.key != HASH_TOMBSTONE && lvalue_eq_fast(e.key, key.val)) {
-                e.key = HASH_TOMBSTONE;
-                e.val = LValue();
+            if (e.ktype == Nil) {
+                if (e.key.payload.u64 == HASH_EMPTY) return;
+            } else if (lvalue_eq_fast(LValue(e.key, e.ktype), key)) {
+                e.key.payload.u64 = HASH_TOMBSTONE;
+                e.ktype = Nil;
+                e.val = TValue(); e.vtype = Nil;
                 hash_count--;
                 hash_tombs++;
                 hash_version++;
@@ -521,23 +540,23 @@ void LTable::settable(const LValue& key, const LValue& val) {
     }
 
     uint32_t mask = static_cast<uint32_t>(hash_size - 1);
-    uint32_t h    = lvalue_hash(key.val) & mask;
+    uint32_t h    = lvalue_hash(key) & mask;
     int32_t  tomb = -1;
     for (;;) {
         HashEntry& e = entries[h];
-        if (e.key == HASH_EMPTY) {
+        if (e.ktype == Nil) {
             HashEntry& slot = (tomb != -1) ? entries[tomb] : e;
-            slot.key = key.val;
-            slot.val = val;
+            slot.key = key.val; slot.ktype = key.type;
+            slot.val = val.val; slot.vtype = val.type;
             if (tomb != -1) hash_tombs--;
             hash_count++;
             hash_version++;
             return;
         }
-        if (e.key == HASH_TOMBSTONE) {
+        if (e.key.payload.u64 == HASH_TOMBSTONE && e.ktype == Nil) {
             if (tomb == -1) tomb = static_cast<int32_t>(h);
-        } else if (lvalue_eq_fast(e.key, key.val)) {
-            e.val = val;
+        } else if (lvalue_eq_fast(LValue(e.key, e.ktype), key)) {
+            e.val = val.val; e.vtype = val.type;
             hash_version++;
             return;
         }
@@ -548,27 +567,27 @@ void LTable::settable(const LValue& key, const LValue& val) {
 
 //------------------ LTable::get_value — get with metamethod fallback
 LValue LTable::get_value(LState* L, const LValue& key) {
-    LValue* ptr = gettable(key);
-    if (ptr && ptr->type() != LType::Nil)
-        return *ptr;
+    LValue ptr = gettable(key);
+    if (ptr.type != Nil)
+        return ptr;
 
     if (metatable) {
         LValue index_key = L->str_index;
-        LValue* index_ptr = metatable->gettable(index_key);
+        LValue index_ptr = metatable->gettable(index_key);
 
-        if (index_ptr && index_ptr->type() != LType::Nil) {
-            if (index_ptr->type() == LType::Table) {
-                LTable* parent = static_cast<LTable*>(index_ptr->as_pointer());
+        if (index_ptr.type != Nil) {
+            if (index_ptr.type == Table) {
+                LTable* parent = static_cast<LTable*>(index_ptr.as_pointer());
                 return parent->get_value(L, key);
             }
-            else if (index_ptr->type() == LType::Function) {
+            else if (index_ptr.type == Function) {
                 LValue args[2];
                 args[0] = LValue(this);
                 args[1] = key;
 
-                L->shadow_stack[L->shadow_top++] = &args[0];
-                L->shadow_stack[L->shadow_top++] = &args[1];
-                MultiValue ret = call_function(L, *index_ptr, args, 2, __FILE__, __LINE__);
+                L->shadow_stack[L->shadow_top++]= TypedSlot(&args[0].val, &args[0].type);
+                L->shadow_stack[L->shadow_top++]= TypedSlot(&args[1].val, &args[1].type);
+                MultiValue ret = call_function(L, index_ptr, args, 2, __FILE__, __LINE__);
                 L->shadow_top -= 2;
 
                 return ret.count > 0 ? ret[0] : LValue();
@@ -581,32 +600,32 @@ LValue LTable::get_value(LState* L, const LValue& key) {
 
 //------------------ LTable::set_value — set with metamethod fallback
 void LTable::set_value(LState* L, const LValue& key, const LValue& val) {
-    LValue* ptr = gettable(key);
-    if (ptr && ptr->type() != LType::Nil) {
+    LValue ptr = gettable(key);
+    if (ptr.type != Nil) {
         settable(key, val);
         return;
     }
 
     if (metatable) {
         LValue newindex_key = L->str_newindex;
-        LValue* newindex_ptr = metatable->gettable(newindex_key);
+        LValue newindex_ptr = metatable->gettable(newindex_key);
 
-        if (newindex_ptr && newindex_ptr->type() != LType::Nil) {
-            if (newindex_ptr->type() == LType::Table) {
-                LTable* parent = static_cast<LTable*>(newindex_ptr->as_pointer());
+        if (newindex_ptr.type != Nil) {
+            if (newindex_ptr.type == Table) {
+                LTable* parent = static_cast<LTable*>(newindex_ptr.as_pointer());
                 parent->set_value(L, key, val);
                 return;
             }
-            else if (newindex_ptr->type() == LType::Function) {
+            else if (newindex_ptr.type == Function) {
                 LValue args[3];
                 args[0] = LValue(this);
                 args[1] = key;
                 args[2] = val;
 
-                L->shadow_stack[L->shadow_top++] = &args[0];
-                L->shadow_stack[L->shadow_top++] = &args[1];
-                L->shadow_stack[L->shadow_top++] = &args[2];
-                call_function(L, *newindex_ptr, args, 3, __FILE__, __LINE__);
+                L->shadow_stack[L->shadow_top++]= TypedSlot(&args[0].val, &args[0].type);
+                L->shadow_stack[L->shadow_top++]= TypedSlot(&args[1].val, &args[1].type);
+                L->shadow_stack[L->shadow_top++]= TypedSlot(&args[2].val, &args[2].type);
+                call_function(L, newindex_ptr, args, 3, __FILE__, __LINE__);
                 L->shadow_top -= 3;
                 return;
             }
@@ -627,7 +646,7 @@ void LTable::bind(LState* L, const char* name, CFunctionType func) {
     LCFunction* f = new LCFunction(func);
     f->next = L->allocated_objects;
     L->allocated_objects = f;
-    settable(LValue(L->intern_string(name)), LValue(LType::Function, f));
+    settable(LValue(L->intern_string(name)), LValue(Function, f));
 }
 
 
@@ -654,7 +673,7 @@ LState::LState()
     _G->next = allocated_objects;
     allocated_objects = _G;
     object_count++;
-    _G->settable(LValue(intern_string("_G")), LValue(LType::Table, _G));
+    _G->settable(LValue(intern_string("_G")), LValue(Table, _G));
 
 
     str_index    = LValue(intern_string("__index"));
@@ -668,7 +687,7 @@ LState::LState()
 
 
 static void dtor_free_table(LTable* t) {
-    if (t->array)  { delete[] t->array;  t->array  = nullptr; }
+    if (t->array) { delete[] t->array; t->array = nullptr; } if (t->array_types) { delete[] t->array_types; t->array_types = nullptr; } if (t->array_types) { delete[] t->array_types; t->array_types = nullptr; }
     if (t->entries) { delete[] t->entries; t->entries = nullptr; }
     t->array_size = t->array_cap = t->hash_size = t->hash_count = 0;
     t->hash_count = t->hash_tombs = 0;
@@ -683,16 +702,16 @@ LState::~LState() {
     }
 
     for (LHeader* h = allocated_objects; h; h = h->next) {
-        if (h->type == static_cast<uint8_t>(LType::Userdata)) {
+        if (h->type == static_cast<uint8_t>(UserData)) {
             LUserdata* ud = static_cast<LUserdata*>(h);
             if (ud->metatable) {
-                LValue* gc_func = ud->metatable->gettable(this->str_gc);
-                if (gc_func && gc_func->type() == LType::Function) {
-                    LValue args[1] = { LValue(LType::Userdata, ud) };
+                LValue gc_func = ud->metatable->gettable(this->str_gc);
+                if (gc_func.type != Nil && gc_func.type == Function) {
+                    LValue args[1] = { LValue(UserData, ud) };
                     size_t prev_shadow = this->shadow_top;
-                    this->shadow_stack[this->shadow_top++] = &args[0];
+                    this->shadow_stack[this->shadow_top++]= TypedSlot(&args[0].val, &args[0].type);
                     try {
-                        call_function(this, *gc_func, args, 1, "StateClose_Finalizer", 0);
+                        call_function(this, gc_func, args, 1, "StateClose_Finalizer", 0);
                     } catch (...) {}
                     this->shadow_top = prev_shadow;
                 }
@@ -703,13 +722,13 @@ LState::~LState() {
     LHeader* curr = allocated_objects;
     while (curr) {
         LHeader* next = curr->next;
-        if (curr->type == static_cast<uint8_t>(LType::Table))
+        if (curr->type == static_cast<uint8_t>(Table))
             dtor_free_table(static_cast<LTable*>(curr));
-        else if (curr->type == static_cast<uint8_t>(LType::Function))
+        else if (curr->type == static_cast<uint8_t>(Function))
             delete static_cast<LCFunction*>(curr);
-        else if (curr->type == static_cast<uint8_t>(LType::Userdata))
+        else if (curr->type == static_cast<uint8_t>(UserData))
             delete[] reinterpret_cast<char*>(curr);
-        else if (curr->type == static_cast<uint8_t>(LType::Thread))
+        else if (curr->type == static_cast<uint8_t>(Thread))
             delete static_cast<LThread*>(curr);
         curr = next;
     }
@@ -730,13 +749,13 @@ LState::~LState() {
         while (ud) {
             LUserdata* nxt = static_cast<LUserdata*>(ud->next);
             if (ud->metatable) {
-                LValue* gc_func = ud->metatable->gettable(this->str_gc);
-                if (gc_func && gc_func->type() == LType::Function) {
-                    LValue args[1] = { LValue(LType::Userdata, ud) };
+                LValue gc_func = ud->metatable->gettable(this->str_gc);
+                if (gc_func.type != Nil && gc_func.type == Function) {
+                    LValue args[1] = { LValue(UserData, ud) };
                     size_t prev_shadow = this->shadow_top;
-                    this->shadow_stack[this->shadow_top++] = &args[0];
+                    this->shadow_stack[this->shadow_top++]= TypedSlot(&args[0].val, &args[0].type);
                     try {
-                        call_function(this, *gc_func, args, 1, "GC_Finalizer", 0);
+                        call_function(this, gc_func, args, 1, "GC_Finalizer", 0);
                     } catch (...) {}
                     this->shadow_top = prev_shadow;
                 }
@@ -777,14 +796,14 @@ LState::~LState() {
 
 static void clx_trigger_gc(LState* L, LTable* t) {
     if (!t->metatable) return;
-    LValue* gc_func = t->metatable->gettable(L->str_gc);
-    if (!gc_func || gc_func->type() != LType::Function) return;
+    LValue gc_func = t->metatable->gettable(L->str_gc);
+    if (gc_func.type == Nil) return;
 
-    LValue args[1] = { LValue(LType::Table, t) };
+    LValue args[1] = { LValue(Table, t) };
     size_t prev_shadow = L->shadow_top;
-    L->shadow_stack[L->shadow_top++] = &args[0];
+    L->shadow_stack[L->shadow_top++]= TypedSlot(&args[0].val, &args[0].type);
     try {
-        call_function(L, *gc_func, args, 1, "GC_Finalizer", 0);
+        call_function(L, gc_func, args, 1, "GC_Finalizer", 0);
     } catch (const LRuntimeException& e) {
         std::cerr << "error in __gc metamethod: " << e.what() << "\n";
     } catch (std::exception& e) {
@@ -797,18 +816,18 @@ static void clx_trigger_gc(LState* L, LTable* t) {
 
 //------------------ CloseGuard::~CloseGuard — close guard destructor
 CloseGuard::~CloseGuard() {
-    if (val.type() != LType::Table) return;
+    if (val.type != Table) return;
     LTable* t = static_cast<LTable*>(val.as_pointer());
     if (!t->metatable) return;
-    LValue* close_func = t->metatable->gettable(L->str_close);
-    if (!close_func || close_func->type() != LType::Function) return;
+    LValue close_func = t->metatable->gettable(L->str_close);
+    if (close_func.type == Nil) return;
 
     LValue args[2] = { val, LValue() };
     size_t prev_shadow = L->shadow_top;
-    L->shadow_stack[L->shadow_top++] = &args[0];
-    L->shadow_stack[L->shadow_top++] = &args[1];
+    L->shadow_stack[L->shadow_top++]= TypedSlot(&args[0].val, &args[0].type);
+    L->shadow_stack[L->shadow_top++]= TypedSlot(&args[1].val, &args[1].type);
     try {
-        call_function(L, *close_func, args, 2, "CloseGuard", 0);
+        call_function(L, close_func, args, 2, "CloseGuard", 0);
     } catch (const LRuntimeException& e) {
         std::cerr << "error in __close metamethod: " << e.what() << "\n";
     } catch (std::exception& e) {
@@ -843,28 +862,28 @@ bool LState::gc_step() {
                     allocated_objects = next_obj;
                 }
             }
-            if (curr->type == static_cast<uint8_t>(LType::Table)) {
+            if (curr->type == static_cast<uint8_t>(Table)) {
                 LTable* t = static_cast<LTable*>(curr);
                 if (t->metatable) {
                     t->next = gc_finalizable;
                     gc_finalizable = t;
                 } else {
-                    if (t->array)  { delete[] t->array;  t->array  = nullptr; }
+                    if (t->array) { delete[] t->array; t->array = nullptr; } if (t->array_types) { delete[] t->array_types; t->array_types = nullptr; } if (t->array_types) { delete[] t->array_types; t->array_types = nullptr; }
                     if (t->entries) { delete[] t->entries; t->entries = nullptr; }
                                     t->array_size = t->array_cap = t->hash_size = t->hash_count = 0;
                     t->hash_count = t->hash_tombs = 0;
                     t->next = free_tables;
                     free_tables = t;
                 }
-            } else if (curr->type == static_cast<uint8_t>(LType::Function)) {
+            } else if (curr->type == static_cast<uint8_t>(Function)) {
                 LCFunction* f = static_cast<LCFunction*>(curr);
                 f->func = nullptr;
                 f->next = free_functions;
                 free_functions = f;
-            } else if (curr->type == static_cast<uint8_t>(LType::Thread)) {
+            } else if (curr->type == static_cast<uint8_t>(Thread)) {
                 allocated_bytes -= sizeof(LThread);
                 delete static_cast<LThread*>(curr);
-            } else if (curr->type == static_cast<uint8_t>(LType::Userdata)) {
+            } else if (curr->type == static_cast<uint8_t>(UserData)) {
                 LUserdata* ud = static_cast<LUserdata*>(curr);
                 if (ud->metatable) {
                     ud->next = gc_finalizable_ud;
@@ -891,7 +910,7 @@ bool LState::gc_step() {
         for (LTable* t = static_cast<LTable*>(gc_finalizable); t; ) {
             LTable* nx = static_cast<LTable*>(t->next);
             clx_trigger_gc(this, t);
-            if (t->array)  { delete[] t->array;  t->array  = nullptr; }
+            if (t->array) { delete[] t->array; t->array = nullptr; } if (t->array_types) { delete[] t->array_types; t->array_types = nullptr; } if (t->array_types) { delete[] t->array_types; t->array_types = nullptr; }
             if (t->entries) { delete[] t->entries; t->entries = nullptr; }
                     t->array_size = t->array_cap = t->hash_size = t->hash_count = 0;
             t->hash_count = t->hash_tombs = 0;
@@ -903,13 +922,13 @@ bool LState::gc_step() {
         for (LUserdata* ud = static_cast<LUserdata*>(gc_finalizable_ud); ud; ) {
             LUserdata* nx = static_cast<LUserdata*>(ud->next);
             if (ud->metatable) {
-                LValue* gc_func = ud->metatable->gettable(this->str_gc);
-                if (gc_func && gc_func->type() == LType::Function) {
-                    LValue args[1] = { LValue(LType::Userdata, ud) };
+                LValue gc_func = ud->metatable->gettable(this->str_gc);
+                if (gc_func.type != Nil && gc_func.type == Function) {
+                    LValue args[1] = { LValue(UserData, ud) };
                     size_t prev_shadow = this->shadow_top;
-                    this->shadow_stack[this->shadow_top++] = &args[0];
+                    this->shadow_stack[this->shadow_top++]= TypedSlot(&args[0].val, &args[0].type);
                     try {
-                        call_function(this, *gc_func, args, 1, "GC_Finalizer", 0);
+                        call_function(this, gc_func, args, 1, "GC_Finalizer", 0);
                     } catch (const LRuntimeException& e) {
                         std::cerr << "error in __gc metamethod: " << e.what() << "\n";
                     } catch (std::exception& e) {
@@ -946,39 +965,67 @@ void LState::collect_garbage() {
         LHeader* h = v.as_pointer();
         if (h && h->marked == 0) {
             h->marked = 1;
-            LType t = v.type();
-            if (t == LType::Table || t == LType::Thread) wl.push_back(h);
+            ValueType t = v.type;
+            if (t == Table || t == Thread) wl.push_back(h);
         }
     };
 
-    if (_G)          push_if_needed(LValue(LType::Table,  _G));
-    if (main_thread) push_if_needed(LValue(LType::Thread, main_thread));
+    if (_G)          push_if_needed(LValue(Table,  _G));
+    if (main_thread) push_if_needed(LValue(Thread, main_thread));
     if (running_thread && running_thread != main_thread)
-        push_if_needed(LValue(LType::Thread, running_thread));
+        push_if_needed(LValue(Thread, running_thread));
     for (size_t i = 0; i < shadow_top; ++i)
-        if (shadow_stack[i]) push_if_needed(*shadow_stack[i]);
+        if (shadow_stack[i].val) push_if_needed(LValue(*shadow_stack[i].val, *shadow_stack[i].type));
 
     while (!wl.empty()) {
         LHeader* curr = wl.back(); wl.pop_back();
 
-        if (curr->type == static_cast<uint8_t>(LType::Table)) {
+        if (curr->type == static_cast<uint8_t>(Table)) {
             LTable* t = static_cast<LTable*>(curr);
-            for (size_t i = 0; i < t->array_size; ++i) push_if_needed(t->array[i]);
+            // SIMD: scan type array in 16-byte chunks, only process non-nil entries
+            {
+                const uint8_t* types_raw = reinterpret_cast<const uint8_t*>(t->array_types);
+                size_t i = 0;
+#if defined(CLX_HAS_SSE2)
+                const __m128i zero = _mm_setzero_si128();
+                for (; i + 16 <= t->array_size; i += 16) {
+                    __m128i types = _mm_loadu_si128(reinterpret_cast<const __m128i*>(types_raw + i));
+                    __m128i cmp = _mm_cmpeq_epi8(types, zero);
+                    uint32_t mask = static_cast<uint32_t>(~_mm_movemask_epi8(cmp)) & 0xFFFF;
+                    while (mask) {
+                        int bit = clx_ctz(mask);
+                        push_if_needed(LValue(t->array[i + bit], t->array_types[i + bit]));
+                        mask &= mask - 1;
+                    }
+                }
+#elif defined(CLX_HAS_NEON)
+                const uint8x16_t zero = vdupq_n_u8(0);
+                for (; i + 16 <= t->array_size; i += 16) {
+                    uint8x16_t types = vld1q_u8(types_raw + i);
+                    uint8x16_t cmp = vceqq_u8(types, zero);
+                    uint8_t lane_vals[16];
+                    vst1q_u8(lane_vals, vmvnq_u8(cmp));
+                    for (int k = 0; k < 16; ++k) {
+                        if (lane_vals[k]) push_if_needed(LValue(t->array[i + k], t->array_types[i + k]));
+                    }
+                }
+#endif
+                for (; i < t->array_size; ++i) push_if_needed(LValue(t->array[i], t->array_types[i]));
+            }
             for (size_t b = 0; b < t->hash_size; ++b) {
                 uint32_t _mask = static_cast<uint32_t>(t->hash_size - 1);
                 for (size_t _i = 0; _i < t->hash_size; ++_i) {
-                    uint64_t _k = t->entries[_i].key;
-                    if (_k == HASH_EMPTY || _k == HASH_TOMBSTONE) continue;
-                    LValue kv; kv.val = _k;
+                    if (t->entries[_i].ktype == Nil) continue;
+                    LValue kv(t->entries[_i].key, t->entries[_i].ktype);
                     push_if_needed(kv);
-                    push_if_needed(t->entries[_i].val);
+                    push_if_needed(LValue(t->entries[_i].val, t->entries[_i].vtype));
                 }
             }
             if (t->metatable && t->metatable->marked == 0) {
                 t->metatable->marked = 1;
                 wl.push_back(t->metatable);
             }
-        } else if (curr->type == static_cast<uint8_t>(LType::Thread)) {
+        } else if (curr->type == static_cast<uint8_t>(Thread)) {
             LThread* th = static_cast<LThread*>(curr);
             push_if_needed(th->function);
             for (size_t i = 0; i < th->yield_args.count;  ++i) push_if_needed(th->yield_args[i]);
@@ -988,7 +1035,7 @@ void LState::collect_garbage() {
 
     std::vector<LHeader*> protect_wl;
     for (LHeader* obj = allocated_objects; obj; obj = obj->next) {
-        if (obj->marked == 0 && obj->type == static_cast<uint8_t>(LType::Table)) {
+        if (obj->marked == 0 && obj->type == static_cast<uint8_t>(Table)) {
             LTable* t = static_cast<LTable*>(obj);
             if (t->metatable && t->metatable->marked == 0) {
                 t->metatable->marked = 2;
@@ -998,20 +1045,19 @@ void LState::collect_garbage() {
     }
     while (!protect_wl.empty()) {
         LHeader* curr = protect_wl.back(); protect_wl.pop_back();
-        if (curr->type == static_cast<uint8_t>(LType::Table)) {
+        if (curr->type == static_cast<uint8_t>(Table)) {
             LTable* tt = static_cast<LTable*>(curr);
             for (size_t i = 0; i < tt->array_size; ++i) {
-                LValue v = tt->array[i];
+                LValue v = LValue(tt->array[i], tt->array_types[i]);
                 if (v.is_gc_obj()) {
                     LHeader* h = v.as_pointer();
                     if (h && h->marked == 0) { h->marked = 2; protect_wl.push_back(h); }
                 }
             }
             for (size_t _pi = 0; _pi < tt->hash_size; ++_pi) {
-                    uint64_t _pk = tt->entries[_pi].key;
-                    if (_pk == HASH_EMPTY || _pk == HASH_TOMBSTONE) continue;
-                    LValue kv; kv.val = _pk;
-                    for (LValue v : { kv, tt->entries[_pi].val }) {
+                    if (tt->entries[_pi].ktype == Nil) continue;
+                    LValue kv(tt->entries[_pi].key, tt->entries[_pi].ktype);
+                    for (LValue v : { kv, LValue(tt->entries[_pi].val, tt->entries[_pi].vtype) }) {
                         if (v.is_gc_obj()) {
                             LHeader* h = v.as_pointer();
                             if (h && h->marked == 0) { h->marked = 2; protect_wl.push_back(h); }
@@ -1042,9 +1088,9 @@ MultiValue call_function(LState* L, const LValue& func, const LValue* args, size
     L->current_line = line;
 
     size_t prev_shadow = L->shadow_top;
-    L->shadow_stack[L->shadow_top++] = const_cast<LValue*>(&func);
+    L->shadow_stack[L->shadow_top++] = TypedSlot(const_cast<TValue*>(&func.val), const_cast<ValueType*>(&func.type));
 
-    if (func.type() == LType::Function) {
+    if (func.type == Function) {
         LCFunction* f = static_cast<LCFunction*>(func.as_pointer());
         if (f->direct) {
             MultiValue ret = f->direct(L, args, count);
@@ -1056,11 +1102,11 @@ MultiValue call_function(LState* L, const LValue& func, const LValue* args, size
         return ret;
     }
 
-    if (func.type() == LType::Table) {
+    if (func.type == Table) {
         LTable* mt = static_cast<LTable*>(func.as_pointer())->metatable;
         if (mt) {
-            LValue* m = mt->gettable(L->str_call);
-            if (m && m->type() != LType::Nil) {
+            LValue m = mt->gettable(L->str_call);
+            if (m.type != Nil) {
                 size_t nargs = count + 1;
                 LValue* new_args;
                 LValue stack_buf[16];
@@ -1071,8 +1117,8 @@ MultiValue call_function(LState* L, const LValue& func, const LValue* args, size
                 for (size_t i = 0; i < count; ++i) new_args[i + 1] = args[i];
 
                 size_t prev_inner = L->shadow_top;
-                for (size_t i = 0; i < nargs; ++i) L->shadow_stack[L->shadow_top++] = &new_args[i];
-                MultiValue ret = call_function(L, *m, new_args, nargs, file, line);
+                for (size_t i = 0; i < nargs; ++i) L->shadow_stack[L->shadow_top++] = TypedSlot(&new_args[i].val, &new_args[i].type);
+                MultiValue ret = call_function(L, m, new_args, nargs, file, line);
                 L->shadow_top = prev_inner;
                 if (heap) delete[] new_args;
                 L->shadow_top = prev_shadow;
@@ -1088,7 +1134,7 @@ MultiValue call_function(LState* L, const LValue& func, const LValue* args, size
         prefix = std::string(file) + ":" + std::to_string(line) + ": ";
     }
 
-    std::string err_msg = prefix + "attempt to call a " + TYPE_NAMES[static_cast<size_t>(func.type())] + " value";
+    std::string err_msg = prefix + "attempt to call a " + VALUE_TYPE_NAMES[static_cast<size_t>(func.type)] + " value";
     throw LRuntimeException(LValue(L->intern_string(err_msg)));
 }
 
@@ -1124,30 +1170,30 @@ MultiValue pcall_function(LState* L, const LValue& func, const LValue* args, siz
 //------------------ getmetafield — get metatable field
 LValue getmetafield(LState* L, const LValue& obj, const char* field) {
     LTable* mt = nullptr;
-    if (obj.type() == LType::Table) {
+    if (obj.type == Table) {
         mt = static_cast<LTable*>(obj.as_pointer())->metatable;
-    } else if (obj.type() == LType::Userdata) {
+    } else if (obj.type == UserData) {
         mt = static_cast<LUserdata*>(obj.as_pointer())->metatable;
     }
     if (!mt) return LValue();
-    LValue* p = mt->gettable(LValue(L->intern_string(field)));
-    return p ? *p : LValue();
+    LValue p = mt->gettable(LValue(L->intern_string(field)));
+    return p.type != Nil ? p : LValue();
 }
 
 
 //------------------ callmeta — call metamethod
 bool callmeta(LState* L, const LValue& obj, const char* event) {
     LTable* mt = nullptr;
-    if (obj.type() == LType::Table) {
+    if (obj.type == Table) {
         mt = static_cast<LTable*>(obj.as_pointer())->metatable;
-    } else if (obj.type() == LType::Userdata) {
+    } else if (obj.type == UserData) {
         mt = static_cast<LUserdata*>(obj.as_pointer())->metatable;
     }
     if (!mt) return false;
-    LValue* p = mt->gettable(LValue(L->intern_string(event)));
-    if (!p || p->type() != LType::Function) return false;
+    LValue p = mt->gettable(LValue(L->intern_string(event)));
+    if (p.type == Nil) return false;
     LValue args[1] = {obj};
-    call_function(L, *p, args, 1, "C API", 0);
+    call_function(L,  p, args, 1, "C API", 0);
     return true;
 }
 
@@ -1157,7 +1203,7 @@ bool callmeta(LState* L, const LValue& obj, const char* event) {
 
 
 static MultiValue lazy_funcs_index(LState* L, const LValue* args, size_t n) {
-    if (n < 2 || args[1].type() != LType::String)
+    if (n < 2 || args[1].type != String)
         return MultiValue();
 
     const char* name = args[1].as_string();
@@ -1167,13 +1213,13 @@ static MultiValue lazy_funcs_index(LState* L, const LValue* args, size_t n) {
     LValue regs_key(L->intern_string("__lazy_regs"));
     LValue count_key(L->intern_string("__lazy_count"));
 
-    LValue* regs_val = t->metatable->gettable(regs_key);
-    LValue* count_val = t->metatable->gettable(count_key);
-    if (!regs_val || regs_val->type() != LType::Userdata || !count_val || count_val->type() != LType::Integer)
+    LValue regs_val = t->metatable->gettable(regs_key);
+    LValue count_val = t->metatable->gettable(count_key);
+    if (regs_val.type != UserData || regs_val.type == Nil || count_val.type == Nil || count_val.type != Int64)
         return MultiValue();
 
-    const LazyReg* regs = reinterpret_cast<const LazyReg*>(regs_val->as_pointer());
-    int64_t count = count_val->as_integer();
+    const LazyReg* regs = reinterpret_cast<const LazyReg*>(regs_val.as_pointer());
+    int64_t count = count_val.as_integer();
 
     for (int64_t i = 0; i < count; i++) {
         if (std::strcmp(regs[i].name, name) == 0) {
@@ -1189,7 +1235,7 @@ static MultiValue lazy_funcs_index(LState* L, const LValue* args, size_t n) {
 
 //------------------ set_lazy_funcs — set lazy function registrations
 void set_lazy_funcs(LState* L, const LValue& table, const LazyReg* regs, size_t count) {
-    if (table.type() != LType::Table) return;
+    if (table.type != Table) return;
     LTable* t = static_cast<LTable*>(table.as_pointer());
 
     LTable* mt = t->metatable;
@@ -1200,12 +1246,12 @@ void set_lazy_funcs(LState* L, const LValue& table, const LazyReg* regs, size_t 
     }
 
     mt->settable(LValue(L->intern_string("__lazy_regs")),
-                 LValue(LType::Userdata, reinterpret_cast<LHeader*>(const_cast<LazyReg*>(regs))));
+                 LValue(UserData, reinterpret_cast<LHeader*>(const_cast<LazyReg*>(regs))));
     mt->settable(LValue(L->intern_string("__lazy_count")),
                  LValue(static_cast<int64_t>(count)));
 
-    LValue* existing = mt->gettable(L->str_index);
-    if (!existing || existing->type() == LType::Nil) {
+    LValue existing = mt->gettable(L->str_index);
+    if (existing.type == Nil) {
         LValue handler = L->create_closure(CFunctionType(lazy_funcs_index));
         mt->settable(L->str_index, handler);
     }
@@ -1243,18 +1289,18 @@ LValue LState::create_table(size_t asize, size_t hsize) {
     }
 
     if (asize > 0) {
-        t->array = new LValue[asize];
+        t->array = new TValue[asize]; t->array_types = new ValueType[asize]();
         t->array_size = asize;
         t->array_cap = asize;
     }
 
-    t->type = static_cast<uint8_t>(LType::Table);
+    t->type = static_cast<uint8_t>(Table);
 
     t->next = allocated_objects;
     allocated_objects = t;
 
     object_count++;
-    return LValue(LType::Table, t);
+    return LValue(Table, t);
 }
 
 //------------------ LState::create_closure — allocate a closure
@@ -1280,11 +1326,11 @@ clx::LValue clx::LState::create_closure(CFunctionType func) {
 
     auto* fnptr = f->func.target<MultiValue(*)(LState*, const LValue*, size_t)>();
     if (fnptr) { f->direct = *fnptr; }
-    f->type = static_cast<uint8_t>(LType::Function);
+    f->type = static_cast<uint8_t>(Function);
     f->next = allocated_objects;
     allocated_objects = f;
     object_count++;
-    return clx::LValue(LType::Function, f);
+    return clx::LValue(Function, f);
 }
 
 
@@ -1304,7 +1350,7 @@ LValue newuserdata(LState* L, size_t size) {
 
     char* mem = new char[sizeof(LUserdata) + size];
     LUserdata* ud = reinterpret_cast<LUserdata*>(mem);
-    ud->type = static_cast<uint8_t>(LType::Userdata);
+    ud->type = static_cast<uint8_t>(UserData);
     ud->marked = 0;
     ud->metatable = nullptr;
     ud->size = size;
@@ -1313,7 +1359,7 @@ LValue newuserdata(LState* L, size_t size) {
     L->allocated_objects = ud;
     L->object_count++;
     L->allocated_bytes += sizeof(LUserdata) + size;
-    return LValue(LType::Userdata, ud);
+    return LValue(UserData, ud);
 }
 
 
@@ -1321,18 +1367,18 @@ LValue newuserdata(LState* L, size_t size) {
 //------------------ call_bin_metamethod — call binary op metamethod
 LValue call_bin_metamethod(LState* L, const LValue& a, const LValue& b, const char* event) {
     LTable* mt = nullptr;
-    if (a.type() == LType::Table) mt = static_cast<LTable*>(a.as_pointer())->metatable;
-    else if (a.type() == LType::Userdata) mt = static_cast<LUserdata*>(a.as_pointer())->metatable;
-    if (!mt && b.type() == LType::Table) mt = static_cast<LTable*>(b.as_pointer())->metatable;
-    else if (!mt && b.type() == LType::Userdata) mt = static_cast<LUserdata*>(b.as_pointer())->metatable;
+    if (a.type == Table) mt = static_cast<LTable*>(a.as_pointer())->metatable;
+    else if (a.type == UserData) mt = static_cast<LUserdata*>(a.as_pointer())->metatable;
+    if (!mt && b.type == Table) mt = static_cast<LTable*>(b.as_pointer())->metatable;
+    else if (!mt && b.type == UserData) mt = static_cast<LUserdata*>(b.as_pointer())->metatable;
 
     if (mt) {
-        LValue* method = mt->gettable(LValue(L->intern_string(event)));
-        if (method && method->type() == LType::Function) {
+        LValue method = mt->gettable(LValue(L->intern_string(event)));
+        if (method.type != Nil && method.type == Function) {
             LValue args[2] = { a, b };
-            L->shadow_stack[L->shadow_top++] = &args[0];
-            L->shadow_stack[L->shadow_top++] = &args[1];
-            MultiValue res = call_function(L, *method, args, 2, __FILE__, __LINE__);
+            L->shadow_stack[L->shadow_top++]= TypedSlot(&args[0].val, &args[0].type);
+            L->shadow_stack[L->shadow_top++]= TypedSlot(&args[1].val, &args[1].type);
+            MultiValue res = call_function(L, method, args, 2, __FILE__, __LINE__);
             L->shadow_top -= 2;
             return res[0];
         }
@@ -1351,7 +1397,7 @@ LValue call_bin_metamethod(LState* L, const LValue& a, const LValue& b, const ch
     if (ev == "__lt" || ev == "__le") op_type = "compare";
     else if (ev == "__concat") op_type = "concatenate";
 
-    std::string err_msg = prefix + "attempt to " + op_type + " a " + TYPE_NAMES[static_cast<size_t>(a.type())] + " value";
+    std::string err_msg = prefix + "attempt to " + op_type + " a " + VALUE_TYPE_NAMES[static_cast<size_t>(a.type)] + " value";
     throw LRuntimeException(LValue(L->intern_string(err_msg)));
 }
 
@@ -1362,8 +1408,8 @@ LValue call_bin_metamethod(LState* L, const LValue& a, const LValue& b, const ch
 
 //------------------ get_global — get global variable
 LValue get_global(LState* L, const char* name) {
-    LValue* val = L->_G->gettable(LValue(L->intern_string(name)));
-    return val ? *val : LValue();
+    LValue val = L->_G->gettable(LValue(L->intern_string(name)));
+    return val.type != Nil ? val : LValue();
 }
 
 
@@ -1383,6 +1429,8 @@ LState* open(int argc, char* argv[]) {
     main_th->status = THREAD_RUNNING;
 #if defined(_WIN32)
     main_th->fiber = ConvertThreadToFiber(nullptr);
+#elif defined(__APPLE__) && defined(__aarch64__)
+    clx_coro_save(&main_th->ctx);
 #else
     getcontext(&main_th->ctx);
 #endif
@@ -1393,7 +1441,7 @@ LState* open(int argc, char* argv[]) {
         LValue arg_table = L->create_table(argc);
         LTable* t = static_cast<LTable*>(arg_table.as_pointer());
         for (int i = 0; i < argc; ++i) {
-            t->settable(LValue(static_cast<double>(i)), LValue(L->intern_string(argv[i])));
+            t->settable(LValue(static_cast<int64_t>(i)), LValue(L->intern_string(argv[i])));
         }
         L->_G->settable(LValue(L->intern_string("arg")), arg_table);
     }
