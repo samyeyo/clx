@@ -135,7 +135,7 @@ s = string.pack("d", 1.23456789012345)
 assert_eq(string.unpack("d", s), 1.23456789012345, "unpack d")
 
 s = string.pack("c4", "abc")
-assert_eq(string.unpack("c4", s), "abc", "unpack c4")
+assert_eq(string.unpack("c4", s), "abc\0", "unpack c4")
 
 s = string.pack("s2", "hello")
 assert_eq(string.unpack("s2", s), "hello", "unpack s2")
