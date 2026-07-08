@@ -42,4 +42,16 @@ assert_eq(~1, -2, "Bitwise NOT")
 assert_eq(1 << 3, 8, "Left Shift")
 assert_eq(16 >> 2, 4, "Right Shift")
 
+local x = 9007199254740993
+assert_eq(x, 9007199254740993, "int64 literal")
+assert_eq(x + 1, 9007199254740994, "int64 addition")
+assert_eq(x * 2, 18014398509481986, "int64 multiplication")
+local nx = -x
+assert_eq(nx, -9007199254740993, "int64 negation")
+assert_eq(x % 3, 0, "int64 modulo")
+local y = x + 1
+assert_eq(y, 9007199254740994, "int64 assignment")
+local z = x * 2
+assert_eq(z, 18014398509481986, "int64 multiplication assignment")
+
 print_summary("ARITHMETIC")
