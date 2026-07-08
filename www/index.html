@@ -917,7 +917,7 @@
                     </table>
                 </div>
                 <p id="bench-desc" style="font-size: 0.8125rem; color: var(--text-dim); line-height: 1.6; margin: 16px 0 8px 0; padding: 0 2px;"></p>
-                <label for="bench-select" style="font-size: 0.8125rem; color: var(--text-dim); margin-bottom: 8px; display: block;"><br>Intel® Core™ i5 Ultra 125U CPU @ 4.30GHz · Linux · GCC 13.3.0 · Avg of 10 runs · lower time is better</label>
+                <label for="bench-select" style="font-size: 0.8125rem; color: var(--text-dim); margin-bottom: 8px; display: block;"><br>Apple A18 Pro · macOS Darwin 25.5.0 arm64 · Apple Clang 21.0.0 · Avg of 10 runs · lower time is better</label>
             </section>
 
             <!-- ═══ Doc: Getting Started ═══ -->
@@ -1290,12 +1290,12 @@ end
                     <h3>Platform-Specific</h3>
                     <div class="code-block">
                         <div class="code-body"><span class="comment"># Linux/macOS:</span>
-  Compiler: clang++ (falls back to g++)
+  Compiler: fixed at build time via CMake
   Executable: &lt;name&gt; (no extension)
   Object: &lt;name&gt;.o  |  Static: &lt;name&gt;.a  |  Dynmod: &lt;name&gt;.so
 
 <span class="comment"># Windows:</span>
-  Compiler: clang++ (falls back to g++, then cl MSVC)
+  Compiler: fixed at build time via CMake
   Executable: &lt;name&gt;.exe
   Object: &lt;name&gt;.obj  |  Static: &lt;name&gt;.lib  |  Dynmod: &lt;name&gt;.dll</div>
                     </div>
@@ -1328,15 +1328,14 @@ end
                     <h3>Environment Variables</h3>
                     <p>clx respects these environment variables:</p>
                     <div class="code-block">
-                        <div class="code-body"><span class="flag">CXX</span>  (Not currently read — compiler auto-detected)</div>
+                        <div class="code-body"><span class="flag">CXX</span>  (Not read — compiler fixed at build time)</div>
                     </div>
                 </div>
                 <div class="doc-section">
                     <h3>Exit Codes</h3>
                     <div class="code-block">
                         <div class="code-body"> 0   Success
- 1   Usage or compilation error
- 2   No C++ compiler found</div>
+ 1   Usage or compilation error</div>
                     </div>
                 </div>
                 <div class="doc-section">
@@ -1391,7 +1390,7 @@ end
                 </div>
                 <div class="doc-section">
                     <h3>Components</h3>
-                    <p><span class="bright">CLI</span> — Handles argument parsing, file I/O, and invokes the C++ compiler. Auto-detects gcc, clang, or MSVC. Enables DCE via <span class="inline-code">-ffunction-sections -Wl,--gc-sections</span> (gcc/clang) or <span class="inline-code">/Gy /link /OPT:REF /OPT:ICF</span> (MSVC).</p>
+                    <p><span class="bright">CLI</span> — Handles argument parsing, file I/O, and invokes the C++ compiler. The compiler is fixed at build time via CMake (same compiler that built clx) to ensure ABI compatibility. Enables DCE via <span class="inline-code">-ffunction-sections -Wl,--gc-sections</span> (gcc/clang) or <span class="inline-code">/Gy /link /OPT:REF /OPT:ICF</span> (MSVC).</p>
                     <p><span class="bright">Lexer</span> — Converts source to token stream (keywords, identifiers, literals, operators, delimiters).</p>
                     <p><span class="bright">Parser</span> — Recursive descent parser builds an AST with statement, expression, block, and function nodes.</p>
                     <p><span class="bright">AST Nodes</span> — Core node types: Block, Identifier, BinaryOp, UnaryOp, FunctionDef, TableConstructor, ForStatement, WhileStatement, IfStatement, CallExpression.</p>
@@ -1456,11 +1455,13 @@ end
                     <p>Fast, high-quality hash function used for table keys and string interning. Uses compile-time constant secrets with 128-bit multiply for excellent avalanche. For interned strings, the hash is baked into the allocation header, making <span class="inline-code">lvalue_hash()</span> a single 4-byte load.</p>
                     <p>For strings ≤8 bytes, <span class="inline-code">swar_hash_8()</span> replaces <span class="inline-code">wyhash_str</span> — loads all bytes into one register with a single <span class="inline-code">memcpy</span> and mixes via <span class="inline-code">wyhash64</span>. Used consistently for both TAG_ISTR inline strings and short interned strings so cross-type hash compatibility is maintained.</p>
                     <h4>CacheSlot Inline Caching</h4>
-                    <p>Per-call-site cache slots for string-keyed table access. Each access site in the source gets one <span class="inline-code">CacheSlot</span> that caches the last table pointer and value. Uses <span class="inline-code">shape_version</span> to detect stale cached values after table writes. Only caches non-GC values to avoid dangling pointers after collection. States: valid/invalid based on table pointer and shape version match.</p>
+                    <p>Per-call-site cache slots for string-keyed table access. Each access site in the source gets one <span class="inline-code">CacheSlot</span> that caches the last table pointer and value. Uses <span class="inline-code">shape_version</span> to detect stale cached values after table writes. Only caches non-GC values to avoid dangling pointers after collection. States: valid/invalid based on table pointer and shape version match. Works for any <span class="inline-code">NodeType::Identifier</span> table — globals, locals, and function parameters.</p>
                     <h4>StringBuilder</h4>
                     <p>O(n) string concatenation that avoids the O(n²) quadratic blow-up of repeated <span class="inline-code">s = s .. part</span> patterns. Uses inline storage for up to 8 parts, grows to heap allocation when needed. Produces a single interned string with baked hash on <span class="inline-code">to_string()</span>.</p>
                     <h4>Shape Version Tracking</h4>
                     <p>Tables track a <span class="inline-code">shape_version</span> that increments on every write. CacheSlots check the version to detect stale cached values, preventing incorrect reads after table mutations.</p>
+                    <h4>SIMD Runtime Scans</h4>
+                    <p><span class="inline-code">ValueType</span> is a <span class="inline-code">uint8_t</span> enum, so 16 type tags fit in a single 128-bit register. The runtime uses SSE2 (x64) or NEON (ARM64) to accelerate hot type-array scans: <span class="inline-code">rawlen()</span> (finds first nil in array), <span class="inline-code">next()</span> (finds first non-nil), <span class="inline-code">table_concat</span> validation (validates String/Double/Int64), and GC mark loop (skips nil entries). Scalar fallback handles non-16-byte-aligned remainders.</p>
                 </div>
             </section>
 
@@ -1481,14 +1482,14 @@ local y = "hello" .. " " .. "world"  <span class="comment">-- Compiled as: "hell
                 </div>
                 <div class="doc-section">
                     <h3>Numeric Fast-Path</h3>
-                    <p>clx distinguishes between Integer and Number types in its nan-boxed value representation. The runtime LValue arithmetic functions dispatch to native double or int64 operations internally.</p>
+                    <p>clx distinguishes between Integer and Number types in its value representation (separate <span class="inline-code">ValueType</span> tag + 8-byte payload). The runtime LValue arithmetic functions dispatch to native double or int64 operations internally. At the codegen level, integer literals and variables provably holding integers are emitted as C++ <span class="inline-code">int64_t</span>, while float literals and mixed expressions use native <span class="inline-code">double</span>:</p>
                     <div class="code-block">
                         <div class="code-header"><span class="lang">lua</span></div>
-                        <div class="code-body">-- Numeric literal:
-local i = 1 + 2  <span class="comment">-- Compiled as: double arithmetic via LValue</span>
+                        <div class="code-body">-- Integer literal:
+local i = 1 + 2  <span class="comment">-- Compiled as: int64_t arithmetic via LValue</span>
 
 -- Float literal:
-local f = 1.5 + 2.3  <span class="comment">-- Same LValue arithmetic path</span>
+local f = 1.5 + 2.3  <span class="comment">-- Compiled as: double arithmetic via LValue</span>
 
 -- Mixed (promotes to double):
 local m = 1 + 2.5  <span class="comment">-- Integer converted to double</span></div>
@@ -1507,14 +1508,34 @@ local result = a + b  <span class="comment">-- When known numeric, uses add dire
                     </div>
                 </div>
                 <div class="doc-section">
+                    <h3>Int64 Overflow Safety</h3>
+                    <p>Integer arithmetic (<span class="inline-code">add</span>, <span class="inline-code">sub</span>, <span class="inline-code">mul</span>) with two <span class="inline-code">Int64</span> operands uses native C++ integer operations for speed. Each operation checks for overflow before returning:</p>
+                    <ul>
+                        <li><span class="bright">add</span>: Detects same-sign inputs producing a different-sign result</li>
+                        <li><span class="bright">sub</span>: Detects different-sign inputs where the result sign matches the subtrahend</li>
+                        <li><span class="bright">mul</span>: Verifies <span class="inline-code">result / operand == other_operand</span>, with special-case for <span class="inline-code">INT64_MIN * -1</span></li>
+                    </ul>
+                    <p>On overflow, the result is promoted to <span class="inline-code">double</span> (matching Lua 5.5 semantics). <span class="inline-code">mod</span>, <span class="inline-code">idiv</span>, <span class="inline-code">pow</span>, and <span class="inline-code">unm</span> always promote to double for all numeric inputs.</p>
+                </div>
+                <div class="doc-section">
+                    <h3>Non-Fast Function Parameter Numeric Promotion</h3>
+                    <p>Functions with mixed parameter types (e.g., <span class="inline-code">decode(str, pos, ...)</span> where <span class="inline-code">str</span> is a string but <span class="inline-code">pos</span> is a number) cannot be fast functions — not all parameters are numeric. But every <span class="inline-code">pos + 1</span>, <span class="inline-code">pos - 1</span> still went through <span class="inline-code">clx::add</span>/<span class="inline-code">clx::sub</span> runtime calls.</p>
+                    <p>The optimizer detects parameters used in arithmetic operations (directly or through call chains) and marks them as numeric. The codegen emits them as <span class="inline-code">double l_param = args[i].as_number()</span> instead of <span class="inline-code">clx::LValue l_param = args[i]</span>, enabling native arithmetic even in non-fast functions.</p>
+                </div>
+                <div class="doc-section">
+                    <h3>Function Parameter Numeric-Record Array Inference</h3>
+                    <p>When a function receives a table as a parameter (e.g., <span class="inline-code">advance(bodies, dt)</span> where <span class="inline-code">bodies</span> is an array of record-like tables), the optimizer cannot prove that <span class="inline-code">bodies[i].x</span> yields a number without tracing the pattern.</p>
+                    <p>Pass 3 in the optimizer detects <span class="inline-code">local bi = bodies[i]</span> where <span class="inline-code">bodies</span> is a function parameter, then traces field accesses (<span class="inline-code">bi.x</span>, <span class="inline-code">bi.y</span>) in BinaryOp nodes to infer numeric fields. Both the parameter name and the local name are registered in <span class="inline-code">g_numeric_table_fields</span> so <span class="inline-code">yields_number()</span> proves field reads yield numbers.</p>
+                </div>
+                <div class="doc-section">
                     <h3>Local Variable Optimization</h3>
-                    <p>Local variables that hold numbers are stored as unboxed C++ doubles:</p>
+                    <p>Local variables that hold numbers are stored as unboxed C++ <span class="inline-code">int64_t</span> or <span class="inline-code">double</span>:</p>
                     <div class="code-block">
                         <div class="code-header"><span class="lang">lua</span></div>
                         <div class="code-body">local function sum(n)
-    local total = 0  <span class="comment">-- Stored as double, not LValue</span>
+    local total = 0  <span class="comment">-- Stored as int64_t</span>
     for i = 1, n do
-        total = total + i  <span class="comment">-- Direct double arithmetic</span>
+        total = total + i  <span class="comment">-- Direct int64_t arithmetic</span>
     end
     return total
 end</div>
@@ -1594,29 +1615,29 @@ end</div>
                 </h2>
                 <div class="doc-section">
                     <h3>Value System</h3>
-                    <p>clx uses nan-boxing to represent all Lua values in 64 bits with distinct types for Number (double), Integer (native int64), TAG_ISTR inline strings (&le;5 bytes, no heap allocation), and pointers for tables, functions, threads, and userdata.</p>
+                    <p>clx uses a 16-byte <span class="inline-code">LValue</span> (8-byte payload + separate <span class="inline-code">ValueType</span> tag) to represent all Lua values with distinct types for Number (double), Integer (native int64), TAG_ISTR inline strings (&le;6 bytes, no heap allocation), and pointers for tables, functions, threads, and userdata. Integer arithmetic uses native operations without floating-point conversion. Overflow in <span class="inline-code">add</span>, <span class="inline-code">sub</span>, <span class="inline-code">mul</span> promotes to double (matching Lua 5.5 semantics).</p>
                     <div class="code-block">
-                        <div class="code-header"><span class="lang">Value Layout</span><span>64-bit NAN-Boxed Representation</span></div>
+                        <div class="code-header"><span class="lang">Value Layout</span><span>16-byte LValue (payload + type tag)</span></div>
                         <div style="padding: 16px; display: flex; flex-direction: column; gap: 8px; background: var(--code-bg);">
                             <div style="display: flex; flex-direction: column; padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--card);">
                                 <span style="font-size: 0.8125rem; font-weight: 600; color: var(--accent);">Double (Numbers)</span>
-                                <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">64-bit IEEE 754 floating-point format</span>
+                                <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">64-bit IEEE 754 floating-point in TValue payload</span>
                             </div>
                             <div style="display: flex; flex-direction: column; padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--card);">
                                 <span style="font-size: 0.8125rem; font-weight: 600; color: var(--accent);">Integer</span>
-                                <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">48-bit signed payload + type tag</span>
+                                <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">64-bit signed integer in TValue payload</span>
                             </div>
                             <div style="display: flex; flex-direction: column; padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--card);">
                                 <span style="font-size: 0.8125rem; font-weight: 600; color: var(--accent);">Pointer (GC Objects)</span>
-                                <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">62-bit heap address references + 2-bit object tag (tables, closures, threads)</span>
+                                <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">64-bit heap address in TValue payload (tables, closures, threads, userdata)</span>
                             </div>
                             <div style="display: flex; flex-direction: column; padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--card);">
                                 <span style="font-size: 0.8125rem; font-weight: 600; color: var(--accent);">Inline String (TAG_ISTR)</span>
-                                <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">16-bit tag prefix (<code style="font-family: monospace; color: var(--accent);">0xFFF9 + len</code>) + 48-bit immediate character sequence (≤ 5 Bytes)</span>
+                                <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">8-bit length + up to 6 bytes of character data in TValue payload (byte 6 unused)</span>
                             </div>
                             <div style="display: flex; flex-direction: column; padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--card);">
                                 <span style="font-size: 0.8125rem; font-weight: 600; color: var(--accent);">Special System Literals</span>
-                                <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">Dedicated bit configurations representing <code style="font-family: monospace;">nil</code>, <code style="font-family: monospace;">true</code>, and <code style="font-family: monospace;">false</code></span>
+                                <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;"><code style="font-family: monospace;">nil</code>, <code style="font-family: monospace;">true</code>, <code style="font-family: monospace;">false</code> — stored as distinct ValueType tags</span>
                             </div>
                         </div>
                     </div>
@@ -1630,7 +1651,7 @@ end</div>
                     <p><span class="bright">Base Library</span> — print, error, assert, type, tostring, tonumber, pairs, ipairs, next, pcall, xpcall, select, collectgarbage, setmetatable, getmetatable, rawequal, rawget, rawset, rawlen, warn, _VERSION</p>
                     <p><span class="bright">Math Library</span> — Uses <span class="inline-code">set_lazy_funcs</span> for lazy registration via <span class="inline-code">constexpr LazyReg[]</span>. Functions created as <span class="inline-code">LCFunction</span> closures on first access, then cached on the table.</p>
                     <p><span class="bright">String Library</span> — len, sub, reverse, lower, upper, rep, byte, char, format, find, match, gmatch, gsub, pack, unpack, packsize with full pattern matching support.</p>
-                    <p><span class="bright">Coroutine Library</span> — create, resume, yield, status, wrap using OS-level fibers/ucontext.</p>
+                    <p><span class="bright">Coroutine Library</span> — create, resume, yield, status, wrap using OS-level fibers/ucontext. On macOS Apple Silicon, uses hand-written ARM64 assembly (<span class="inline-code">src/runtime/coro_switch_aarch64.s</span>) replacing buggy <span class="inline-code">ucontext</span>.</p>
                     <p><span class="bright">Table Library</span> — insert, remove, concat, sort, unpack, pack, move.</p>
                 </div>
                 <div class="doc-section">
@@ -1773,15 +1794,32 @@ close(L);                           <span class="comment">// Free all memory —
                     <h3>Value Constructors</h3>
                     <div class="code-block">
                         <div class="code-header"><span class="lang">cpp</span><span>Factory functions for creating LValues</span></div>
-                        <div class="code-body">clx::nil();                          <span class="comment">// Returns LType::Nil</span>
-clx::boolean(b);                     <span class="comment">// Returns LType::Bool from bool b</span>
-clx::number(d);                      <span class="comment">// Returns LType::Number from double d</span>
-clx::integer(i);                     <span class="comment">// Returns LType::Integer from int64_t i</span>
-clx::string(L, s);                   <span class="comment">// Interned string; ≤5 bytes uses TAG_ISTR inline</span>
+                        <div class="code-body">clx::nil();                          <span class="comment">// Returns Nil</span>
+clx::boolean(b);                     <span class="comment">// Returns Boolean from bool b</span>
+clx::number(d);                      <span class="comment">// Returns Double from double d</span>
+clx::integer(i);                     <span class="comment">// Returns Int64 from int64_t i</span>
+clx::string(L, s);                   <span class="comment">// Interned string; ≤6 bytes uses TAG_ISTR inline</span>
 clx::table(L, asize, hsize);         <span class="comment">// Creates a new table with pre-sized array/hash</span>
 clx::cfunction(L, func);             <span class="comment">// Wraps a CFunctionType as an LCFunction closure</span>
 clx::thread(LThread*);               <span class="comment">// Wraps an LThread pointer (coroutine)</span>
-clx::lightuserdata(ptr);             <span class="comment">// Wraps a void* as LType::Userdata</span></div>
+clx::lightuserdata(ptr);             <span class="comment">// Wraps a void* as UserData</span></div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>ValueType Short Aliases</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>clx::Nil, clx::String, etc.</span></div>
+                        <div class="code-body"><span class="comment">// ValueType is a scoped enum. Short aliases in the clx namespace:</span>
+clx::Nil      <span class="comment">// ValueType::Nil      (0)</span>
+clx::Boolean  <span class="comment">// ValueType::Boolean  (1)</span>
+clx::Int64    <span class="comment">// ValueType::Int64    (2)</span>
+clx::Double   <span class="comment">// ValueType::Double   (3)</span>
+clx::String   <span class="comment">// ValueType::String   (4)</span>
+clx::Table    <span class="comment">// ValueType::Table    (5)</span>
+clx::Function <span class="comment">// ValueType::Function (6)</span>
+clx::UserData <span class="comment">// ValueType::UserData (7)</span>
+clx::Thread   <span class="comment">// ValueType::Thread   (8)</span></div>
                     </div>
                 </div>
 
@@ -1789,16 +1827,16 @@ clx::lightuserdata(ptr);             <span class="comment">// Wraps a void* as L
                     <h3>Type Queries</h3>
                     <div class="code-block">
                         <div class="code-header"><span class="lang">cpp</span><span>Check LValue types</span></div>
-                        <div class="code-body">clx::type_of(v);                     <span class="comment">// Returns LType enum for value v</span>
-clx::is_nil(v);                      <span class="comment">// True if LType::Nil</span>
-clx::is_bool(v);                     <span class="comment">// True if LType::Bool</span>
-clx::is_number(v);                   <span class="comment">// True if LType::Number</span>
-clx::is_integer(v);                  <span class="comment">// True if LType::Integer</span>
+                        <div class="code-body">clx::type_of(v);                     <span class="comment">// Returns ValueType for value v</span>
+clx::is_nil(v);                      <span class="comment">// True if Nil</span>
+clx::is_bool(v);                     <span class="comment">// True if Boolean</span>
+clx::is_number(v);                   <span class="comment">// True if Double or Int64</span>
+clx::is_integer(v);                  <span class="comment">// True if Int64</span>
 clx::is_string(v);                   <span class="comment">// True if string (inline or interned)</span>
-clx::is_table(v);                    <span class="comment">// True if LType::Table</span>
-clx::is_function(v);                 <span class="comment">// True if LType::Function</span>
-clx::is_thread(v);                   <span class="comment">// True if LType::Thread</span>
-clx::is_userdata(v);                 <span class="comment">// True if LType::Userdata</span>
+clx::is_table(v);                    <span class="comment">// True if Table</span>
+clx::is_function(v);                 <span class="comment">// True if Function</span>
+clx::is_thread(v);                   <span class="comment">// True if Thread</span>
+clx::is_userdata(v);                 <span class="comment">// True if UserData</span>
 clx::is_none(v);                     <span class="comment">// Always false (no stack sentinel)</span>
 clx::is_noneornil(v);                <span class="comment">// True if v is nil</span></div>
                     </div>
@@ -2011,7 +2049,7 @@ clx::close_thread(L, th);           <span class="comment">// Close a suspended c
                     <div class="code-block">
                         <div class="code-header"><span class="lang">cpp</span><span>Fundamental clx types</span></div>
                         <div class="code-body">LType             <span class="comment">// Tagged type enum (Number, Integer, String, Table, ...)</span>
-LValue             <span class="comment">// 64-bit nan-boxed value (with TAG_ISTR for ≤5B strings)</span>
+LValue             <span class="comment">// 16-byte value (TValue payload + ValueType tag)</span>
 MultiValue         <span class="comment">// Multi-return container (.count, operator[])</span>
 LState             <span class="comment">// VM state (opaque pointer)</span>
 LThread            <span class="comment">// Coroutine handle</span>
@@ -2032,7 +2070,7 @@ LValue(double);
 LValue(int64_t);
 LValue(const char*);         <span class="comment">// raw interned string pointer</span>
 LValue(LType, LHeader*);     <span class="comment">// GC object</span>
-LValue::istr(s, len);        <span class="comment">// static — inline string (≤5 bytes, no interning)</span></div>
+LValue::istr(s, len);        <span class="comment">// static — inline string (≤6 bytes, no interning)</span></div>
                     </div>
                     <h4>MultiValue</h4>
                     <div class="code-block">
@@ -2596,8 +2634,8 @@ CLX_API clx::LValue luaopen_vector(clx::LState* L) {
 
      const benchmarkData = {
         "3ddist": [
-            { name: "clx", time: 0.058, factor: "1.72x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.020, factor: "5.00x", class: "yellow", winner: true },
+            { name: "clx", time: 0.009, factor: "11.44x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.020, factor: "5.00x", class: "yellow", winner: false },
             { name: "Lua 5.5", time: 0.100, factor: "1.00x", class: "red", winner: false }
         ],
         "ackermann": [
@@ -2626,7 +2664,7 @@ CLX_API clx::LValue luaopen_vector(clx::LState* L) {
             { name: "Lua 5.5", time: 0.450, factor: "1.00x", class: "red", winner: false }
         ],
         "coro": [
-            { name: "clx", time: 0.003, factor: "3.00x", class: "accent", winner: true },
+            { name: "clx", time: 0.009, factor: "1.00x", class: "accent", winner: false },
             { name: "LuaJIT", time: 0.009, factor: "1.00x", class: "yellow", winner: false },
             { name: "Lua 5.5", time: 0.009, factor: "1.00x", class: "red", winner: false }
         ],
@@ -2636,12 +2674,12 @@ CLX_API clx::LValue luaopen_vector(clx::LState* L) {
             { name: "Lua 5.5", time: 0.007, factor: "1.00x", class: "red", winner: false }
         ],
         "fasta": [
-            { name: "clx", time: 0.003, factor: "1.33x", class: "accent", winner: true },
+            { name: "clx", time: 0.004, factor: "1.00x", class: "accent", winner: false },
             { name: "LuaJIT", time: 0.005, factor: "0.80x", class: "yellow", winner: false },
             { name: "Lua 5.5", time: 0.004, factor: "1.00x", class: "red", winner: false }
         ],
         "fib": [
-            { name: "clx", time: 0.006, factor: "48.83x", class: "accent", winner: true },
+            { name: "clx", time: 0.032, factor: "9.14x", class: "accent", winner: true },
             { name: "LuaJIT", time: 0.048, factor: "6.10x", class: "yellow", winner: false },
             { name: "Lua 5.5", time: 0.293, factor: "1.00x", class: "red", winner: false }
         ],
@@ -2666,17 +2704,17 @@ CLX_API clx::LValue luaopen_vector(clx::LState* L) {
             { name: "Lua 5.5", time: 0.075, factor: "1.00x", class: "red", winner: false }
         ],
         "mandelbrot": [
-            { name: "clx", time: 0.004, factor: "2.75x", class: "accent", winner: true },
+            { name: "clx", time: 0.006, factor: "2.00x", class: "accent", winner: true },
             { name: "LuaJIT", time: 0.007, factor: "1.57x", class: "yellow", winner: false },
             { name: "Lua 5.5", time: 0.011, factor: "1.00x", class: "red", winner: false }
         ],
         "nbody": [
-            { name: "clx", time: 0.008, factor: "1.25x", class: "accent", winner: false },
+            { name: "clx", time: 0.009, factor: "1.08x", class: "accent", winner: false },
             { name: "LuaJIT", time: 0.007, factor: "1.43x", class: "yellow", winner: true },
             { name: "Lua 5.5", time: 0.010, factor: "1.00x", class: "red", winner: false }
         ],
         "pi": [
-            { name: "clx", time: 0.019, factor: "4.21x", class: "accent", winner: true },
+            { name: "clx", time: 0.010, factor: "8.31x", class: "accent", winner: true },
             { name: "LuaJIT", time: 0.038, factor: "2.11x", class: "yellow", winner: false },
             { name: "Lua 5.5", time: 0.080, factor: "1.00x", class: "red", winner: false }
         ],

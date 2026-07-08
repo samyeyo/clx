@@ -22,27 +22,45 @@ LValue is a 16-byte value (8-byte payload + separate `ValueType` tag). Construct
 
 | Function | Returns |
 |---|---|
-| `nil()` | LType::Nil |
-| `boolean(bool)` | LType::Bool |
-| `number(double)` | LType::Number |
-| `integer(int64_t)` | LType::Integer |
-| `string(L, s)` / `string(L, s, len)` | LType::String (interned; ≤6 bytes are TAG_ISTR inline) |
-| `table(L, asize, hsize)` | LType::Table |
-| `cfunction(L, func)` | LType::Function (CFunctionType) |
-| `thread(LThread*)` | LType::Thread |
-| `lightuserdata(void*)` | LType::Userdata |
+| `nil()` | `Nil` |
+| `boolean(bool)` | `Boolean` |
+| `number(double)` | `Double` |
+| `integer(int64_t)` | `Int64` |
+| `string(L, s)` / `string(L, s, len)` | `String` (interned; ≤6 bytes are TAG_ISTR inline) |
+| `table(L, asize, hsize)` | `Table` |
+| `cfunction(L, func)` | `Function` (CFunctionType) |
+| `thread(LThread*)` | `Thread` |
+| `lightuserdata(void*)` | `UserData` |
 
 Strings ≤6 bytes are stored directly in the LValue (TAG_ISTR) — no heap allocation, no interning.
 `as_string()` returns a valid C string pointer for both inline and heap strings.
 
+### ValueType short aliases
+
+`ValueType` is a scoped enum. Short aliases are provided in the `clx` namespace:
+
+```cpp
+clx::Nil      // ValueType::Nil      (0)
+clx::Boolean  // ValueType::Boolean  (1)
+clx::Int64    // ValueType::Int64    (2)
+clx::Double   // ValueType::Double   (3)
+clx::String   // ValueType::String   (4)
+clx::Table    // ValueType::Table    (5)
+clx::Function // ValueType::Function (6)
+clx::UserData // ValueType::UserData (7)
+clx::Thread   // ValueType::Thread   (8)
+```
+
+Use these instead of `clx::ValueType::String` etc.
+
 ### Raw member access (from `clx_runtime.h`)
 
 ```cpp
-LType t = v.type();
+ValueType t = v.type;
 double n = v.as_number();
 int64_t i = v.as_integer();
 bool   b = v.as_bool();
-const char* s = v.as_string();     // raw pointer (LType::String only)
+const char* s = v.as_string();     // raw pointer (String only)
 void*  p = v.as_pointer();         // raw pointer (GC objects / userdata)
 bool ok = v.to_number(double& out); // string-to-number conversion
 std::string s = v.to_string(L);    // any type → string (respects __tostring)
@@ -52,7 +70,7 @@ uint32_t len = v.string_len();     // string length (inline or heap)
 ## Type Queries
 
 ```cpp
-LType  type_of(v);
+ValueType type_of(v);
 bool   is_nil(v), is_bool(v), is_number(v), is_integer(v);
 bool   is_string(v), is_table(v), is_function(v), is_thread(v), is_userdata(v);
 bool   is_none(v);       // always false — no stack sentinel
@@ -62,8 +80,8 @@ bool   is_noneornil(v);  // true if v is nil
 ## Type Names
 
 ```cpp
-const char* type_name(LType t);     // e.g. "number", "string"
-const char* type_name(const LValue& v);  // overload — same lookup
+const char* type_name(ValueType t);     // e.g. "number", "string"
+const char* type_name(const LValue& v); // overload — same lookup
 ```
 
 ## State Queries
