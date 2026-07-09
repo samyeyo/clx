@@ -684,7 +684,7 @@
                     <span class="bright">clx</span> is an ahead-of-time (AOT) native compiler that compiles Lua 5.5 source code into optimized machine code. By eliminating the need for a runtime interpreter or bytecode virtual machine, <span class="bright">clx</span> provides predictable execution time, minimal latency, and a reduced resource footprint.
                 </p>
                 <p>
-                    <span class="bright">clx</span> transpiles Lua source code into optimized C++ code, which is then compiled using the system's C++ compiler to produce native machine code. This architecture provides performance up to 60x faster than standard Lua interpreters, thanks to static analysis and high performance optimizations.
+                    <span class="bright">clx</span> transpiles Lua source code into optimized C++ code, which is then compiled using the system's C++ compiler to produce native machine code. This architecture provides performance up to 62x faster than standard Lua interpreters, thanks to static analysis and high performance optimizations.
                 </p>
                 <p>
                     <span class="bright">clx</span> generates standalone binaries with zero external dependencies. The entire toolchain is fully open source and released under the permissive MIT License.
@@ -843,7 +843,7 @@
                     </table>
                 </div>
                 <p id="bench-desc" style="font-size: 0.8125rem; color: var(--text-dim); line-height: 1.6; margin: 16px 0 8px 0; padding: 0 2px;"></p>
-                <label for="bench-select" style="font-size: 0.8125rem; color: var(--text-dim); margin-bottom: 8px; display: block;"><br>Apple A18 Pro · macOS Darwin 25.5.0 arm64 · Apple Clang 21.0.0 · Avg of 10 runs · lower time is better</label>
+                <label for="bench-select" style="font-size: 0.8125rem; color: var(--text-dim); margin-bottom: 8px; display: block;"><br>Intel® Core™ i5 Ultra 125U CPU @ 4.30GHz · Linux · GCC 13.3.0 · Avg of 10 runs · lower time is better</label>
             </section>
             <section id="doc-getting-started" class="section doc-section" role="tabpanel">
                 <h2>
@@ -1248,7 +1248,7 @@ end
                 </h2>
                 <div class="doc-section">
                     <h3>Overview</h3>
-                    <p>clx transpiles Lua source code into optimized C++, then compiles with the system C++ compiler to produce native machine code. This architecture provides performance up to 60x faster than standard Lua interpreters.</p>
+                    <p>clx transpiles Lua source code into optimized C++, then compiles with the system C++ compiler to produce native machine code. This architecture provides performance up to 62x faster than standard Lua interpreters.</p>
                 </div>
                 <div class="doc-section">
                     <h3>Compiler Pipeline</h3>
@@ -2433,103 +2433,103 @@ CLX_API clx::LValue luaopen_vector(clx::LState* L) {
     'use strict';
      const benchmarkData = {
         "3ddist": [
-            { name: "clx", time: 0.009, factor: "11.44x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.020, factor: "5.00x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.100, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.015, factor: "6.13x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.018, factor: "5.11x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.092, factor: "1.00x", class: "red", winner: false }
         ],
         "ackermann": [
-            { name: "clx", time: 0.008, factor: "7.12x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.015, factor: "3.80x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.057, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.008, factor: "6.37x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.011, factor: "4.64x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.051, factor: "1.00x", class: "red", winner: false }
         ],
         "arraysum": [
-            { name: "clx", time: 0.023, factor: "4.78x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.044, factor: "2.50x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.110, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.031, factor: "4.13x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.052, factor: "2.46x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.128, factor: "1.00x", class: "red", winner: false }
         ],
         "binarytrees": [
-            { name: "clx", time: 0.016, factor: "1.12x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.013, factor: "1.38x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.018, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.024, factor: "0.83x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.013, factor: "1.54x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.020, factor: "1.00x", class: "red", winner: false }
         ],
         "bubble": [
-            { name: "clx", time: 0.008, factor: "6.00x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.008, factor: "6.00x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.048, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.014, factor: "3.64x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.007, factor: "7.29x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.051, factor: "1.00x", class: "red", winner: false }
         ],
         "canada": [
-            { name: "clx", time: 0.231, factor: "1.95x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.148, factor: "3.04x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.450, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.286, factor: "1.30x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.142, factor: "2.62x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.372, factor: "1.00x", class: "red", winner: false }
         ],
         "coro": [
-            { name: "clx", time: 0.009, factor: "1.00x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.009, factor: "1.00x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.009, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.006, factor: "0.83x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.007, factor: "0.71x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.005, factor: "1.00x", class: "red", winner: false }
         ],
         "fannkuchredux": [
-            { name: "clx", time: 0.004, factor: "1.75x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.008, factor: "0.88x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.007, factor: "1.00x", class: "red", winner: false }
-        ],
-        "fasta": [
-            { name: "clx", time: 0.004, factor: "1.00x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.005, factor: "0.80x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.004, factor: "1.00x", class: "red", winner: false }
-        ],
-        "fib": [
-            { name: "clx", time: 0.032, factor: "9.14x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.048, factor: "6.10x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.293, factor: "1.00x", class: "red", winner: false }
-        ],
-        "hashtable": [
-            { name: "clx", time: 0.546, factor: "1.67x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.254, factor: "3.58x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.910, factor: "1.00x", class: "red", winner: false }
-        ],
-        "json": [
-            { name: "clx", time: 0.022, factor: "6.77x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.824, factor: "0.18x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.149, factor: "1.00x", class: "red", winner: false }
-        ],
-        "knucleotide": [
-            { name: "clx", time: 0.008, factor: "1.25x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.009, factor: "1.11x", class: "yellow", winner: false },
+            { name: "clx", time: 0.007, factor: "1.43x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.007, factor: "1.43x", class: "yellow", winner: false },
             { name: "Lua 5.5", time: 0.010, factor: "1.00x", class: "red", winner: false }
         ],
+        "fasta": [
+            { name: "clx", time: 0.005, factor: "1.40x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.006, factor: "1.17x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.007, factor: "1.00x", class: "red", winner: false }
+        ],
+        "fib": [
+            { name: "clx", time: 0.005, factor: "62.20x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.045, factor: "6.91x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.311, factor: "1.00x", class: "red", winner: false }
+        ],
+        "hashtable": [
+            { name: "clx", time: 0.596, factor: "1.58x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.359, factor: "2.62x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.942, factor: "1.00x", class: "red", winner: false }
+        ],
+        "json": [
+            { name: "clx", time: 0.021, factor: "7.38x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 1.027, factor: "0.15x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.155, factor: "1.00x", class: "red", winner: false }
+        ],
+        "knucleotide": [
+            { name: "clx", time: 0.009, factor: "1.56x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.014, factor: "1.00x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.014, factor: "1.00x", class: "red", winner: false }
+        ],
         "life": [
-            { name: "clx", time: 0.042, factor: "1.79x", class: "accent", winner: false },
+            { name: "clx", time: 0.019, factor: "3.95x", class: "accent", winner: false },
             { name: "LuaJIT", time: 0.018, factor: "4.17x", class: "yellow", winner: true },
             { name: "Lua 5.5", time: 0.075, factor: "1.00x", class: "red", winner: false }
         ],
         "mandelbrot": [
-            { name: "clx", time: 0.006, factor: "2.00x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.007, factor: "1.57x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.011, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.004, factor: "3.00x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.007, factor: "1.71x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.012, factor: "1.00x", class: "red", winner: false }
         ],
         "nbody": [
-            { name: "clx", time: 0.009, factor: "1.08x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.007, factor: "1.43x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.010, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.009, factor: "1.00x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.007, factor: "1.29x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.009, factor: "1.00x", class: "red", winner: false }
         ],
         "pi": [
-            { name: "clx", time: 0.010, factor: "8.31x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.038, factor: "2.11x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.080, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.021, factor: "3.76x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.040, factor: "1.98x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.079, factor: "1.00x", class: "red", winner: false }
         ],
         "sieve": [
-            { name: "clx", time: 0.031, factor: "2.39x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.035, factor: "2.11x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.074, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.039, factor: "2.13x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.040, factor: "2.08x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.083, factor: "1.00x", class: "red", winner: false }
         ],
         "spectralnorm": [
-            { name: "clx", time: 0.040, factor: "7.57x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.018, factor: "16.83x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.303, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.029, factor: "10.69x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.018, factor: "17.22x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.310, factor: "1.00x", class: "red", winner: false }
         ],
         "warmup": [
-            { name: "clx", time: 0.003, factor: "2.00x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.008, factor: "0.75x", class: "yellow", winner: false },
+            { name: "clx", time: 0.005, factor: "1.20x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.005, factor: "1.20x", class: "yellow", winner: false },
             { name: "Lua 5.5", time: 0.006, factor: "1.00x", class: "red", winner: false }
         ]
     };
