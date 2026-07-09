@@ -159,11 +159,11 @@ Results are expressed in speedup factor against standard Lua 5.5 interpreter :
 
 | Script | lua 5.5 | LuaJIT | clx `--fast` |
 |--------|---------|--------|--------------------------|
-| fib.lua | 0.293s (1.00x) | 0.048s (6.10x) | **0.006s (48.83x)** |
-| arraysum.lua | 0.110s (1.00x) | 0.044s (2.50x) | **0.023s (4.78x)** |
-| spectralnorm.lua | 0.303s (1.00x) | **0.018s (16.83x)** | 0.040s (7.57x) |
-| canada.lua | 0.450s (1.00x) | **0.148s (3.04x)** | 0.231s (1.95x) |
-| warmup.lua | 0.006s (1.00x) | 0.008s (0.75x) | **0.003s (2.00x)** |
+| fib.lua | 0.311s (1.00x) | 0.045s (6.91x) | **0.005s (62.20x)** |
+| arraysum.lua | 0.128s (1.00x) | 0.052s (2.46x) | **0.031s (4.13x)** |
+| spectralnorm.lua | 0.310s (1.00x) | **0.018s (17.22x)** | 0.029s (10.69x) |
+| canada.lua | 0.372s (1.00x) | **0.142s (2.62x)** | 0.286s (1.30x) |
+| warmup.lua | 0.006s (1.00x) | 0.005s (1.20x) | **0.005s (1.20x)** |
 
 > Measured on Intel® Core™ i5 Ultra 125U CPU @ 4.30GHz · Linux · GCC 13.3.0 · Avg of 10 runs
 
