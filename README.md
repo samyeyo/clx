@@ -31,7 +31,7 @@ Its goal is to provide:
 ## Quick Start
 
 ```bash
-git clone https://github.com/clxcompiler/clx.git
+git clone https://github.com/samyeyo/clx.git
 cd clx
 ./build.sh install       # or build.bat install on Windows
 clx examples/hello/hello.lua
@@ -47,8 +47,8 @@ Hello clx !
 - **Aggressive optimizations** — leverages modern optimizations via Clang/GCC/MSVC
 - **Small binaries** — size-oriented builds can produce very compact executables (Lua programs can be under 100 KB with `--minimal`)
 - **Targets Lua 5.5 compatibility** — coroutines, metamethods, tables, and more
-- **NaN-boxed** value representation
-- **Inline string** optimization (strings ≤ 5 bytes stored in value, no allocation)
+- **16-byte tagged values** — 8-byte payload + separate type tag
+- **Inline string** optimization (strings ≤ 6 bytes stored in value, no allocation)
 - **Fast-path** table access caches
 - **Lightweight** AOT-oriented runtime
 - **clx C++ API**: develop portable native modules using a value-oriented API
@@ -68,7 +68,7 @@ The compiler is already capable of compiling non-trivial Lua applications, but c
 ## Requirements
 
 - **Linux**: `g++` (recommended for TCO) or `clang++`
-- **macOS**: `g++` (recommended for TCO) or `clang++` (Xcode)
+- **macOS**: `clang++` (Xcode) or `g++` via Homebrew (for TCO)
 - **Windows**: `g++` (LLVM) or MSVC
 - **CMake 3.15+** for building
 
@@ -176,10 +176,11 @@ Documentation is available in the `doc/` directory, including :
 - Getting Started
 - CLI Reference
 - Compatibility Status
-- Module Development Guide
+- Modules and Migration Guide
 - C++ API Reference
 - Runtime Internals
 - Architecture Overview
+- Optimizations
 - Benchmarks
 
 See **[Documentation Index](./doc/index.md)**
