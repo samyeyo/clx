@@ -17,8 +17,8 @@ Cross-platform ahead-of-time Lua compiler
 </div>
 <br /><br />
 
-clx is a cross-platform ahead-of-time Lua compiler and runtime that generates standalone native executables through modern C++ toolchains.
-clx is not trying to be the fastest Lua implementation in every workload.
+**clx** is a cross-platform ahead-of-time Lua compiler and runtime that generates standalone native executables through modern C++ toolchains.
+**clx** is not trying to be the fastest Lua implementation in every workload.
 
 Its goal is to provide:
 - ahead-of-time native compilation,
@@ -53,9 +53,25 @@ Hello clx !
 - **Lightweight** AOT-oriented runtime
 - **clx C++ API**: develop portable native modules using a value-oriented API
 
+## Examples built with **clx**
+
+**clx** comes with examples, that uses a Sokol clx binary module for graphics, and demonstrate native desktop application development with standard Lua code.
+
+### Pong
+
+![Pong](examples/pong/pong.gif)
+
+**pong** : a complete game written in Lua and compiled into a standalone native executable.
+
+### Mandelbrot viewer
+
+![Mandelbrot](examples/mandelbrot/mandelbrot.jpg)
+
+**Mandelbrot** : a Mandelbrot viewer written in Lua and compiled into a standalone native executable.
+
 ## Project status
 
-clx is currently in beta.
+**clx** is currently in beta.
 The compiler is already capable of compiling non-trivial Lua applications, but compatibility work and optimization improvements are ongoing.
 
 ## Example projects
@@ -127,7 +143,7 @@ Once compiled, you will find :
 
 #### Compatibility
 
-clx targets Lua 5.5 compatibility.
+**clx** targets Lua 5.5 compatibility.
 
 Current status:
 
@@ -187,4 +203,4 @@ See **[Documentation Index](./doc/index.md)**
 
 ## License
 
-clx is MIT Licensed — Copyright (c) 2026 Tine Samir
+**clx** is MIT Licensed — Copyright (c) 2026 Tine Samir
