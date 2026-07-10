@@ -74,13 +74,6 @@ Hello clx !
 **clx** is currently in beta.
 The compiler is already capable of compiling non-trivial Lua applications, but compatibility work and optimization improvements are ongoing.
 
-## Example projects
-
-- Hello World (minimal executable)
-- Mandelbrot Viewer (graphics demo)
-- Pong (complete game built in Lua)
-- Sokol Module (native graphics module using the clx C++ API)
-
 ## Requirements
 
 - **Linux**: `g++` (recommended for TCO) or `clang++`
