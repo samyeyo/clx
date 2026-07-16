@@ -123,7 +123,8 @@ static MultiValue utf8_codes(LState* L, const LValue* args, size_t count) {
     if (count == 0)
         throw_runtime_error("bad argument #1 to 'codes' (string expected, got no value)");
     size_t len;
-    const char* s = L->intern_string(get_string(L, args, count, len, 1), len);
+    const char* raw = get_string(L, args, count, len, 1);
+    const char* s = L->intern_string(raw, len);
     LValue u_lv = newuserdata(L, sizeof(CodesUd));
     L->shadow_stack[L->shadow_top++] = {&u_lv.val, &u_lv.type};
     LUserdata* u = static_cast<LUserdata*>(u_lv.as_pointer());
