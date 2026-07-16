@@ -1366,6 +1366,277 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
             state.native_numbers.push_back(name);
         }
     }
+
+    //-------- Escape analysis: classify which local tables can be arena-allocated
+    state.escaping_vars.clear();
+    state.arena_safe_table_nodes.clear();
+    state.arena_table_sizes.clear();
+
+    // For each function, find local tables and check if they escape
+    for (uint32_t fi = 0; fi < ctx.nodes.size(); ++fi) {
+        const auto& fn = ctx.nodes[fi];
+        if (fn.type != NodeType::FunctionDef) continue;
+        uint32_t body = fn.as.func_def.body_block;
+        if (body == 0xFFFFFFFF || body >= ctx.nodes.size()) continue;
+
+        // Collect local table declarations in this function
+        struct LocalTable { std::string_view name; uint32_t decl_node; uint32_t ctor_node; };
+        std::vector<LocalTable> local_tables;
+
+        // Walk function body to find local decls with table constructors
+        std::function<void(uint32_t)> walk_body = [&](uint32_t block_idx) {
+            if (block_idx == 0xFFFFFFFF || block_idx >= ctx.nodes.size()) return;
+            const auto& blk = ctx.nodes[block_idx];
+            if (blk.type != NodeType::Block) return;
+            for (uint32_t si = 0; si < blk.as.block.count; ++si) {
+                uint32_t stmt = ctx.block_statements[blk.as.block.first_statement + si];
+                if (stmt >= ctx.nodes.size()) continue;
+                const auto& sn = ctx.nodes[stmt];
+                if (sn.type == NodeType::LocalDecl) {
+                    for (uint32_t li = 0; li < sn.as.local_decl.ident_count; ++li) {
+                        uint32_t id_idx = ctx.block_statements[sn.as.local_decl.first_ident + li];
+                        if (id_idx >= ctx.nodes.size() || ctx.nodes[id_idx].type != NodeType::Identifier) continue;
+                        // Only consider non-captured, non-global locals
+                        if (ctx.nodes[id_idx].as.ident.is_captured || ctx.nodes[id_idx].as.ident.is_global) continue;
+                        std::string_view name(ctx.nodes[id_idx].as.ident.name, ctx.nodes[id_idx].as.ident.length);
+                        if (li < sn.as.local_decl.value_count) {
+                            uint32_t val_idx = ctx.block_statements[sn.as.local_decl.first_value + li];
+                            if (val_idx < ctx.nodes.size() && ctx.nodes[val_idx].type == NodeType::TableConstructor) {
+                                local_tables.push_back({name, stmt, val_idx});
+                            }
+                        }
+                    }
+                } else if (sn.type == NodeType::Block) { walk_body(stmt); }
+                  else if (sn.type == NodeType::IfStatement) { walk_body(sn.as.if_stmt.then_block); walk_body(sn.as.if_stmt.else_block); }
+                  else if (sn.type == NodeType::WhileStatement) { walk_body(sn.as.while_stmt.body_block); }
+                  else if (sn.type == NodeType::RepeatStatement) { walk_body(sn.as.repeat_stmt.body_block); }
+                  else if (sn.type == NodeType::ForStatement) { walk_body(sn.as.for_stmt.body_block); }
+                  else if (sn.type == NodeType::GenericForStatement) { walk_body(sn.as.generic_for.body_block); }
+                  else if (sn.type == NodeType::FunctionDef) { /* don't recurse into nested functions */ }
+                  else if (sn.type == NodeType::DoStatement) { walk_body(sn.as.do_stmt.body_block); }
+            }
+        };
+        walk_body(body);
+
+        if (local_tables.empty()) continue;
+
+        // For each local table, walk the full function body to detect escapes
+        for (auto& lt : local_tables) {
+            bool escapes = false;
+
+            // Escape conditions:
+            // 1. is_captured on any use
+            // 2. returned from function
+            // 3. stored in global
+            // 4. passed as function argument
+            // 5. used as method target
+            // 6. stored in another table that escapes
+            // 7. reassigned to an escaping var
+
+            std::function<void(uint32_t)> check_escape = [&](uint32_t block_idx) {
+                if (escapes || block_idx == 0xFFFFFFFF || block_idx >= ctx.nodes.size()) return;
+                const auto& blk = ctx.nodes[block_idx];
+                if (blk.type != NodeType::Block) return;
+                for (uint32_t si = 0; si < blk.as.block.count; ++si) {
+                    if (escapes) return;
+                    uint32_t stmt = ctx.block_statements[blk.as.block.first_statement + si];
+                    if (stmt >= ctx.nodes.size()) continue;
+                    const auto& sn = ctx.nodes[stmt];
+
+                    // Check if this statement references our table variable in an escaping context
+                    std::function<bool(uint32_t)> refs_var = [&](uint32_t n_idx) -> bool {
+                        if (n_idx >= ctx.nodes.size()) return false;
+                        const auto& n = ctx.nodes[n_idx];
+                        if (n.type == NodeType::Identifier) {
+                            return std::string_view(n.as.ident.name, n.as.ident.length) == lt.name;
+                        }
+                        if (n.type == NodeType::TableAccess) return refs_var(n.as.table_access.table);
+                        return false;
+                    };
+
+                    // Return statement: if var is returned, it escapes
+                    if (sn.type == NodeType::ReturnStatement) {
+                        for (uint32_t ri = 0; ri < sn.as.return_stmt.value_count; ++ri) {
+                            uint32_t v_idx = ctx.block_statements[sn.as.return_stmt.first_value + ri];
+                            if (refs_var(v_idx)) { escapes = true; return; }
+                        }
+                    }
+
+                    // Assignment to global
+                    if (sn.type == NodeType::Assignment || sn.type == NodeType::GlobalDeclStatement) {
+                        uint32_t t_count = (sn.type == NodeType::GlobalDeclStatement) ? sn.as.global_decl.ident_count : sn.as.assign.target_count;
+                        uint32_t first_t = (sn.type == NodeType::GlobalDeclStatement) ? sn.as.global_decl.first_ident : sn.as.assign.first_target;
+                        for (uint32_t ti = 0; ti < t_count; ++ti) {
+                            uint32_t tgt = ctx.block_statements[first_t + ti];
+                            if (tgt < ctx.nodes.size() && ctx.nodes[tgt].type == NodeType::Identifier && ctx.nodes[tgt].as.ident.is_global) {
+                                // Check if the corresponding value references our table
+                                uint32_t v_count = (sn.type == NodeType::GlobalDeclStatement) ? sn.as.global_decl.value_count : sn.as.assign.value_count;
+                                uint32_t first_v = (sn.type == NodeType::GlobalDeclStatement) ? sn.as.global_decl.first_value : sn.as.assign.first_value;
+                                if (ti < v_count) {
+                                    uint32_t v_idx = ctx.block_statements[first_v + ti];
+                                    if (refs_var(v_idx)) { escapes = true; return; }
+                                }
+                            }
+                        }
+                    }
+
+                    // Local assignment: if assigned to another local that later escapes, track transitively
+                    if (sn.type == NodeType::LocalDecl) {
+                        for (uint32_t li = 0; li < sn.as.local_decl.ident_count; ++li) {
+                            uint32_t id_idx = ctx.block_statements[sn.as.local_decl.first_ident + li];
+                            if (id_idx < ctx.nodes.size() && ctx.nodes[id_idx].type == NodeType::Identifier) {
+                                std::string_view tname(ctx.nodes[id_idx].as.ident.name, ctx.nodes[id_idx].as.ident.length);
+                                if (li < sn.as.local_decl.value_count) {
+                                    uint32_t v_idx = ctx.block_statements[sn.as.local_decl.first_value + li];
+                                    if (refs_var(v_idx) && state.escaping_vars.count(tname)) { escapes = true; return; }
+                                }
+                            }
+                        }
+                    }
+                    if (sn.type == NodeType::Assignment) {
+                        for (uint32_t ti = 0; ti < sn.as.assign.target_count; ++ti) {
+                            uint32_t tgt = ctx.block_statements[sn.as.assign.first_target + ti];
+                            if (tgt < ctx.nodes.size() && ctx.nodes[tgt].type == NodeType::Identifier && !ctx.nodes[tgt].as.ident.is_global) {
+                                std::string_view tname(ctx.nodes[tgt].as.ident.name, ctx.nodes[tgt].as.ident.length);
+                                if (ti < sn.as.assign.value_count) {
+                                    uint32_t v_idx = ctx.block_statements[sn.as.assign.first_value + ti];
+                                    if (refs_var(v_idx) && state.escaping_vars.count(tname)) { escapes = true; return; }
+                                }
+                            }
+                        }
+                    }
+
+                    // Function call: if var is passed as argument, it escapes
+                    if (sn.type == NodeType::LocalDecl || sn.type == NodeType::Assignment) {
+                        uint32_t v_count = (sn.type == NodeType::LocalDecl) ? sn.as.local_decl.value_count : sn.as.assign.value_count;
+                        uint32_t first_v = (sn.type == NodeType::LocalDecl) ? sn.as.local_decl.first_value : sn.as.assign.first_value;
+                        for (uint32_t vi = 0; vi < v_count; ++vi) {
+                            uint32_t v_idx = ctx.block_statements[first_v + vi];
+                            if (v_idx < ctx.nodes.size()) {
+                                const auto& vn = ctx.nodes[v_idx];
+                                if (vn.type == NodeType::CallExpression) {
+                                    for (uint32_t ai = 0; ai < vn.as.call_expr.arg_count; ++ai) {
+                                        uint32_t a_idx = ctx.block_statements[vn.as.call_expr.first_arg + ai];
+                                        if (refs_var(a_idx)) { escapes = true; return; }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Direct call expression statement
+                    if (sn.type == NodeType::Block) { check_escape(stmt); continue; }
+                    if (sn.type == NodeType::IfStatement) { check_escape(sn.as.if_stmt.then_block); check_escape(sn.as.if_stmt.else_block); continue; }
+                    if (sn.type == NodeType::WhileStatement) { check_escape(sn.as.while_stmt.body_block); continue; }
+                    if (sn.type == NodeType::RepeatStatement) { check_escape(sn.as.repeat_stmt.body_block); continue; }
+                    if (sn.type == NodeType::ForStatement) { check_escape(sn.as.for_stmt.body_block); continue; }
+                    if (sn.type == NodeType::GenericForStatement) { check_escape(sn.as.generic_for.body_block); continue; }
+                    if (sn.type == NodeType::DoStatement) { check_escape(sn.as.do_stmt.body_block); continue; }
+                    if (sn.type == NodeType::FunctionDef) { continue; } // don't recurse into nested funcs
+                }
+            };
+            check_escape(body);
+
+            // Also check: is_captured flag on the declaration itself
+            if (!escapes) {
+                for (uint32_t ni = 0; ni < ctx.nodes.size(); ++ni) {
+                    const auto& n = ctx.nodes[ni];
+                    if (n.type == NodeType::Identifier && n.as.ident.is_captured &&
+                        std::string_view(n.as.ident.name, n.as.ident.length) == lt.name) {
+                        escapes = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!escapes) {
+                // Also check if the table might grow (assigned via t[i]=v or t.key=v after creation)
+                bool might_grow = false;
+                std::function<void(uint32_t)> check_growth = [&](uint32_t block_idx) {
+                    if (might_grow || block_idx == 0xFFFFFFFF || block_idx >= ctx.nodes.size()) return;
+                    const auto& blk = ctx.nodes[block_idx];
+                    if (blk.type != NodeType::Block) return;
+                    for (uint32_t si = 0; si < blk.as.block.count; ++si) {
+                        if (might_grow) return;
+                        uint32_t stmt = ctx.block_statements[blk.as.block.first_statement + si];
+                        if (stmt >= ctx.nodes.size()) continue;
+                        const auto& sn = ctx.nodes[stmt];
+                        // Check assignments where our variable is the table target: t[i] = v or t.key = v
+                        auto check_target = [&](uint32_t tgt_idx) {
+                            if (tgt_idx >= ctx.nodes.size()) return;
+                            const auto& tn = ctx.nodes[tgt_idx];
+                            if (tn.type == NodeType::TableAccess) {
+                                if (tn.as.table_access.table < ctx.nodes.size() &&
+                                    ctx.nodes[tn.as.table_access.table].type == NodeType::Identifier) {
+                                    std::string_view tname(ctx.nodes[tn.as.table_access.table].as.ident.name,
+                                                           ctx.nodes[tn.as.table_access.table].as.ident.length);
+                                    if (tname == lt.name) might_grow = true;
+                                }
+                            }
+                        };
+                        if (sn.type == NodeType::Assignment) {
+                            for (uint32_t ti = 0; ti < sn.as.assign.target_count; ++ti)
+                                check_target(ctx.block_statements[sn.as.assign.first_target + ti]);
+                        }
+                        // Recurse into blocks
+                        if (sn.type == NodeType::Block) check_growth(stmt);
+                        else if (sn.type == NodeType::IfStatement) { check_growth(sn.as.if_stmt.then_block); check_growth(sn.as.if_stmt.else_block); }
+                        else if (sn.type == NodeType::WhileStatement) check_growth(sn.as.while_stmt.body_block);
+                        else if (sn.type == NodeType::RepeatStatement) check_growth(sn.as.repeat_stmt.body_block);
+                        else if (sn.type == NodeType::ForStatement) check_growth(sn.as.for_stmt.body_block);
+                        else if (sn.type == NodeType::GenericForStatement) check_growth(sn.as.generic_for.body_block);
+                        else if (sn.type == NodeType::DoStatement) check_growth(sn.as.do_stmt.body_block);
+                    }
+                };
+                check_growth(body);
+
+                if (!might_grow) {
+                    state.arena_safe_table_nodes.insert(lt.ctor_node);
+                    state.escaping_vars.erase(lt.name);
+                } else {
+                    state.escaping_vars.insert(lt.name);
+                }
+            } else {
+                state.escaping_vars.insert(lt.name);
+            }
+        }
+
+        // Compute arena size for this function
+        uint32_t total_arena = 0;
+        for (uint32_t node_idx : state.arena_safe_table_nodes) {
+            const auto& tc = ctx.nodes[node_idx];
+            if (tc.type != NodeType::TableConstructor) continue;
+            // Estimate array size from element count, accounting for table_presize
+            size_t arr_count = 0;
+            size_t hash_count = 0;
+            for (uint32_t ei = 0; ei < tc.as.table_cons.count; ++ei) {
+                uint32_t k_idx = ctx.block_statements[tc.as.table_cons.first_item + ei * 2];
+                if (k_idx == 0xFFFFFFFF) { arr_count++; }
+                else { hash_count++; }
+            }
+            // If table_presize exists, use it as the array size (it's the loop limit)
+            if (state.table_presize.count(node_idx)) {
+                arr_count = 16; // conservatively estimate loop-bounded tables
+            }
+            // Use hardcoded sizes matching runtime types (optimizer doesn't include clx_runtime.h)
+            constexpr size_t HDR = 112;     // sizeof(LTable) padded
+            constexpr size_t TVAL = 8;      // sizeof(TValue)
+            constexpr size_t VT = 1;        // sizeof(ValueType)
+            constexpr size_t HENTRY = 24;   // sizeof(HashEntry)
+            // Apply the same minimum preallocation as arena_create_table
+            // Must match CLX_ARENA_DEFAULT_FIELDS in clx_runtime.h
+            constexpr size_t MIN_FIELDS = 8;
+            if (arr_count < MIN_FIELDS) arr_count = MIN_FIELDS;
+            if (hash_count < MIN_FIELDS) hash_count = MIN_FIELDS;
+            size_t aligned_arr = ((TVAL * arr_count + 7) & ~static_cast<size_t>(7));
+            size_t aligned_types = ((VT * arr_count + 7) & ~static_cast<size_t>(7));
+            size_t aligned_hash = ((HENTRY * hash_count + 7) & ~static_cast<size_t>(7));
+            total_arena += static_cast<uint32_t>(HDR + aligned_arr + aligned_types + aligned_hash);
+        }
+        if (total_arena > 0) {
+            state.arena_table_sizes[fi] = total_arena;
+        }
+    }
 }
 
 }
