@@ -383,7 +383,9 @@ void LTable::resize_hash(size_t new_size) {
             new_entries[h].val = entries[i].val;
             new_entries[h].vtype = entries[i].vtype;
         }
-        if (!is_arena) delete[] entries;
+        if (!is_arena) {
+            delete[] entries;
+        }
     }
 
     is_arena = false;
@@ -560,7 +562,6 @@ void LTable::settable(const LValue& key, const LValue& val) {
             if (tomb == -1) tomb = static_cast<int32_t>(h);
         } else if (lvalue_eq_fast(LValue(e.key, e.ktype), key)) {
             e.val = val.val; e.vtype = val.type;
-            hash_version++;
             return;
         }
         h = (h + 1) & mask;
@@ -660,9 +661,6 @@ void LTable::bind_all(LState* L, std::initializer_list<LReg> funcs) {
 }
 
 
-
-
-
 //------------------ LState::LState — state constructor
 LState::LState()
     : allocated_objects(nullptr), free_tables(nullptr), free_functions(nullptr), finalizable_ud(nullptr),
@@ -690,7 +688,7 @@ LState::LState()
 
 
 static void dtor_free_table(LTable* t) {
-    if (t->array) { delete[] t->array; t->array = nullptr; } if (t->array_types) { delete[] t->array_types; t->array_types = nullptr; } if (t->array_types) { delete[] t->array_types; t->array_types = nullptr; }
+    if (t->array) { delete[] t->array; t->array = nullptr; } if (t->array_types) { delete[] t->array_types; t->array_types = nullptr; }
     if (t->entries) { delete[] t->entries; t->entries = nullptr; }
     t->array_size = t->array_cap = t->hash_size = t->hash_count = 0;
     t->hash_count = t->hash_tombs = 0;
@@ -871,7 +869,8 @@ bool LState::gc_step() {
                     t->next = gc_finalizable;
                     gc_finalizable = t;
                 } else {
-                    if (t->array) { delete[] t->array; t->array = nullptr; } if (t->array_types) { delete[] t->array_types; t->array_types = nullptr; } if (t->array_types) { delete[] t->array_types; t->array_types = nullptr; }
+                    if (t->array_cap > 0) allocated_bytes -= sizeof(TValue) * t->array_cap + sizeof(ValueType) * t->array_cap;
+                    if (t->array) { delete[] t->array; t->array = nullptr; } if (t->array_types) { delete[] t->array_types; t->array_types = nullptr; }
                     if (t->entries) { delete[] t->entries; t->entries = nullptr; }
                                     t->array_size = t->array_cap = t->hash_size = t->hash_count = 0;
                     t->hash_count = t->hash_tombs = 0;
@@ -913,7 +912,8 @@ bool LState::gc_step() {
         for (LTable* t = static_cast<LTable*>(gc_finalizable); t; ) {
             LTable* nx = static_cast<LTable*>(t->next);
             clx_trigger_gc(this, t);
-            if (t->array) { delete[] t->array; t->array = nullptr; } if (t->array_types) { delete[] t->array_types; t->array_types = nullptr; } if (t->array_types) { delete[] t->array_types; t->array_types = nullptr; }
+            if (t->array_cap > 0) allocated_bytes -= sizeof(TValue) * t->array_cap + sizeof(ValueType) * t->array_cap;
+            if (t->array) { delete[] t->array; t->array = nullptr; } if (t->array_types) { delete[] t->array_types; t->array_types = nullptr; }
             if (t->entries) { delete[] t->entries; t->entries = nullptr; }
                     t->array_size = t->array_cap = t->hash_size = t->hash_count = 0;
             t->hash_count = t->hash_tombs = 0;
@@ -1015,14 +1015,11 @@ void LState::collect_garbage() {
 #endif
                 for (; i < t->array_size; ++i) push_if_needed(LValue(t->array[i], t->array_types[i]));
             }
-            for (size_t b = 0; b < t->hash_size; ++b) {
-                uint32_t _mask = static_cast<uint32_t>(t->hash_size - 1);
-                for (size_t _i = 0; _i < t->hash_size; ++_i) {
-                    if (t->entries[_i].ktype == Nil) continue;
-                    LValue kv(t->entries[_i].key, t->entries[_i].ktype);
-                    push_if_needed(kv);
-                    push_if_needed(LValue(t->entries[_i].val, t->entries[_i].vtype));
-                }
+            for (size_t _i = 0; _i < t->hash_size; ++_i) {
+                if (t->entries[_i].ktype == Nil) continue;
+                LValue kv(t->entries[_i].key, t->entries[_i].ktype);
+                push_if_needed(kv);
+                push_if_needed(LValue(t->entries[_i].val, t->entries[_i].vtype));
             }
             if (t->metatable && t->metatable->marked == 0) {
                 t->metatable->marked = 1;
@@ -1295,6 +1292,7 @@ LValue LState::create_table(size_t asize, size_t hsize) {
         t->array = new TValue[asize]; t->array_types = new ValueType[asize]();
         t->array_size = asize;
         t->array_cap = asize;
+        allocated_bytes += sizeof(TValue) * asize + sizeof(ValueType) * asize;
     }
 
     t->type = static_cast<uint8_t>(Table);
