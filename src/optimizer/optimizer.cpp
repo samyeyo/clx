@@ -15,7 +15,7 @@
 namespace clx {
 
 //------------------ Optimizer constructor
-Optimizer::Optimizer(ASTContext& context) : ctx(&context) {}
+Optimizer::Optimizer(const ASTContext& context, AnalysisState& analysis) : ctx(&context), state(analysis) {}
 
 //------------------ get_ast_string — convert AST node to string for analysis
 static std::string get_ast_string(const ASTContext& ctx, uint32_t node_idx) {
@@ -39,7 +39,7 @@ static std::string get_ast_string(const ASTContext& ctx, uint32_t node_idx) {
 }
 
 //------------------ function_returns_native — check if function always returns native number
-static bool function_returns_native(const ASTContext& ctx, uint32_t func_idx,
+static bool function_returns_native(const ASTContext& ctx, const AnalysisState& state, uint32_t func_idx,
                              std::string_view self_name,
                              const std::set<std::string_view>* known_numbers) {
     if (func_idx >= ctx.nodes.size()) return false;
@@ -47,9 +47,10 @@ static bool function_returns_native(const ASTContext& ctx, uint32_t func_idx,
     if (fn.type != NodeType::FunctionDef) return false;
 
     std::set<std::string_view> param_numbers;
-    if (!self_name.empty() && CodeEmitter::g_func_param_native.count(self_name)) {
+    if (!self_name.empty() && state.func_param_native.count(self_name)) {
+        const auto& pn = state.func_param_native.at(self_name);
         for (size_t p = 0; p < fn.as.func_def.param_count; ++p) {
-            if (p < CodeEmitter::g_func_param_native[self_name].size() && CodeEmitter::g_func_param_native[self_name][p]) {
+            if (p < pn.size() && pn[p]) {
                 uint32_t p_idx = ctx.block_statements[fn.as.func_def.first_param + p];
                 std::string_view pname(ctx.nodes[p_idx].as.ident.name, ctx.nodes[p_idx].as.ident.length);
                 param_numbers.insert(pname);
@@ -76,7 +77,7 @@ static bool function_returns_native(const ASTContext& ctx, uint32_t func_idx,
                     all_returns_native = false;
                 } else {
                     uint32_t vi = ctx.block_statements[stmt.as.return_stmt.first_value];
-                    if (!yields_number(ctx, vi, known_numbers, self_name, &param_numbers)) {
+                    if (!yields_number(ctx, state, vi, known_numbers, self_name, &param_numbers)) {
                         all_returns_native = false;
                     }
                 }
@@ -134,25 +135,25 @@ static bool is_literal_number(const ASTContext& ctx, uint32_t node_idx, double& 
 //------------------ Optimizer::run — main optimization entry point
 void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
 
-    CodeEmitter::g_native_numbers.clear();
-    CodeEmitter::g_string_pool.clear();
-    CodeEmitter::g_table_presize.clear();
-    CodeEmitter::g_global_constants.clear();
-    CodeEmitter::g_bce_safe_nodes.clear();
-    CodeEmitter::g_direct_callables.clear();
-    CodeEmitter::g_fast_callables.clear();
-    CodeEmitter::g_native_return_funcs.clear();
-    CodeEmitter::g_func_param_counts.clear();
-    CodeEmitter::g_func_param_native.clear();
+    state.native_numbers.clear();
+    state.string_pool.clear();
+    state.table_presize.clear();
+    state.global_constants.clear();
+    state.bce_safe_nodes.clear();
+    state.direct_callables.clear();
+    state.fast_callables.clear();
+    state.native_return_funcs.clear();
+    state.func_param_counts.clear();
+    state.func_param_native.clear();
 
     std::set<std::string_view> known_numbers;
     std::set<std::string_view> disqualified;
 
-    std::map<std::string, uint32_t> g_array_bounds;
-    std::map<std::string, uint32_t> g_loop_limits;
-    std::map<std::string, bool> g_loop_limit_conflicts;
+    std::map<std::string, uint32_t> array_bounds;
+    std::map<std::string, uint32_t> loop_limits;
+    std::map<std::string, bool> loop_limit_conflicts;
 
-    CodeEmitter::g_goto_targets.clear();
+    state.goto_targets.clear();
     auto resolve_labels = [&](auto& self, uint32_t n_idx, std::map<std::string_view, uint32_t> visible) -> void {
         if (n_idx == 0xFFFFFFFF || n_idx >= ctx.nodes.size()) return;
         const auto& n = ctx.nodes[n_idx];
@@ -175,7 +176,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                     uint32_t name_idx = stmt.as.goto_stmt.name_ident;
                     std::string_view lname(ctx.nodes[name_idx].as.ident.name, ctx.nodes[name_idx].as.ident.length);
                     if (visible.count(lname)) {
-                        CodeEmitter::g_goto_targets[stmt_idx] = visible[lname];
+                        state.goto_targets[stmt_idx] = visible[lname];
                     } else {
                         throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(stmt.line) + ": no visible label '" + std::string(lname) + "' for <goto>");
                     }
@@ -216,7 +217,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
     std::map<std::string_view, uint32_t> root_lbls;
     resolve_labels(resolve_labels, root_node, root_lbls);
 
-    CodeEmitter::g_reassigned_vars.clear();
+    state.reassigned_vars.clear();
     std::map<std::string_view, uint32_t> var_assign_counts;
     for (const auto& node : ctx.nodes) {
         if (node.type == NodeType::LocalDecl || node.type == NodeType::GlobalDeclStatement || node.type == NodeType::Assignment) {
@@ -234,7 +235,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
         }
     }
     for (const auto& pair : var_assign_counts) {
-        if (pair.second > 1) CodeEmitter::g_reassigned_vars.insert(pair.first);
+        if (pair.second > 1) state.reassigned_vars.insert(pair.first);
     }
 
     std::set<std::string_view> for_vars;
@@ -245,12 +246,12 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                 for_vars.insert(std::string_view(vn.as.ident.name, vn.as.ident.length));
         }
     }
-    CodeEmitter::g_constant_upvalues.clear();
+    state.constant_upvalues.clear();
     for (const auto& node : ctx.nodes) {
         if (node.type == NodeType::Identifier && node.as.ident.is_captured) {
             std::string_view name(node.as.ident.name, node.as.ident.length);
-            if (CodeEmitter::g_reassigned_vars.count(name) == 0 && for_vars.count(name) == 0)
-                CodeEmitter::g_constant_upvalues.insert(name);
+            if (state.reassigned_vars.count(name) == 0 && for_vars.count(name) == 0)
+                state.constant_upvalues.insert(name);
         }
     }
 
@@ -273,7 +274,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                     double out_d; int64_t out_i; bool is_int;
                     if (is_literal_number(ctx, val_idx, out_d, out_i, is_int)) {
                         std::string_view name(ctx.nodes[id_idx].as.ident.name, ctx.nodes[id_idx].as.ident.length);
-                        CodeEmitter::g_global_constants[name] = out_d;
+                        state.global_constants[name] = out_d;
                     }
                 }
             } else if (stmt.type == NodeType::Assignment) {
@@ -284,7 +285,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                         double out_d; int64_t out_i; bool is_int;
                         if (is_literal_number(ctx, val_idx, out_d, out_i, is_int)) {
                             std::string_view name(ctx.nodes[t_idx].as.ident.name, ctx.nodes[t_idx].as.ident.length);
-                            CodeEmitter::g_global_constants[name] = out_d;
+                            state.global_constants[name] = out_d;
                         }
                     }
                 }
@@ -325,17 +326,11 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                              }
                              auto push = [&](uint32_t child) { if (child != 0xFFFFFFFF && child < ctx.nodes.size()) stack.push_back(child); };
                               switch (n.type) {
-                                  //------------------ BinaryOp — traverse binary operation operands
                                   case NodeType::BinaryOp: push(n.as.bin_op.left); push(n.as.bin_op.right); break;
-                                  //------------------ UnaryOp — traverse unary operation expression
                                   case NodeType::UnaryOp: push(n.as.unary_op.expr); break;
-                                  //------------------ ParenExpression — traverse parenthesized expression
                                   case NodeType::ParenExpression: push(n.as.paren_expr.expr); break;
-                                  //------------------ CallExpression — traverse call target and arguments
                                   case NodeType::CallExpression: { for (uint32_t i = 0; i < n.as.call_expr.arg_count; ++i) push(ctx.block_statements[n.as.call_expr.first_arg + i]); push(n.as.call_expr.target); break; }
-                                  //------------------ TableAccess — traverse table and key expressions
                                   case NodeType::TableAccess: push(n.as.table_access.table); push(n.as.table_access.key); break;
-                                  //------------------ IntrinsicCall — traverse intrinsic call arguments
                                   case NodeType::IntrinsicCall: { for (uint32_t i = 0; i < n.as.intrinsic_call.arg_count; ++i) push(ctx.block_statements[n.as.intrinsic_call.first_arg + i]); break; }
                                  default: break;
                              }
@@ -348,11 +343,11 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                      }
                      for (auto& pair : pending_tables) {
                          uint32_t table_node = pair.second;
-                         if (CodeEmitter::g_table_presize.find(table_node) == CodeEmitter::g_table_presize.end()) {
+                         if (state.table_presize.find(table_node) == state.table_presize.end()) {
                              if (!has_forward_ref(stmt.as.for_stmt.limit_expr, _pending_names)) {
-                                 CodeEmitter::g_table_presize[table_node] = stmt.as.for_stmt.limit_expr;
+                                 state.table_presize[table_node] = stmt.as.for_stmt.limit_expr;
                                  std::string t_str = get_ast_string(ctx, pair.first);
-                                 if (!t_str.empty()) g_array_bounds[t_str] = stmt.as.for_stmt.limit_expr;
+                                 if (!t_str.empty()) array_bounds[t_str] = stmt.as.for_stmt.limit_expr;
                              }
                          }
                      }
@@ -367,12 +362,12 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
 
             std::string vname = get_ast_string(ctx, node.as.for_stmt.var_ident);
             if (!vname.empty()) {
-                if (g_loop_limits.count(vname) && g_loop_limits[vname] != node.as.for_stmt.limit_expr) {
-                    std::string l1 = get_ast_string(ctx, g_loop_limits[vname]);
+                if (loop_limits.count(vname) && loop_limits[vname] != node.as.for_stmt.limit_expr) {
+                    std::string l1 = get_ast_string(ctx, loop_limits[vname]);
                     std::string l2 = get_ast_string(ctx, node.as.for_stmt.limit_expr);
-                    if (l1 != l2) g_loop_limit_conflicts[vname] = true;
+                    if (l1 != l2) loop_limit_conflicts[vname] = true;
                 }
-                g_loop_limits[vname] = node.as.for_stmt.limit_expr;
+                loop_limits[vname] = node.as.for_stmt.limit_expr;
             }
         }
     }
@@ -390,9 +385,9 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                 uint32_t v_idx = ctx.block_statements[f_value];
                 if (ctx.nodes[t_idx].type == NodeType::Identifier && ctx.nodes[v_idx].type == NodeType::FunctionDef) {
                     std::string_view fname(ctx.nodes[t_idx].as.ident.name, ctx.nodes[t_idx].as.ident.length);
-                    if (CodeEmitter::g_reassigned_vars.count(fname) == 0) {
-                        CodeEmitter::g_func_param_counts[fname] = ctx.nodes[v_idx].as.func_def.param_count;
-                        CodeEmitter::g_func_param_native[fname] = std::vector<bool>(ctx.nodes[v_idx].as.func_def.param_count, true);
+                    if (state.reassigned_vars.count(fname) == 0) {
+                        state.func_param_counts[fname] = ctx.nodes[v_idx].as.func_def.param_count;
+                        state.func_param_native[fname] = std::vector<bool>(ctx.nodes[v_idx].as.func_def.param_count, true);
                         func_defs.push_back({fname, v_idx});
                     }
                 }
@@ -403,9 +398,9 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                 uint32_t v_idx = ctx.block_statements[node.as.assign.first_value];
                 if (ctx.nodes[t_idx].type == NodeType::Identifier && ctx.nodes[v_idx].type == NodeType::FunctionDef) {
                     std::string_view fname(ctx.nodes[t_idx].as.ident.name, ctx.nodes[t_idx].as.ident.length);
-                    if (CodeEmitter::g_reassigned_vars.count(fname) == 0) {
-                        CodeEmitter::g_func_param_counts[fname] = ctx.nodes[v_idx].as.func_def.param_count;
-                        CodeEmitter::g_func_param_native[fname] = std::vector<bool>(ctx.nodes[v_idx].as.func_def.param_count, true);
+                    if (state.reassigned_vars.count(fname) == 0) {
+                        state.func_param_counts[fname] = ctx.nodes[v_idx].as.func_def.param_count;
+                        state.func_param_native[fname] = std::vector<bool>(ctx.nodes[v_idx].as.func_def.param_count, true);
                         func_defs.push_back({fname, v_idx});
                     }
                 }
@@ -509,9 +504,9 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
     }
 
     for (auto fname : escaped_funcs) {
-        if (CodeEmitter::g_func_param_native.count(fname)) {
-            for (size_t p = 0; p < CodeEmitter::g_func_param_native[fname].size(); ++p) {
-                CodeEmitter::g_func_param_native[fname][p] = false;
+        if (state.func_param_native.count(fname)) {
+            for (size_t p = 0; p < state.func_param_native[fname].size(); ++p) {
+                state.func_param_native[fname][p] = false;
             }
         }
     }
@@ -555,7 +550,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                     } else if (ctx.nodes[id_idx].as.ident.is_captured || ctx.nodes[id_idx].as.ident.is_global) {
                         disqualified.insert(name);
                         if (known_numbers.erase(name)) changed = true;
-                    } else if (yields_number(ctx, val_idx, &known_numbers)) {
+                    } else if (yields_number(ctx, state, val_idx, &known_numbers)) {
                         if (known_numbers.insert(name).second) changed = true;
                     } else {
                         disqualified.insert(name);
@@ -575,7 +570,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                         } else if (t_node.as.ident.is_global) {
                             disqualified.insert(name);
                             if (known_numbers.erase(name)) changed = true;
-                        } else if (yields_number(ctx, val_idx, &known_numbers)) {
+                        } else if (yields_number(ctx, state, val_idx, &known_numbers)) {
                             if (!disqualified.count(name) && known_numbers.insert(name).second) changed = true;
                         } else {
                             disqualified.insert(name);
@@ -598,7 +593,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
         }
     } while (changed);
 
-    for (auto& [fname, is_native_vec] : CodeEmitter::g_func_param_native) {
+    for (auto& [fname, is_native_vec] : state.func_param_native) {
         for (const auto& fdef : func_defs) {
             if (fdef.first == fname) {
                 uint32_t f_idx = fdef.second;
@@ -616,7 +611,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
         }
     }
 
-    for (auto& [fname, is_native_vec] : CodeEmitter::g_func_param_native) {
+    for (auto& [fname, is_native_vec] : state.func_param_native) {
         for (const auto& fdef : func_defs) {
             if (fdef.first != fname) continue;
             const auto& fn = ctx.nodes[fdef.second];
@@ -662,16 +657,16 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                 uint32_t tgt = node.as.call_expr.target;
                 if (ctx.nodes[tgt].type == NodeType::Identifier && !ctx.nodes[tgt].as.ident.is_global) {
                     std::string_view fname(ctx.nodes[tgt].as.ident.name, ctx.nodes[tgt].as.ident.length);
-                    if (CodeEmitter::g_func_param_native.count(fname)) {
+                    if (state.func_param_native.count(fname)) {
                         std::string_view current_func = call_to_func.count(n_idx) ? call_to_func[n_idx] : "";
                         std::set<std::string_view> current_params;
-                        if (!current_func.empty() && CodeEmitter::g_func_param_native.count(current_func)) {
+                        if (!current_func.empty() && state.func_param_native.count(current_func)) {
                             uint32_t c_fdef_idx = 0xFFFFFFFF;
                             for (auto fd : func_defs) if (fd.first == current_func) c_fdef_idx = fd.second;
                             if (c_fdef_idx != 0xFFFFFFFF) {
                                 const auto& fn = ctx.nodes[c_fdef_idx];
                                 for (size_t p = 0; p < fn.as.func_def.param_count; ++p) {
-                                    if (CodeEmitter::g_func_param_native[current_func][p]) {
+                                    if (state.func_param_native[current_func][p]) {
                                         uint32_t p_idx = ctx.block_statements[fn.as.func_def.first_param + p];
                                         current_params.insert(std::string_view(ctx.nodes[p_idx].as.ident.name, ctx.nodes[p_idx].as.ident.length));
                                     }
@@ -679,16 +674,16 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                             }
                         }
 
-                        for (size_t p = 0; p < CodeEmitter::g_func_param_counts[fname]; ++p) {
-                            if (CodeEmitter::g_func_param_native[fname][p]) {
+                        for (size_t p = 0; p < state.func_param_counts[fname]; ++p) {
+                            if (state.func_param_native[fname][p]) {
                                 if (p < node.as.call_expr.arg_count) {
                                     uint32_t arg_idx = ctx.block_statements[node.as.call_expr.first_arg + p];
-                                    if (!yields_number(ctx, arg_idx, &known_numbers, current_func, &current_params)) {
-                                        CodeEmitter::g_func_param_native[fname][p] = false;
+                                    if (!yields_number(ctx, state, arg_idx, &known_numbers, current_func, &current_params)) {
+                                        state.func_param_native[fname][p] = false;
                                         params_changed = true;
                                     }
                                 } else {
-                                    CodeEmitter::g_func_param_native[fname][p] = false;
+                                    state.func_param_native[fname][p] = false;
                                     params_changed = true;
                                 }
                             }
@@ -700,13 +695,13 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
     } while (params_changed);
 
     for (const auto& fdef : func_defs) {
-        if (function_returns_native(ctx, fdef.second, fdef.first, &known_numbers)) {
-            CodeEmitter::g_native_return_funcs.insert(fdef.first);
+        if (function_returns_native(ctx, state, fdef.second, fdef.first, &known_numbers)) {
+            state.native_return_funcs.insert(fdef.first);
         }
-        if (CodeEmitter::g_func_param_native.count(fdef.first)) {
+        if (state.func_param_native.count(fdef.first)) {
             const auto& fn = ctx.nodes[fdef.second].as.func_def;
             for (size_t p = 0; p < fn.param_count; ++p) {
-                if (CodeEmitter::g_func_param_native[fdef.first][p]) {
+                if (state.func_param_native[fdef.first][p]) {
                     uint32_t p_idx = ctx.block_statements[fn.first_param + p];
                     std::string_view pname(ctx.nodes[p_idx].as.ident.name, ctx.nodes[p_idx].as.ident.length);
                     if (!ctx.nodes[p_idx].as.ident.is_captured) {
@@ -729,22 +724,22 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
             }
             std::string k_str = get_ast_string(ctx, base_k_idx);
 
-            if (!t_str.empty() && !k_str.empty() && g_array_bounds.count(t_str) && g_loop_limits.count(k_str) && !g_loop_limit_conflicts[k_str]) {
-                uint32_t bound_expr = g_array_bounds[t_str];
-                uint32_t loop_expr = g_loop_limits[k_str];
+            if (!t_str.empty() && !k_str.empty() && array_bounds.count(t_str) && loop_limits.count(k_str) && !loop_limit_conflicts[k_str]) {
+                uint32_t bound_expr = array_bounds[t_str];
+                uint32_t loop_expr = loop_limits[k_str];
 
                 if (bound_expr == loop_expr) {
-                    CodeEmitter::g_bce_safe_nodes.insert(i);
+                    state.bce_safe_nodes.insert(i);
                 } else {
                     std::string b_str = get_ast_string(ctx, bound_expr);
                     std::string l_str = get_ast_string(ctx, loop_expr);
                     if (!b_str.empty() && !l_str.empty()) {
-                        if (b_str == l_str) CodeEmitter::g_bce_safe_nodes.insert(i);
-                        else if (l_str.find(b_str + " -") == 0) CodeEmitter::g_bce_safe_nodes.insert(i);
+                        if (b_str == l_str) state.bce_safe_nodes.insert(i);
+                        else if (l_str.find(b_str + " -") == 0) state.bce_safe_nodes.insert(i);
                     } else {
                         double bd=0, ld=0; int64_t bi=0, li=0; bool bint, lint;
                         if (is_literal_number(ctx, bound_expr, bd, bi, bint) && is_literal_number(ctx, loop_expr, ld, li, lint)) {
-                            if (bd >= ld) CodeEmitter::g_bce_safe_nodes.insert(i);
+                            if (bd >= ld) state.bce_safe_nodes.insert(i);
                         }
                     }
                 }
@@ -755,15 +750,15 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
     for (const auto& node : ctx.nodes) {
         if (node.type == NodeType::String) {
             std::string_view s(node.as.string.text, node.as.string.length);
-            if (std::find(CodeEmitter::g_string_pool.begin(), CodeEmitter::g_string_pool.end(), s) == CodeEmitter::g_string_pool.end()) CodeEmitter::g_string_pool.push_back(s);
+            if (std::find(state.string_pool.begin(), state.string_pool.end(), s) == state.string_pool.end()) state.string_pool.push_back(s);
         }
         if (node.type == NodeType::Identifier) {
             std::string_view s(node.as.ident.name, node.as.ident.length);
-            if (std::find(CodeEmitter::g_string_pool.begin(), CodeEmitter::g_string_pool.end(), s) == CodeEmitter::g_string_pool.end()) CodeEmitter::g_string_pool.push_back(s);
+            if (std::find(state.string_pool.begin(), state.string_pool.end(), s) == state.string_pool.end()) state.string_pool.push_back(s);
         }
     }
 
-    CodeEmitter::g_pure_numeric_arrays.clear();
+    state.pure_numeric_arrays.clear();
     std::set<std::string_view> pure_candidates;
     std::set<std::string_view> disqualified_arrays;
 
@@ -786,7 +781,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                             if (ek < ctx.nodes.size() && ctx.nodes[ek].type == NodeType::String) {
                                 has_string_key = true;
                             }
-                            if (ev >= ctx.nodes.size() || !yields_number(ctx, ev, &known_numbers)) {
+                            if (ev >= ctx.nodes.size() || !yields_number(ctx, state, ev, &known_numbers)) {
                                 all_numeric = false;
                             }
                         }
@@ -802,7 +797,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
             }
             for (uint32_t i = 0; i < n.as.local_decl.value_count; ++i) {
                 uint32_t v = ctx.block_statements[n.as.local_decl.first_value + i];
-                if (v < ctx.nodes.size() && ctx.nodes[v].type == NodeType::Identifier && !yields_number(ctx, v, &known_numbers)) {
+                if (v < ctx.nodes.size() && ctx.nodes[v].type == NodeType::Identifier && !yields_number(ctx, state, v, &known_numbers)) {
                     std::string_view name(ctx.nodes[v].as.ident.name, ctx.nodes[v].as.ident.length);
                     disqualified_arrays.insert(name);
                 }
@@ -810,7 +805,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
         } else if (n.type == NodeType::Assignment) {
             for (uint32_t i = 0; i < n.as.assign.value_count; ++i) {
                 uint32_t v = ctx.block_statements[n.as.assign.first_value + i];
-                if (v < ctx.nodes.size() && ctx.nodes[v].type == NodeType::Identifier && !yields_number(ctx, v, &known_numbers)) {
+                if (v < ctx.nodes.size() && ctx.nodes[v].type == NodeType::Identifier && !yields_number(ctx, state, v, &known_numbers)) {
                     std::string_view name(ctx.nodes[v].as.ident.name, ctx.nodes[v].as.ident.length);
                     disqualified_arrays.insert(name);
                 }
@@ -823,7 +818,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                         std::string_view tname(ctx.nodes[tb_idx].as.ident.name, ctx.nodes[tb_idx].as.ident.length);
 
                         uint32_t k_idx = ctx.nodes[t_idx].as.table_access.key;
-                        bool key_ok = yields_number(ctx, k_idx, &known_numbers);
+                        bool key_ok = yields_number(ctx, state, k_idx, &known_numbers);
 
                         if (!key_ok) {
 
@@ -875,7 +870,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                             }
                         } else {
                             uint32_t v_idx = ctx.block_statements[n.as.assign.first_value];
-                        if (!yields_number(ctx, v_idx, &known_numbers) && ctx.nodes[v_idx].type != NodeType::TrueLiteral &&
+                        if (!yields_number(ctx, state, v_idx, &known_numbers) && ctx.nodes[v_idx].type != NodeType::TrueLiteral &&
                             ctx.nodes[v_idx].type != NodeType::FalseLiteral && ctx.nodes[v_idx].type != NodeType::TableAccess) {
                             disqualified_arrays.insert(tname);
                             }
@@ -938,11 +933,11 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
 
     for (auto name : pure_candidates) {
         if (disqualified_arrays.find(name) == disqualified_arrays.end()) {
-            CodeEmitter::g_pure_numeric_arrays.insert(name);
+            state.pure_numeric_arrays.insert(name);
         }
     }
 
-    CodeEmitter::g_numeric_table_fields.clear();
+    state.numeric_table_fields.clear();
     for (const auto& node : ctx.nodes) {
         if (node.type != NodeType::LocalDecl) continue;
         if (node.as.local_decl.ident_count != 1 || node.as.local_decl.value_count != 1) continue;
@@ -969,7 +964,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                 if (fk >= ctx.nodes.size() || ctx.nodes[fk].type != NodeType::String) continue;
                 std::string_view fname(ctx.nodes[fk].as.string.text, ctx.nodes[fk].as.string.length);
                 entry_fields.insert(fname);
-                bool is_num = yields_number(ctx, fv, nullptr);
+                bool is_num = yields_number(ctx, state, fv, nullptr);
                 if (!is_num && ctx.nodes[fv].type == NodeType::Identifier) {
 
                     std::string_view vname(ctx.nodes[fv].as.ident.name, ctx.nodes[fv].as.ident.length);
@@ -981,7 +976,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                             if (std::string_view(ctx.nodes[idi].as.ident.name, ctx.nodes[idi].as.ident.length) != vname) continue;
                             uint32_t vi = (ii < nd.as.local_decl.value_count)
                                 ? ctx.block_statements[nd.as.local_decl.first_value + ii] : 0xFFFFFFFF;
-                            if (vi != 0xFFFFFFFF && yields_number(ctx, vi, &known_numbers)) { is_num = true; break; }
+                            if (vi != 0xFFFFFFFF && yields_number(ctx, state, vi, &known_numbers)) { is_num = true; break; }
                         }
                         if (is_num) break;
                     }
@@ -1005,11 +1000,11 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                 if (it != field_numeric.end() && it->second) numeric_fields.insert(it->first);
             }
             if (!numeric_fields.empty()) {
-                CodeEmitter::g_numeric_table_fields[nm] = numeric_fields;
+                state.numeric_table_fields[nm] = numeric_fields;
 
                 for (auto& fld : numeric_fields) {
-                    if (std::find(CodeEmitter::g_string_pool.begin(), CodeEmitter::g_string_pool.end(), fld) == CodeEmitter::g_string_pool.end())
-                        CodeEmitter::g_string_pool.push_back(fld);
+                    if (std::find(state.string_pool.begin(), state.string_pool.end(), fld) == state.string_pool.end())
+                        state.string_pool.push_back(fld);
                 }
             }
         }
@@ -1024,7 +1019,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
         if (ctx.nodes[id_idx].type != NodeType::Identifier) continue;
         std::string_view nm(ctx.nodes[id_idx].as.ident.name, ctx.nodes[id_idx].as.ident.length);
         if (ctx.nodes[val_idx].type != NodeType::TableConstructor) continue;
-        if (CodeEmitter::g_numeric_table_fields.count(nm)) continue;
+        if (state.numeric_table_fields.count(nm)) continue;
         const auto& tc = ctx.nodes[val_idx].as.table_cons;
         if (tc.count == 0) continue;
 
@@ -1036,18 +1031,18 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
             if (fk >= ctx.nodes.size() || fv >= ctx.nodes.size()) { valid = false; break; }
             if (ctx.nodes[fk].type == NodeType::String) {
                 std::string_view fname(ctx.nodes[fk].as.string.text, ctx.nodes[fk].as.string.length);
-                if (yields_number(ctx, fv, &known_numbers))
+                if (yields_number(ctx, state, fv, &known_numbers))
                     numeric_fields.insert(fname);
-            } else if (!yields_number(ctx, fv, &known_numbers)) {
+            } else if (!yields_number(ctx, state, fv, &known_numbers)) {
                 valid = false;
             }
         }
 
         if (valid && !numeric_fields.empty()) {
-            CodeEmitter::g_numeric_table_fields[nm] = numeric_fields;
+            state.numeric_table_fields[nm] = numeric_fields;
             for (auto& fld : numeric_fields) {
-                if (std::find(CodeEmitter::g_string_pool.begin(), CodeEmitter::g_string_pool.end(), fld) == CodeEmitter::g_string_pool.end())
-                    CodeEmitter::g_string_pool.push_back(fld);
+                if (std::find(state.string_pool.begin(), state.string_pool.end(), fld) == state.string_pool.end())
+                    state.string_pool.push_back(fld);
             }
         }
     }
@@ -1074,7 +1069,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
             if (tbl >= ctx.nodes.size() || ctx.nodes[tbl].type != NodeType::Identifier) continue;
             std::string_view pname(ctx.nodes[tbl].as.ident.name, ctx.nodes[tbl].as.ident.length);
             if (!func_params.count(pname)) continue;
-            if (CodeEmitter::g_numeric_table_fields.count(pname)) continue;
+            if (state.numeric_table_fields.count(pname)) continue;
             std::string_view lname(ctx.nodes[id_idx].as.ident.name, ctx.nodes[id_idx].as.ident.length);
             local_to_param[lname] = pname;
         }
@@ -1106,19 +1101,19 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
             check_side(bn.as.bin_op.right);
         }
         for (auto& [pn, fields] : param_arith_fields) {
-            if (!fields.empty() && !CodeEmitter::g_numeric_table_fields.count(pn)) {
-                CodeEmitter::g_numeric_table_fields[pn] = fields;
+            if (!fields.empty() && !state.numeric_table_fields.count(pn)) {
+                state.numeric_table_fields[pn] = fields;
                 for (auto& fld : fields) {
-                    if (std::find(CodeEmitter::g_string_pool.begin(), CodeEmitter::g_string_pool.end(), fld) == CodeEmitter::g_string_pool.end())
-                        CodeEmitter::g_string_pool.push_back(fld);
+                    if (std::find(state.string_pool.begin(), state.string_pool.end(), fld) == state.string_pool.end())
+                        state.string_pool.push_back(fld);
                 }
             }
         }
         for (auto& [ln, pn] : local_to_param) {
             auto it = param_arith_fields.find(pn);
             if (it != param_arith_fields.end() && !it->second.empty()) {
-                if (!CodeEmitter::g_numeric_table_fields.count(ln)) {
-                    CodeEmitter::g_numeric_table_fields[ln] = it->second;
+                if (!state.numeric_table_fields.count(ln)) {
+                    state.numeric_table_fields[ln] = it->second;
                 }
             }
         }
@@ -1144,7 +1139,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                         uint32_t vi = (ii < vc) ? ctx.block_statements[fv + ii] : 0xFFFFFFFF;
                         if (disqualified.count(nm)) { if (known_numbers.erase(nm)) changed2 = true; }
                         else if (ctx.nodes[idi].as.ident.is_captured || ctx.nodes[idi].as.ident.is_global) { disqualified.insert(nm); if (known_numbers.erase(nm)) changed2 = true; }
-                        else if (yields_number(ctx, vi, &known_numbers)) { if (known_numbers.insert(nm).second) changed2 = true; }
+                        else if (yields_number(ctx, state, vi, &known_numbers)) { if (known_numbers.insert(nm).second) changed2 = true; }
                         else { disqualified.insert(nm); if (known_numbers.erase(nm)) changed2 = true; }
                     }
                 } else if (node.type == NodeType::Assignment) {
@@ -1156,7 +1151,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                             uint32_t vi = (ii < node.as.assign.value_count) ? ctx.block_statements[node.as.assign.first_value + ii] : 0xFFFFFFFF;
                             if (disqualified.count(nm)) { if (known_numbers.erase(nm)) changed2 = true; }
                             else if (tn.as.ident.is_global) { disqualified.insert(nm); if (known_numbers.erase(nm)) changed2 = true; }
-                            else if (yields_number(ctx, vi, &known_numbers)) { if (!disqualified.count(nm) && known_numbers.insert(nm).second) changed2 = true; }
+                            else if (yields_number(ctx, state, vi, &known_numbers)) { if (!disqualified.count(nm) && known_numbers.insert(nm).second) changed2 = true; }
                             else { disqualified.insert(nm); if (known_numbers.erase(nm)) changed2 = true; }
                         }
                     }
@@ -1174,37 +1169,18 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
         } while (changed2);
     }
 
-    CodeEmitter::g_param_numbers.clear();
-    auto is_int_expr = [&](uint32_t nid) -> bool {
-        if (nid == 0xFFFFFFFF || nid >= ctx.nodes.size()) return false;
-        const auto& v = ctx.nodes[nid];
-        if (v.type == NodeType::Integer) return true;
-        if (v.type == NodeType::Number) {
-            double d = v.as.number.val;
-            return d == static_cast<double>(static_cast<int64_t>(d)) && d >= -9.0e15 && d <= 9.0e15;
-        }
-        if (v.type == NodeType::Identifier) {
-            std::string_view nm(v.as.ident.name, v.as.ident.length);
-            return CodeEmitter::g_native_integers.count(std::string(nm)) > 0;
-        }
-        return false;
-    };
+    state.param_numbers.clear();
     for (const auto& node : ctx.nodes) {
         if (node.type == NodeType::LocalDecl) {
             for (uint32_t ii = 0; ii < node.as.local_decl.ident_count; ++ii) {
                 uint32_t idi = ctx.block_statements[node.as.local_decl.first_ident + ii];
                 if (idi >= ctx.nodes.size() || ctx.nodes[idi].type != NodeType::Identifier) continue;
                 std::string nm(ctx.nodes[idi].as.ident.name, ctx.nodes[idi].as.ident.length);
-                if (known_numbers.count(nm) && !CodeEmitter::g_native_integers.count(nm)) {
-                    uint32_t vi = (ii < node.as.local_decl.value_count) 
+                if (known_numbers.count(nm) && !state.native_integers.count(nm)) {
+                    uint32_t vi = (ii < node.as.local_decl.value_count)
                         ? ctx.block_statements[node.as.local_decl.first_value + ii] : 0xFFFFFFFF;
-                    bool is_int = is_int_expr(vi);
-                    if (!is_int && vi < ctx.nodes.size() && ctx.nodes[vi].type == NodeType::BinaryOp) {
-                        int bop = ctx.nodes[vi].as.bin_op.op;
-                        if (bop >= static_cast<int>(BinaryOp::Add) && bop <= static_cast<int>(BinaryOp::Mul))
-                            is_int = is_int_expr(ctx.nodes[vi].as.bin_op.left) && is_int_expr(ctx.nodes[vi].as.bin_op.right);
-                    }
-                    if (is_int) CodeEmitter::g_native_integers.insert(std::string(nm));
+                    if (is_purely_integer_expr(ctx, state, vi))
+                        state.native_integers.insert(std::string(nm));
                 }
             }
         } else if (node.type == NodeType::Assignment) {
@@ -1212,16 +1188,11 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                 uint32_t ti = ctx.block_statements[node.as.assign.first_target + ii];
                 if (ti >= ctx.nodes.size() || ctx.nodes[ti].type != NodeType::Identifier) continue;
                 std::string_view nm(ctx.nodes[ti].as.ident.name, ctx.nodes[ti].as.ident.length);
-                if (known_numbers.count(nm) && !CodeEmitter::g_native_integers.count(std::string(nm))) {
-                    uint32_t vi = (ii < node.as.assign.value_count) 
+                if (known_numbers.count(nm) && !state.native_integers.count(std::string(nm))) {
+                    uint32_t vi = (ii < node.as.assign.value_count)
                         ? ctx.block_statements[node.as.assign.first_value + ii] : 0xFFFFFFFF;
-                    bool is_int = is_int_expr(vi);
-                    if (!is_int && vi < ctx.nodes.size() && ctx.nodes[vi].type == NodeType::BinaryOp) {
-                        int bop = ctx.nodes[vi].as.bin_op.op;
-                        if (bop >= static_cast<int>(BinaryOp::Add) && bop <= static_cast<int>(BinaryOp::Mul))
-                            is_int = is_int_expr(ctx.nodes[vi].as.bin_op.left) && is_int_expr(ctx.nodes[vi].as.bin_op.right);
-                    }
-                    if (is_int) CodeEmitter::g_native_integers.insert(std::string(nm));
+                    if (is_purely_integer_expr(ctx, state, vi))
+                        state.native_integers.insert(std::string(nm));
                 }
             }
         }
@@ -1241,7 +1212,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
         }
     }
     int _np_debug_node_count = 0;
-    CodeEmitter::g_param_numbers.clear();
+    state.param_numbers.clear();
     std::map<std::string_view, std::map<uint32_t, uint32_t>> func_to_param_indices;
     for (uint32_t ni = 0; ni < ctx.nodes.size(); ++ni) {
         const auto& nd = ctx.nodes[ni];
@@ -1280,7 +1251,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                 if (nid == 0xFFFFFFFF || nid >= ctx.nodes.size()) continue;
                 const auto& nn = ctx.nodes[nid];
 
-                // Recurse into child nodes
                 if (nn.type == NodeType::Block) {
                     for (uint32_t bi = 0; bi < nn.as.block.count; ++bi)
                         stack.push_back(ctx.block_statements[nn.as.block.first_statement + bi]);
@@ -1328,8 +1298,8 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                                 std::string_view nm(ctx.nodes[idx].as.ident.name, ctx.nodes[idx].as.ident.length);
                                 for (auto& fp : fparams) {
                                     if (fp == nm) {
-                                        if (!CodeEmitter::g_param_numbers[ni].count(std::string(nm))) {
-                                            CodeEmitter::g_param_numbers[ni].insert(std::string(nm));
+                                        if (!state.param_numbers[ni].count(std::string(nm))) {
+                                            state.param_numbers[ni].insert(std::string(nm));
                                             np_changed = true;
                                         }
                                     }
@@ -1353,10 +1323,10 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                                     if (arg_nid < ctx.nodes.size() && ctx.nodes[arg_nid].type == NodeType::Identifier) {
                                         std::string_view arg_nm(ctx.nodes[arg_nid].as.ident.name, ctx.nodes[arg_nid].as.ident.length);
                                         std::string callee_pn(cparams[ai]);
-                                        if (CodeEmitter::g_param_numbers[ci].count(callee_pn) && !CodeEmitter::g_param_numbers[ni].count(std::string(arg_nm))) {
+                                        if (state.param_numbers[ci].count(callee_pn) && !state.param_numbers[ni].count(std::string(arg_nm))) {
                                             for (auto& fp : fparams) {
                                                 if (fp == arg_nm) {
-                                                    CodeEmitter::g_param_numbers[ni].insert(std::string(arg_nm));
+                                                    state.param_numbers[ni].insert(std::string(arg_nm));
                                                     np_changed = true;
                                                 }
                                             }
@@ -1390,10 +1360,10 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
             }
         }
     }
-    CodeEmitter::g_native_numbers.clear();
+    state.native_numbers.clear();
     for (auto name : known_numbers) {
         if (disqualified.find(name) == disqualified.end() && param_names.find(name) == param_names.end()) {
-            CodeEmitter::g_native_numbers.push_back(name);
+            state.native_numbers.push_back(name);
         }
     }
 }
