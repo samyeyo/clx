@@ -522,8 +522,14 @@ void CodeEmitter::emit_native(uint32_t n_idx) {
                             if (it->second.count(fn)) {
                                 size_t idx = std::distance(state.string_pool.begin(),
                                     std::find(state.string_pool.begin(), state.string_pool.end(), fn));
-                                out << "clx::table_get(L, "; emit_node(n.as.table_access.table);
-                                out << ", cstr_[" << idx << "]).as_number()";
+                                int _cs_i = (state.cs_index < cs_max) ? state.cs_index++ : -1;
+                                if (_cs_i >= 0) {
+                                    out << "clx::table_get_cs(L, "; emit_node(n.as.table_access.table);
+                                    out << ", cstr_[" << idx << "], &__cs[" << _cs_i << "]).as_number()";
+                                } else {
+                                    out << "clx::table_get(L, "; emit_node(n.as.table_access.table);
+                                    out << ", cstr_[" << idx << "]).as_number()";
+                                }
                                 return;
                             }
                         }
@@ -2572,8 +2578,17 @@ void CodeEmitter::emitForStatement(const ASTNode& node, uint32_t node_idx) {
                 }
             }
 
-            bool counter_is_int = native_for && !is_cap &&
-                ctx.nodes[node.as.for_stmt.start_expr].type == NodeType::Integer &&
+            bool start_is_int_literal = ctx.nodes[node.as.for_stmt.start_expr].type == NodeType::Integer;
+            if (!start_is_int_literal && ctx.nodes[node.as.for_stmt.start_expr].type == NodeType::BinaryOp) {
+                auto& bin = ctx.nodes[node.as.for_stmt.start_expr].as.bin_op;
+                if (bin.op == static_cast<int>(BinaryOp::Add) || bin.op == static_cast<int>(BinaryOp::Sub)) {
+                    start_is_int_literal = (ctx.nodes[bin.left].type == NodeType::Integer &&
+                                            yields_number(ctx, state, bin.right, nullptr, state.current_fast_func)) ||
+                                           (ctx.nodes[bin.right].type == NodeType::Integer &&
+                                            yields_number(ctx, state, bin.left, nullptr, state.current_fast_func));
+                }
+            }
+            bool counter_is_int = native_for && !is_cap && start_is_int_literal &&
                 (step_is_default || (ctx.nodes[node.as.for_stmt.step_expr].type == NodeType::Integer && step_int_val == 1));
 
             out << "{\n";
@@ -2581,7 +2596,17 @@ void CodeEmitter::emitForStatement(const ASTNode& node, uint32_t node_idx) {
 
             if (native_for) {
                 if (counter_is_int) {
-                    out << "int64_t s_" << node_idx << " = "; emit_native( node.as.for_stmt.start_expr); out << ";\n";
+                    auto& start_node = ctx.nodes[node.as.for_stmt.start_expr];
+                    if (start_node.type == NodeType::BinaryOp) {
+                        auto& bin = start_node.as.bin_op;
+                        out << "int64_t s_" << node_idx << " = static_cast<int64_t>(";
+                        emit_native(bin.left);
+                        out << ") " << (bin.op == static_cast<int>(BinaryOp::Add) ? "+" : "-") << " static_cast<int64_t>(";
+                        emit_native(bin.right);
+                        out << ");\n";
+                    } else {
+                        out << "int64_t s_" << node_idx << " = "; emit_native( node.as.for_stmt.start_expr); out << ";\n";
+                    }
                     out << "int64_t l_" << node_idx << " = "; emit_native( node.as.for_stmt.limit_expr); out << ";\n";
                     if (node.as.for_stmt.step_expr != 0xFFFFFFFF) {
                         out << "int64_t st_" << node_idx << " = "; emit_native( node.as.for_stmt.step_expr); out << ";\n";
@@ -2778,13 +2803,24 @@ void CodeEmitter::emitForStatement(const ASTNode& node, uint32_t node_idx) {
             };
 
             if (counter_is_int) {
-                int64_t start_int = ctx.nodes[node.as.for_stmt.start_expr].as.integer.val;
+                auto& start_node = ctx.nodes[node.as.for_stmt.start_expr];
+                bool start_needs_runtime = (start_node.type == NodeType::BinaryOp);
                 if (step_known_positive) {
-                    out << "for (int64_t i_val = " << start_int << "; i_val <= l_" << node_idx << "; i_val++) {\n";
+                    if (start_needs_runtime) {
+                        out << "for (int64_t i_val = s_" << node_idx << "; i_val <= l_" << node_idx << "; i_val++) {\n";
+                    } else {
+                        int64_t start_int = start_node.as.integer.val;
+                        out << "for (int64_t i_val = " << start_int << "; i_val <= l_" << node_idx << "; i_val++) {\n";
+                    }
                     emit_for_body();
                     out << "}\n";
                 } else {
-                    out << "for (int64_t i_val = " << start_int << "; i_val >= l_" << node_idx << "; i_val--) {\n";
+                    if (start_needs_runtime) {
+                        out << "for (int64_t i_val = s_" << node_idx << "; i_val >= l_" << node_idx << "; i_val--) {\n";
+                    } else {
+                        int64_t start_int = start_node.as.integer.val;
+                        out << "for (int64_t i_val = " << start_int << "; i_val >= l_" << node_idx << "; i_val--) {\n";
+                    }
                     emit_for_body();
                     out << "}\n";
                 }
