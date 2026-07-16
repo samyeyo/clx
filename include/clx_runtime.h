@@ -489,6 +489,7 @@ struct LTable : public LHeader {
     uint32_t   array_version;
 
     LTable*    metatable;
+    bool       is_arena;   // true if allocated in a FuncArena — falls back to heap on growth
 
     LTable();
     ~LTable();
@@ -1025,6 +1026,74 @@ struct ScopeGuard {
     CLX_INLINE_HOT ScopeGuard(LState* state) : L(state), prev_top(state->shadow_top) {}
     CLX_INLINE_HOT ~ScopeGuard() { L->shadow_top = prev_top; }
 };
+
+//------------------ Per-function bump-pointer arena
+// CLX_ARENA_DEFAULT_FIELDS: minimum number of fields preallocated for arena tables.
+// Increase for table-heavy workloads to avoid growth fallback. Set to 0 to disable.
+#ifndef CLX_ARENA_DEFAULT_FIELDS
+#define CLX_ARENA_DEFAULT_FIELDS 8
+#endif
+
+struct FuncArena {
+    char*  base;
+    char*  ptr;
+    size_t capacity;
+};
+
+inline void arena_init(FuncArena* a, size_t size) {
+    a->base = static_cast<char*>(std::malloc(size));
+    a->ptr = a->base;
+    a->capacity = size;
+}
+
+inline void* arena_alloc(FuncArena* a, size_t bytes, size_t align = 8) {
+    uintptr_t current = reinterpret_cast<uintptr_t>(a->ptr);
+    uintptr_t aligned = (current + align - 1) & ~(align - 1);
+    a->ptr = reinterpret_cast<char*>(aligned + bytes);
+    return reinterpret_cast<char*>(aligned);
+}
+
+inline void arena_reset(FuncArena* a) {
+    if (a->base) std::free(a->base);
+    a->base = nullptr;
+    a->ptr = nullptr;
+    a->capacity = 0;
+}
+
+inline LValue arena_create_table(LState* L, FuncArena* a, size_t asize, size_t hsize) {
+#if CLX_ARENA_DEFAULT_FIELDS > 0
+    if (asize < CLX_ARENA_DEFAULT_FIELDS) asize = CLX_ARENA_DEFAULT_FIELDS;
+    if (hsize < CLX_ARENA_DEFAULT_FIELDS) hsize = CLX_ARENA_DEFAULT_FIELDS;
+#endif
+    size_t header_sz = ((sizeof(LTable) + 7) & ~static_cast<size_t>(7));
+    size_t array_sz = asize > 0 ? ((sizeof(TValue) * asize + 7) & ~static_cast<size_t>(7)) : 0;
+    size_t types_sz = asize > 0 ? ((sizeof(ValueType) * asize + 7) & ~static_cast<size_t>(7)) : 0;
+    size_t hash_sz = hsize > 0 ? ((sizeof(HashEntry) * hsize + 7) & ~static_cast<size_t>(7)) : 0;
+    size_t total = header_sz + array_sz + types_sz + hash_sz;
+    char* mem = static_cast<char*>(arena_alloc(a, total));
+    LTable* t = new (mem) LTable();
+    t->is_arena = true;
+    if (asize > 0) {
+        t->array = reinterpret_cast<TValue*>(mem + header_sz);
+        t->array_types = reinterpret_cast<ValueType*>(mem + header_sz + array_sz);
+        t->array_cap = asize;
+        for (size_t i = 0; i < asize; ++i) {
+            t->array[i] = TValue();
+            t->array_types[i] = Nil;
+        }
+    }
+    if (hsize > 0) {
+        t->entries = reinterpret_cast<HashEntry*>(mem + header_sz + array_sz + types_sz);
+        t->hash_size = hsize;
+        for (size_t i = 0; i < hsize; ++i) {
+            t->entries[i].key.payload.u64 = HASH_EMPTY;
+            t->entries[i].ktype = Nil;
+            t->entries[i].val = TValue();
+            t->entries[i].vtype = Nil;
+        }
+    }
+    return LValue(Table, t);
+}
 
 //------------------ Close guard (for <close> vars)
 struct CloseGuard {
