@@ -17,18 +17,27 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 * Modified yields_number to take AnalysisState as a parameter (19cf523)
 * Removed unused static variables from CodeEmitter related to optimization analysis (7190cd0)
 * Integrated AnalysisState into the CLI driver for code generation (e91b04d)
+* Wired Optimizer into CLI driver — each file now runs escape/numeric analysis before codegen (35f83d4)
+* Arena tables fall back to heap allocation on growth instead of refusing arena (e949fd2)
 
 ### Added
 
 * Added native int64_t generation support in CodeEmitter (7190cd0)
 * Added new dedicated emit methods for each AST node type in CodeEmitter (7190cd0)
 * Added analysis_state.h to centralize all optimizer analysis data (19cf523)
+* Added `is_purely_integer_expr` shared function to analysis_state.h — single source of truth for integer detection, replacing 6 divergent inline lambdas in codegen and 1 in optimizer (ad72242)
+* Added native int64 codegen for bitwise operations (BitAnd, BitOr, BitXor, Shl, Shr) and BNot when both operands are purely integer (ad72242)
+* Added per-function memory arena allocator (FuncArena) to reduce GC pressure for short-lived tables (ad72242)
+* Added escape analysis pass that classifies local tables as escaping (captured, returned, global-stored, function-arg, method-target, grown) vs arena-safe (e949fd2)
+* Added CLX_ARENA_DEFAULT_FIELDS configurable define for arena table preallocation size (default 8) (e949fd2)
 
 ### Refactored
 
 * Refactored CodeEmitter for better readability and code organization (7190cd0)
 * Refactored Optimizer code to improve readability (19cf523)
 * Improved pure integers detection in the optimizer (19cf523)
+* Consolidated 6 duplicated integer-detection lambdas in codegen into calls to the shared `is_purely_integer_expr` function (ad72242)
+* Replaced optimizer's incomplete `is_int_expr` lambda with the shared function, enabling detection of Mod, And, Or, FloorDiv, ParenExpression, UnaryOp(Minus) as integer-producing (ad72242)
 
 ---
 
