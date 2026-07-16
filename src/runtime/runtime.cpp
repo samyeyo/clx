@@ -347,7 +347,7 @@ static CLX_INLINE_COLD size_t next_pow2(size_t n) {
 LTable::LTable()
     : array(nullptr), array_types(nullptr), array_size(0), array_cap(0),
       entries(nullptr), hash_size(0), hash_count(0), hash_tombs(0),
-      hash_version(0), array_version(0), metatable(nullptr)
+      hash_version(0), array_version(0), metatable(nullptr), is_arena(false)
 {
     type = static_cast<uint8_t>(Table);
     marked = 0;
@@ -356,9 +356,11 @@ LTable::LTable()
 
 //------------------ LTable::~LTable — table destructor
 LTable::~LTable() {
-    if (array)   delete[] array;
-    if (array_types) delete[] array_types;
-    if (entries) delete[] entries;
+    if (!is_arena) {
+        if (array)   delete[] array;
+        if (array_types) delete[] array_types;
+        if (entries) delete[] entries;
+    }
 }
 
 
@@ -381,9 +383,10 @@ void LTable::resize_hash(size_t new_size) {
             new_entries[h].val = entries[i].val;
             new_entries[h].vtype = entries[i].vtype;
         }
-        delete[] entries;
+        if (!is_arena) delete[] entries;
     }
 
+    is_arena = false;
     entries    = new_entries;
     hash_size  = new_size;
     hash_tombs = 0;
@@ -432,8 +435,8 @@ void LTable::settable(const LValue& key, const LValue& val) {
             size_t new_cap = (array_cap == 0) ? 8 : array_cap * 2;
             TValue* new_arr = new TValue[new_cap]; ValueType* new_types = new ValueType[new_cap]();
             if (array_cap) { std::memcpy(new_arr, array, array_cap * sizeof(TValue)); std::memcpy(new_types, array_types, array_cap * sizeof(ValueType)); }
-            delete[] array;
-            delete[] array_types;
+            if (!is_arena) { delete[] array; delete[] array_types; }
+            is_arena = false;
             array = new_arr;
             array_types = new_types;
             array[array_size] = val.val; array_types[array_size] = val.type;
@@ -477,10 +480,10 @@ void LTable::settable(const LValue& key, const LValue& val) {
                 size_t new_cap = (array_cap == 0) ? 8 : array_cap * 2;
                 TValue* new_arr = new TValue[new_cap]; ValueType* new_types = new ValueType[new_cap]();
                 if (array_cap) { std::memcpy(new_arr, array, array_cap * sizeof(TValue)); std::memcpy(new_types, array_types, array_cap * sizeof(ValueType)); }
-                delete[] array;
-            delete[] array_types;
-            array = new_arr;
-            array_types = new_types;
+                if (!is_arena) { delete[] array; delete[] array_types; }
+                is_arena = false;
+                array = new_arr;
+                array_types = new_types;
             array[array_size] = val.val; array_types[array_size] = val.type;
                 array_size++;
                 array_cap = new_cap;
