@@ -1112,6 +1112,14 @@ void CodeEmitter::emitFunctionDef(const ASTNode& node, uint32_t node_idx) {
             out << "(clx::LState* L, const clx::LValue* args, size_t arg_count) mutable -> clx::MultiValue {\n";
             out << "clx::ScopeGuard _sg_func(L);\n";
             out << "clx::CacheSlot __cs[" << cs_max << "]{};\n";
+            uint32_t saved_arena_func = state.current_arena_func;
+            if (state.arena_table_sizes.count(node_idx)) {
+                state.current_arena_func = node_idx;
+                out << "clx::FuncArena _arena;\n";
+                out << "clx::arena_init(&_arena, " << state.arena_table_sizes[node_idx] << ");\n";
+            } else {
+                state.current_arena_func = 0xFFFFFFFF;
+            }
             int prev_cs_index = state.cs_index;
             state.cs_index = 0;
             out << "size_t _va_count = (arg_count > " << node.as.func_def.param_count << ") ? (arg_count - " << node.as.func_def.param_count << ") : 0;\n";
@@ -1183,6 +1191,8 @@ void CodeEmitter::emitFunctionDef(const ASTNode& node, uint32_t node_idx) {
             state.direct_callables = std::move(saved_direct_callables);
             state.fast_callables = std::move(saved_fast_callables);
             state.cs_index = prev_cs_index;
+            if (state.arena_table_sizes.count(node_idx)) out << "clx::arena_reset(&_arena);\n";
+            state.current_arena_func = saved_arena_func;
             out << "return clx::MultiValue();\n";
             out << "}";
             if (!is_raw) out << ")";
@@ -1196,8 +1206,10 @@ void CodeEmitter::emitReturnStatement(const ASTNode& node, uint32_t node_idx) {
 
             if (state.in_fast_function) {
                 if (v_count == 0) {
+                    if (state.current_arena_func != 0xFFFFFFFF) out << "clx::arena_reset(&_arena);\n";
                     out << "return 0.0;\n";
                 } else {
+                    if (state.current_arena_func != 0xFFFFFFFF) out << "clx::arena_reset(&_arena);\n";
                     out << "return ";
                     emit_native( ctx.block_statements[first_v]);
                     out << ";\n";
@@ -1207,6 +1219,7 @@ void CodeEmitter::emitReturnStatement(const ASTNode& node, uint32_t node_idx) {
 
             if (v_count == 0) {
                 if (state.in_function_def) {
+                    if (state.current_arena_func != 0xFFFFFFFF) out << "clx::arena_reset(&_arena);\n";
                     out << "return clx::MultiValue();\n";
                 } else {
                     out << "return clx::LValue();\n";
@@ -1255,6 +1268,7 @@ void CodeEmitter::emitReturnStatement(const ASTNode& node, uint32_t node_idx) {
                     if (!is_direct) out << "    for (size_t i = 0; i < _dyn_count; ++i) L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&_dyn_buf[i].val, &_dyn_buf[i].type);\n";
                     if (is_direct) {
                         if (state.in_function_def) {
+                            if (state.current_arena_func != 0xFFFFFFFF) out << "    clx::arena_reset(&_arena);\n";
                             out << "    CLX_MUSTTAIL return _impl_" << fname << "(L, _dyn_buf, _dyn_count);\n";
                         } else {
                             out << "    clx::MultiValue _res = _impl_" << fname << "(L, _dyn_buf, _dyn_count);\n";
@@ -1262,6 +1276,7 @@ void CodeEmitter::emitReturnStatement(const ASTNode& node, uint32_t node_idx) {
                         }
                     } else {
                         if (state.in_function_def) {
+                            if (state.current_arena_func != 0xFFFFFFFF) out << "    clx::arena_reset(&_arena);\n";
                             out << "    CLX_MUSTTAIL return clx::call_function(L, ";
                             emit_node(tgt);
                             out << ", _dyn_buf, _dyn_count, \"" << ctx.filename << "\", " << call_node.line << ");\n";
@@ -1284,6 +1299,7 @@ void CodeEmitter::emitReturnStatement(const ASTNode& node, uint32_t node_idx) {
 
                         if (is_direct) {
                             if (state.in_function_def) {
+                                if (state.current_arena_func != 0xFFFFFFFF) out << "    clx::arena_reset(&_arena);\n";
                                 out << "    CLX_MUSTTAIL return _impl_" << fname << "(L, args_" << last_v_idx << ", " << call_node.as.call_expr.arg_count << ");\n";
                             } else {
                                 out << "    clx::MultiValue _res = _impl_" << fname << "(L, args_" << last_v_idx << ", " << call_node.as.call_expr.arg_count << ");\n";
@@ -1291,6 +1307,7 @@ void CodeEmitter::emitReturnStatement(const ASTNode& node, uint32_t node_idx) {
                             }
                         } else {
                             if (state.in_function_def) {
+                                if (state.current_arena_func != 0xFFFFFFFF) out << "    clx::arena_reset(&_arena);\n";
                                 out << "    CLX_MUSTTAIL return clx::call_function(L, ";
                                 emit_node(tgt);
                                 out << ", args_" << last_v_idx << ", " << call_node.as.call_expr.arg_count << ", \"" << ctx.filename << "\", " << call_node.line << ");\n";
@@ -1304,6 +1321,7 @@ void CodeEmitter::emitReturnStatement(const ASTNode& node, uint32_t node_idx) {
                     } else {
                         if (is_direct) {
                             if (state.in_function_def) {
+                                if (state.current_arena_func != 0xFFFFFFFF) out << "    clx::arena_reset(&_arena);\n";
                                 out << "    CLX_MUSTTAIL return _impl_" << fname << "(L, nullptr, 0);\n";
                             } else {
                                 out << "    clx::MultiValue _res = _impl_" << fname << "(L, nullptr, 0);\n";
@@ -1311,6 +1329,7 @@ void CodeEmitter::emitReturnStatement(const ASTNode& node, uint32_t node_idx) {
                             }
                         } else {
                             if (state.in_function_def) {
+                                if (state.current_arena_func != 0xFFFFFFFF) out << "    clx::arena_reset(&_arena);\n";
                                 out << "    CLX_MUSTTAIL return clx::call_function(L, ";
                                 emit_node(tgt);
                                 out << ", nullptr, 0, \"" << ctx.filename << "\", " << call_node.line << ");\n";
@@ -1341,6 +1360,7 @@ void CodeEmitter::emitReturnStatement(const ASTNode& node, uint32_t node_idx) {
                     out << ";\n";
                 }
                 if (state.in_function_def) {
+                    if (state.current_arena_func != 0xFFFFFFFF) out << "    clx::arena_reset(&_arena);\n";
                     out << "    return clx::MultiValue(_ret_args, " << v_count << ");\n";
                 } else {
                     out << "    return _ret_args[0];\n";
@@ -1364,6 +1384,7 @@ void CodeEmitter::emitReturnStatement(const ASTNode& node, uint32_t node_idx) {
                     }
                 }
                 if (state.in_function_def) {
+                    if (state.current_arena_func != 0xFFFFFFFF) out << "    clx::arena_reset(&_arena);\n";
                     out << "    return clx::MultiValue(_ret_vals);\n";
                 } else {
                     out << "    return (!_ret_vals.empty()) ? _ret_vals[0] : clx::LValue();\n";
@@ -2894,7 +2915,13 @@ void CodeEmitter::emitTableConstructor(const ASTNode& node, uint32_t node_idx) {
                 uint32_t v = ctx.block_statements[node.as.table_cons.first_item + i * 2 + 1];
                 if (ctx.nodes[v].type == NodeType::Vararg || ctx.nodes[v].type == NodeType::CallExpression) { _has_va = true; break; }
             }
-            out << "([&]() {\nclx::LValue _t = L->create_table(";
+            bool _is_arena = state.current_arena_func != 0xFFFFFFFF && state.arena_safe_table_nodes.count(node_idx) > 0;
+            out << "([&]() {\nclx::LValue _t = ";
+            if (_is_arena) {
+                out << "clx::arena_create_table(L, &_arena, ";
+            } else {
+                out << "L->create_table(";
+            }
             if (state.table_presize.count(node_idx)) {
                 uint32_t nidx = state.table_presize[node_idx];
                 auto check_declared = [&](auto& self, uint32_t ni) -> bool {
@@ -2918,7 +2945,12 @@ void CodeEmitter::emitTableConstructor(const ASTNode& node, uint32_t node_idx) {
             } else {
                 out << node.as.table_cons.count;
             }
-            out << ");\nL->shadow_stack[L->shadow_top++] = clx::TypedSlot(&_t.val, &_t.type);\n";
+            if (_is_arena) {
+                out << ", 0);\n";
+                // Arena tables don't need shadow_stack — they're invisible to GC
+            } else {
+                out << ");\nL->shadow_stack[L->shadow_top++] = clx::TypedSlot(&_t.val, &_t.type);\n";
+            }
             if (_has_va) out << "size_t _ai = 1;\n";
             uint32_t array_index = 1;
 
@@ -2947,7 +2979,8 @@ void CodeEmitter::emitTableConstructor(const ASTNode& node, uint32_t node_idx) {
                     out << ");\n";
                 }
             }
-            out << "L->shadow_top--;\nreturn _t;\n}())";
+            if (!_is_arena) out << "L->shadow_top--;\n";
+            out << "return _t;\n}())";
 }
 
 //------------------ emitTableAccess: handles NodeType::TableAccess
