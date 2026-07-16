@@ -9,6 +9,7 @@
 #define CODEGEN_H
 
 #include "../syntax/nodes.h"
+#include "../optimizer/analysis_state.h"
 #include <fstream>
 #include <string_view>
 #include <vector>
@@ -27,14 +28,16 @@ struct LocalVar {
 };
 
 
-//------------------ CodeEmitter: generates C++ source from the AST
 //------------------ lookup_builtin: maps "module.func" to C++ function name
 const char* lookup_builtin(std::string_view module, std::string_view func);
 
+
+//------------------ CodeEmitter: generates C++ source from the AST.
 class CodeEmitter {
 public:
-    //------------------ CodeEmitter: constructs emitter for a given AST context
-    CodeEmitter(const ASTContext& context, const char* output_path);
+    //------------------ CodeEmitter: constructs emitter for a given AST context, output file, and analysis results
+    CodeEmitter(const ASTContext& context, const char* output_path, AnalysisState& analysis);
+
     //------------------ emit: generates C++ code for the AST rooted at root_node
     void emit(uint32_t root_node, std::string_view module_name);
 
@@ -42,55 +45,55 @@ private:
     const ASTContext& ctx;
     std::ofstream out;
     std::vector<LocalVar> locals;
+    AnalysisState& state;
+
+    static constexpr int cs_max = AnalysisState::cs_max;
 
     //------------------ is_local: checks if name is a local and sets out_is_boxed
     bool is_local(std::string_view name, bool& out_is_boxed);
-    //------------------ emit_node: emits C++ for a single AST node
+
+    //------------------ var_reassigned_non_int: checks if a variable receives any non-integer value in a block tree
+    bool var_reassigned_non_int(std::string_view name, uint32_t block_idx);
+
+    //------------------ emit_node: dispatches to the emitXxx method matching node's type
     void emit_node(uint32_t node_idx);
-    //------------------ var_reassigned_non_int: checks if a variable receives any non-integer value in a block
-    static bool var_reassigned_non_int(const ASTContext& ctx, std::string_view name, uint32_t block_idx);
 
-public:
-    //------------------ Optimization analysis state (populated before codegen)
-    static std::vector<std::string_view> g_native_numbers;
-    static std::vector<std::string_view> g_string_pool;
-    static std::set<std::string_view> g_native_return_funcs;
-    static std::map<uint32_t, std::set<std::string>> g_param_numbers;
-    static std::vector<std::string> g_param_names;
-    static std::map<uint32_t, uint32_t> g_table_presize;
-    static std::map<std::string_view, double> g_global_constants;
-    static std::set<uint32_t> g_bce_safe_nodes;
-    static std::set<std::string_view> g_pure_numeric_arrays;
-    static std::set<std::string, std::less<>> g_native_integers;
-    //------------------ Per-function analysis data
-    static std::map<std::string_view, std::set<std::string_view>> g_numeric_table_fields;
-    static std::set<std::string_view> g_direct_callables;
-    static std::set<std::string_view> g_fast_callables;
-    static std::map<std::string_view, uint32_t> g_func_param_counts;
-    static std::map<std::string_view, std::vector<bool>> g_func_param_native;
-    static std::set<std::string_view> g_reassigned_vars;
-    static std::set<std::string_view> g_constant_upvalues;
-    static std::set<std::string_view> g_string_builders;
-    static std::set<std::string_view> g_global_string_builders;
-    static std::set<std::string_view> g_module_string_builders;
-    static std::map<uint32_t, uint32_t> g_goto_targets;
-    static std::set<std::string_view> g_hoisted_locals;
-    static bool g_skip_block_braces;
-    static std::unordered_map<uint32_t, std::string> g_hoisted_lookups;
-    static std::unordered_map<std::string, std::string> g_hoisted_cfuncs;
-    static std::unordered_map<std::string, std::string> g_builtin_aliases;
+    //------------------ emit_native: emits an expression coerced to a raw C++ double
+    void emit_native(uint32_t n_idx);
 
-    //------------------ Codegen emission state flags
-    static bool g_emit_raw_lambda;
-    static bool g_emit_fast_lambda;
-    static bool g_in_function_def;
-    static bool g_in_fast_function;
-    static bool g_expect_multivalue;
-    static std::string_view g_current_fast_func;
-    static std::string g_ref_capture;
-    static int g_cs_index;
-    static constexpr int g_cs_max = 8;
-    static uint32_t g_current_func_body;
+    //------------------ emit_condition: emits a boolean C++ expression for use in `if`/`while`
+    void emit_condition(uint32_t c_idx);
+
+    //------------------ emitXxx: emission logic for one AST NodeType, called from emit_node's dispatcher
+    void emitIntrinsicCall(const ASTNode& node, uint32_t node_idx);
+    void emitCallExpression(const ASTNode& node, uint32_t node_idx);
+    void emitParenExpression(const ASTNode& node, uint32_t node_idx);
+    void emitLabelStatement(const ASTNode& node, uint32_t node_idx);
+    void emitGotoStatement(const ASTNode& node, uint32_t node_idx);
+    void emitBlock(const ASTNode& node, uint32_t node_idx);
+    void emitFunctionDef(const ASTNode& node, uint32_t node_idx);
+    void emitReturnStatement(const ASTNode& node, uint32_t node_idx);
+    //------------------ emitAssignmentLike: handles GlobalDeclStatement, LocalDecl, and Assignment
+    void emitAssignmentLike(const ASTNode& node, uint32_t node_idx);
+    void emitDoStatement(const ASTNode& node, uint32_t node_idx);
+    void emitUnaryOp(const ASTNode& node, uint32_t node_idx);
+    void emitBinaryOp(const ASTNode& node, uint32_t node_idx);
+    void emitTrueLiteral(const ASTNode& node, uint32_t node_idx);
+    void emitFalseLiteral(const ASTNode& node, uint32_t node_idx);
+    void emitNilLiteral(const ASTNode& node, uint32_t node_idx);
+    void emitNumber(const ASTNode& node, uint32_t node_idx);
+    void emitInteger(const ASTNode& node, uint32_t node_idx);
+    void emitIdentifier(const ASTNode& node, uint32_t node_idx);
+    void emitString(const ASTNode& node, uint32_t node_idx);
+    void emitIfStatement(const ASTNode& node, uint32_t node_idx);
+    void emitWhileStatement(const ASTNode& node, uint32_t node_idx);
+    void emitRepeatStatement(const ASTNode& node, uint32_t node_idx);
+    void emitForStatement(const ASTNode& node, uint32_t node_idx);
+    void emitGenericForStatement(const ASTNode& node, uint32_t node_idx);
+    void emitTableConstructor(const ASTNode& node, uint32_t node_idx);
+    void emitTableAccess(const ASTNode& node, uint32_t node_idx);
+    void emitVararg(const ASTNode& node, uint32_t node_idx);
+    void emitBreakStatement(const ASTNode& node, uint32_t node_idx);
 };
 
 }
