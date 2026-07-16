@@ -25,6 +25,7 @@
 #endif
 #include "syntax/parser.h"
 #include "codegen/codegen.h"
+#include "optimizer/optimizer.h"
 
 namespace fs = std::filesystem;
 
@@ -244,6 +245,11 @@ int main(int argc, char* argv[]) {
         }
 
         std::string module_name = p_input.stem().string();
+
+        clx::AnalysisState analysis;
+        clx::Optimizer optimizer(ctx, analysis);
+        optimizer.run(ctx, root);
+
         fs::path cpp_file;
 
         if (emit_cpp) {
@@ -252,7 +258,7 @@ int main(int argc, char* argv[]) {
             cpp_file = fs::temp_directory_path() / (module_name + "_tmp.cpp");
         }
 
-        clx::CodeEmitter emitter(ctx, cpp_file.string().c_str());
+        clx::CodeEmitter emitter(ctx, cpp_file.string().c_str(), analysis);
         emitter.emit(root, module_name);
         cpp_files.push_back(cpp_file.string());
     }
