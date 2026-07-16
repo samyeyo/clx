@@ -47,6 +47,11 @@ struct AnalysisState {
     std::set<std::string_view> pure_numeric_arrays;
     std::set<std::string, std::less<>> native_integers;
 
+    //------------------ Arena analysis data
+    std::set<std::string_view> escaping_vars;
+    std::set<uint32_t> arena_safe_table_nodes;
+    std::map<uint32_t, uint32_t> arena_table_sizes;  // func_node → total arena bytes
+
     //------------------ Per-function analysis data
     std::map<std::string_view, std::set<std::string_view>> numeric_table_fields;
     std::set<std::string_view> direct_callables;
@@ -75,6 +80,7 @@ struct AnalysisState {
     std::string ref_capture;
     int cs_index = 0;
     uint32_t current_func_body = 0xFFFFFFFF;
+    uint32_t current_arena_func = 0xFFFFFFFF;  // node index of current function if it has an arena
 
     static constexpr int cs_max = 8;
 };
