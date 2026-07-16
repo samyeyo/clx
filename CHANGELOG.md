@@ -6,6 +6,32 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 
 ---
 
+## [Work in progresss]
+
+### Changed
+
+* Introduce AnalysisState as a shared data structure between Optimizer and CodeEmitter (7190cd0)
+* Updated CodeEmitter constructor to accept an AnalysisState reference (7190cd0)
+* Updated Optimizer constructor to accept an AnalysisState reference (19cf523)
+* Changed Optimizer::run to be non-static and updated its implementation (19cf523)
+* Modified yields_number to take AnalysisState as a parameter (19cf523)
+* Removed unused static variables from CodeEmitter related to optimization analysis (7190cd0)
+* Integrated AnalysisState into the CLI driver for code generation (e91b04d)
+
+### Added
+
+* Added native int64_t generation support in CodeEmitter (7190cd0)
+* Added new dedicated emit methods for each AST node type in CodeEmitter (7190cd0)
+* Added analysis_state.h to centralize all optimizer analysis data (19cf523)
+
+### Refactored
+
+* Refactored CodeEmitter for better readability and code organization (7190cd0)
+* Refactored Optimizer code to improve readability (19cf523)
+* Improved pure integers detection in the optimizer (19cf523)
+
+---
+
 ## [0.2.0] - 2026-07-08
 
 ### Changed
