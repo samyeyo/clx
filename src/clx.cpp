@@ -43,20 +43,64 @@ struct Compiler {
 
 //------------------ CLX: execute - runs a shell command, captures stdout and exit code
 std::string execute(const std::string& cmd, int& out_code) {
-    std::array<char, 128> buffer;
     std::string result;
 #ifdef _WIN32
-    auto pipe = _popen(cmd.c_str(), "r");
+    auto run_one = [&](const std::string& one_cmd) -> int {
+        SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
+        HANDLE h_read, h_write;
+        if (!CreatePipe(&h_read, &h_write, &sa, 0)) return -1;
+        SetHandleInformation(h_read, HANDLE_FLAG_INHERIT, 0);
+
+        STARTUPINFOA si = { sizeof(STARTUPINFOA) };
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdOutput = h_write;
+        si.hStdError = h_write;
+        si.hStdInput = NULL;
+
+        std::vector<char> cmd_buf(one_cmd.begin(), one_cmd.end());
+        cmd_buf.push_back(0);
+
+        PROCESS_INFORMATION pi = {};
+        BOOL ok = CreateProcessA(NULL, cmd_buf.data(), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
+        CloseHandle(h_write);
+
+        if (!ok) {
+            CloseHandle(h_read);
+            return -1;
+        }
+
+        std::array<char, 4096> buffer;
+        DWORD n;
+        while (ReadFile(h_read, buffer.data(), buffer.size() - 1, &n, NULL) && n > 0) {
+            buffer[n] = 0;
+            result += buffer.data();
+        }
+        CloseHandle(h_read);
+
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        DWORD code;
+        GetExitCodeProcess(pi.hProcess, &code);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        return static_cast<int>(code);
+    };
+
+    size_t pos;
+    out_code = 0;
+    std::string remaining = cmd;
+    while ((pos = remaining.find(" && ")) != std::string::npos) {
+        out_code = run_one(remaining.substr(0, pos));
+        if (out_code != 0) return result;
+        remaining = remaining.substr(pos + 4);
+    }
+    out_code = run_one(remaining);
 #else
     auto pipe = popen(cmd.c_str(), "r");
-#endif
     if (!pipe) return "";
+    std::array<char, 128> buffer;
     while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
         result += buffer.data();
     }
-#ifdef _WIN32
-    out_code = _pclose(pipe);
-#else
     out_code = pclose(pipe);
 #endif
     return result;
@@ -253,7 +297,10 @@ int main(int argc, char* argv[]) {
         fs::path cpp_file;
 
         if (emit_cpp) {
-            cpp_file = module_name + ".cpp";
+            fs::path cpp_dir = fs::path(output_name + ".cpp").parent_path();
+            if (!cpp_dir.empty() && !fs::exists(cpp_dir))
+                fs::create_directories(cpp_dir);
+            cpp_file = output_name + ".cpp";
         } else {
             cpp_file = fs::temp_directory_path() / (module_name + "_tmp.cpp");
         }
@@ -457,12 +504,11 @@ int main(int argc, char* argv[]) {
     }
 
     std::string cmd;
-    if (cc.name == "msvc") {
+    if (cc.name == "MSVC") {
         std::string tmp_dir = fs::temp_directory_path().string();
-        if (!tmp_dir.empty() && tmp_dir.back() != '\\') {
-            tmp_dir += '\\';
-        }
-        std::string fo_arg = " /Fo\"" + tmp_dir + "\\\"";
+        while (!tmp_dir.empty() && (tmp_dir.back() == '\\' || tmp_dir.back() == '/'))
+            tmp_dir.pop_back();
+        std::string fo_arg = " /Fo\"" + tmp_dir + "\"";
 
         std::string out_ext;
         if (mode != BuildMode::Object && mode != BuildMode::Static) {
