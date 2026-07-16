@@ -88,8 +88,8 @@ MultiValue table_concat(LState* L, const LValue* args, size_t count) {
             // Check: type <= 4 and type >= 2
             __m128i lo = _mm_set1_epi8(2);
             __m128i hi = _mm_set1_epi8(4);
-            __m128i ge2 = _mm_or_si128(_mm_cmpgt_epi8(lo, v), _mm_cmpeq_epi8(lo, v)); // lo <= v
-            __m128i le4 = _mm_or_si128(_mm_cmpgt_epi8(v, hi), _mm_cmpeq_epi8(v, hi)); // v <= hi
+            __m128i ge2 = _mm_or_si128(_mm_cmpgt_epi8(v, lo), _mm_cmpeq_epi8(v, lo)); // v >= lo
+            __m128i le4 = _mm_or_si128(_mm_cmpgt_epi8(hi, v), _mm_cmpeq_epi8(hi, v)); // hi >= v
             __m128i ok = _mm_and_si128(ge2, le4);
             int mask = _mm_movemask_epi8(ok);
             if (mask != 0xFFFF) {
