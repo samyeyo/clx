@@ -898,7 +898,7 @@
 
     On the web, sapp_desc.fullscreen will have no effect, and the application
     will always start in non-fullscreen mode. Call sapp_toggle_fullscreen()
-    from within or 'near' an input event to switch to fullscreen programatically.
+    from within or 'near' an input event to switch to fullscreen programmatically.
     Note that on the web, the fullscreen state may change back to windowed at
     any time (either because the browser had rejected switching into fullscreen,
     or the user leaves fullscreen via Esc), this means that the result
@@ -4218,7 +4218,7 @@ _SOKOL_PRIVATE void _sapp_wgpu_init(void) {
     if (0 == _sapp.wgpu.instance) {
         _SAPP_PANIC(WGPU_CREATE_INSTANCE_FAILED);
     }
-    // NOTE: on Emscripten, device and swapchain creation are chained in the callacks
+    // NOTE: on Emscripten, device and swapchain creation are chained in the callbacks
     _sapp_wgpu_create_adapter();
     #if defined(_SAPP_WGPU_HAS_WAIT)
         _sapp_wgpu_create_device_and_swapchain();
@@ -4848,7 +4848,7 @@ _SOKOL_PRIVATE void _sapp_vk_create_swapchain(void) {
     const uint32_t fb_width = surf_caps.currentExtent.width;
     const uint32_t fb_height = surf_caps.currentExtent.height;
 
-    // minized window has zero width/height on some platforms (e.g. Windows)
+    // minimized window has zero width/height on some platforms (e.g. Windows)
     if ((0 == fb_width) || (0 == fb_height)) {
         if (_sapp.vk.swapchain_valid) {
             _sapp_vk_destroy_swapchain();
@@ -14122,7 +14122,7 @@ SOKOL_API_IMPL sapp_mouse_cursor sapp_bind_mouse_cursor_image(sapp_mouse_cursor 
     // NOTE: It seems that for some reason, the hotspot doesn't work if it is one less
     //       than the dimension of the cursor image (or more), on windows. So for a cursor
     //       that is 32 by 32 px, a hotspot of x = 30 works, but not x = 31.
-    //       The cursor simply dissapears in such cases. Asserting for all platforms to make
+    //       The cursor simply disappears in such cases. Asserting for all platforms to make
     //       the behaviour consistent.
     SOKOL_ASSERT(desc->cursor_hotspot_x < desc->width - 1 && desc->cursor_hotspot_y < desc->height - 1);
     SOKOL_ASSERT(desc->width * desc->height * 4 == (int) desc->pixels.size);
@@ -14147,7 +14147,7 @@ SOKOL_API_IMPL sapp_mouse_cursor sapp_bind_mouse_cursor_image(sapp_mouse_cursor 
     if (_sapp.mouse.current_cursor == cursor) {
         _sapp_update_cursor(cursor, _sapp.mouse.shown);
     }
-    return cursor; // returning the passed-in cursor puerly for convenience, in case you want to asign the value to a variable.
+    return cursor; // returning the passed-in cursor puerly for convenience, in case you want to assign the value to a variable.
 }
 
 SOKOL_API_IMPL void sapp_unbind_mouse_cursor_image(sapp_mouse_cursor cursor) {
