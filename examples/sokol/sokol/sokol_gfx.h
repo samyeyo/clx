@@ -4957,14 +4957,14 @@ typedef enum sg_log_item {
         .vulkan.stream_staging_buffer_size
             Size of the staging buffer in bytes for updating .usage.stream_update
             resources. The default is 16 MB. The size must be big enough
-            to accomodate all update into .usage.stream_update resources.
+            to accommodate all update into .usage.stream_update resources.
             Any additional data will cause an error log message and
             incomplete rendering. Note that the actually allocated size
             will be twice as much because the stream-staging-buffer is
             double-buffered.
         .vulkan.descriptor_buffer_size
             Size of the descriptor-upload buffer in bytes. The default
-            size is 16 bytes. The size must be big enough to accomodate
+            size is 16 bytes. The size must be big enough to accommodate
             all unifrom-block, view- and sampler-bindings in a single
             frame (assume a worst-case of 256 bytes per binding). Note
             that the actually allocated size will be twice as much
@@ -7144,7 +7144,7 @@ typedef _sg_vk_view_t _sg_view_t;
 #define _SG_VK_SHARED_BUFFER_OVERFLOW_RESULT (0xFFFFFFFF)
 typedef struct {
     uint32_t size;          // buffer size
-    uint32_t align;         // required buffer offset alignemnt
+    uint32_t align;         // required buffer offset alignment
     uint32_t offset;        // current offset into buffer
     VkBuffer cur_buf;       // currently mapped buffer
     void* cur_mem_ptr;      // current pointer into currently mapped buffer
@@ -19734,7 +19734,7 @@ _SOKOL_PRIVATE void _sg_vk_staging_copy_buffer_data(_sg_buffer_t* buf, const sg_
     SOKOL_ASSERT(src_data && src_data->ptr && (src_data->size > 0));
     SOKOL_ASSERT((dst_offset + src_data->size) <= (size_t)buf->cmn.size);
 
-    // an inital wait is only needed for updating existing resources but not when populating a new resource
+    // an initial wait is only needed for updating existing resources but not when populating a new resource
     if (initial_wait) {
         VkResult res = vkQueueWaitIdle(_sg.vk.queue);
         SOKOL_ASSERT(res == VK_SUCCESS); _SOKOL_UNUSED(res);
@@ -19800,7 +19800,7 @@ _SOKOL_PRIVATE void _sg_vk_staging_copy_image_data(_sg_image_t* img, const sg_im
     SOKOL_ASSERT(img && img->vk.img);
     const uint32_t block_dim = (uint32_t)_sg_block_dim(img->cmn.pixel_format);
 
-    // an inital wait is only needed for updating existing resources but not when populating a new resource
+    // an initial wait is only needed for updating existing resources but not when populating a new resource
     if (initial_wait) {
         VkResult res = vkQueueWaitIdle(_sg.vk.queue);
         SOKOL_ASSERT(res == VK_SUCCESS); _SOKOL_UNUSED(res);

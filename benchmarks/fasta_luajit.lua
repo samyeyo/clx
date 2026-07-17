@@ -29,7 +29,7 @@ local function repeat_fasta(id, desc, alu, n)
 
     local lines     = math.floor(n / WIDTH)
     local last_line = n % WIDTH
-    local start = 0 -- (This index is 0-based bacause of the % operator)
+    local start = 0 -- (This index is 0-based because of the % operator)
     for _ = 1, lines do
         local stop = start + WIDTH
         io.write(string.sub(aluwrap, start+1, stop))

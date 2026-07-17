@@ -418,7 +418,7 @@ typedef struct sfb_framebuffer_desc {
     image objects had been recreated and need to be repopulated again via
     sfb_update()
 
-    Resizing is slightly cheaper than destroying and creating the frambuffer
+    Resizing is slightly cheaper than destroying and creating the framebuffer
     because only image objects needs to be re-created, but no pipeline objects.
 */
 typedef struct sfb_resize_desc {

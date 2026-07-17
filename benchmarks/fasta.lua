@@ -39,7 +39,7 @@ local function repeat_fasta(id, desc, alu, n)
 
     local lines     = n // WIDTH
     local last_line = n % WIDTH
-    local start = 0 -- (This index is 0-based bacause of the % operator)
+    local start = 0 -- (This index is 0-based because of the % operator)
     for _ = 1, lines do
         local stop = start + WIDTH
         io.write(string.sub(aluwrap, start+1, stop))
@@ -64,7 +64,7 @@ end
 local function random_fasta(id, desc, frequencies, n)
     print_fasta_header(id, desc)
 
-    -- Prepare the cummulative probability table
+    -- Prepare the cumulative probability table
     local nitems  = #frequencies
     local letters = {}
     local probs = {}
