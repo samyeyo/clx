@@ -29,6 +29,10 @@
 
 namespace fs = std::filesystem;
 
+#ifndef CLX_VERSION
+    #error "CLX_VERSION not defined — rebuild with CMake"
+#endif
+
 std::vector<std::string> precompiled_modules;
 
 //------------------ ENUM: BuildMode - output mode (executable binary, object file, or static library)
@@ -162,7 +166,7 @@ int main(int argc, char* argv[]) {
             print_help();
             return 0;
         } else if (arg == "--version") {
-            std::cout << "clx 0.1.0\nMIT License - Copyright (c) 2026 Tine Samir\n";
+            std::cout << "clx " CLX_VERSION "\nMIT License - Copyright (c) 2026 Tine Samir\n";
             return 0;
         } else if (arg == "--output" || arg == "-o") {
             if (i + 1 < argc) custom_output_name = argv[++i];

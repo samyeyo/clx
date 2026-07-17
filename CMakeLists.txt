@@ -99,6 +99,7 @@ target_include_directories(clx PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_include_directories(clx PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 target_compile_definitions(clx PRIVATE
+    CLX_VERSION="${PROJECT_VERSION}"
     CLX_DEFAULT_CXX="${CMAKE_CXX_COMPILER}"
     CLX_DEFAULT_CXX_NAME="${CMAKE_CXX_COMPILER_ID}"
 )
