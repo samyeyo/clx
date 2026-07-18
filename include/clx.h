@@ -41,6 +41,22 @@ CLX_INLINE LValue cfunction(LState* L, CFunctionType func) {
     return L->create_closure(std::move(func));
 }
 
+//------------------ Sets the environment table of a function
+CLX_INLINE void set_fenv(LState* L, const LValue& func, const LValue& env) {
+    (void)L;
+    if (func.type != ValueType::Function) return;
+    LCFunction* f = static_cast<LCFunction*>(func.as_pointer());
+    f->env = (env.type == ValueType::Table) ? static_cast<LTable*>(env.as_pointer()) : nullptr;
+}
+
+//------------------ Gets the environment table of a function
+CLX_INLINE LValue get_fenv(LState* L, const LValue& func) {
+    (void)L;
+    if (func.type != ValueType::Function) return LValue();
+    LCFunction* f = static_cast<LCFunction*>(func.as_pointer());
+    return f->env ? LValue(ValueType::Table, f->env) : LValue();
+}
+
 //------------------ Creates a thread LValue
 CLX_INLINE_HOT LValue thread(LThread* t)              { return LValue(ValueType::Thread, t); }
 //------------------ Creates a light userdata LValue
