@@ -4,6 +4,8 @@ CLX_API clx::LValue luaopen_native_mod(clx::LState* L) {
     clx::LValue t = L->create_table();
     clx::LTable* mod = static_cast<clx::LTable*>(t.as_pointer());
 
+    clx::LValue captured_G(clx::ValueType::Table, L->_G);
+
     mod->bind(L, "add", [](clx::LState* L, const clx::LValue* args, size_t n) -> clx::MultiValue {
         double sum = 0;
         for (size_t i = 0; i < n; ++i) sum += clx::check_number(L, args[i]);
@@ -32,6 +34,10 @@ CLX_API clx::LValue luaopen_native_mod(clx::LState* L) {
         double a = clx::check_field_number(L, clx::raw_get(L, t2, "a"), "a");
         double b = clx::check_field_number(L, clx::raw_get(L, t2, "b"), "b");
         return clx::MultiValue(clx::LValue(a + b));
+    });
+
+    mod->bind(L, "get_env", [captured_G](clx::LState* L, const clx::LValue* args, size_t n) -> clx::MultiValue {
+        return clx::MultiValue(captured_G);
     });
 
     return t;

@@ -47,5 +47,16 @@ assert_eq(t2.label, "point", 't2.label = "point"')
 local r = m.test_api()
 assert_eq(r, 3, "test_api() = 3 (via check_field_number + raw_set/raw_get)")
 
+-- Test require(mod, env) — C++ side: luaopen receives env
+local myenv = { greeting = "hello" }
+package.loaded["native_mod"] = nil
+local m2 = require("native_mod", myenv)
+assert_eq(m2.get_env(), myenv, "luaopen received env from require")
+
+-- Test require without env (default nil) — _G is the real global table
+package.loaded["native_mod"] = nil
+local m3 = require("native_mod")
+assert_eq(m3.get_env(), _G, "require without env gives module the real _G")
+
 print_summary("NATIVE_MODULE")
 os.exit(failed > 0 and 1 or 0)
