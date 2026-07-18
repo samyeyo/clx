@@ -146,4 +146,21 @@ local f = function(x) return x + 1 end
 f = function(xx) return xx * 10 end
 assert_eq(f(5), 50, "anonymous function reassignment")
 
+print("----------------- 2. _ENV per-function environment")
+
+local original_print = print
+local logged = {}
+
+local function child()
+    _ENV = { print = function(...) table.insert(logged, table.concat({...}, "\t")) end }
+    print("hello from child")
+end
+
+child()
+assert_eq(#logged, 1, "child printed once")
+assert_eq(logged[1], "hello from child", "child used custom print")
+
+print("hello from parent")
+assert_eq(#logged, 1, "parent still uses original print")
+
 print_summary("FUNCTIONS")
