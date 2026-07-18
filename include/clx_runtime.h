@@ -426,17 +426,12 @@ struct LCFunction : public LHeader {
     CFunctionType func;
     MultiValue (*direct)(LState*, const LValue*, size_t) = nullptr;
     LValue (*direct1)(LState*, const LValue*, size_t) = nullptr;
+    LTable* env = nullptr;
     LCFunction(CFunctionType f);
 };
 
 //------------------ Fast path for LCFunction direct calls
-CLX_INLINE_HOT MultiValue call_direct(LState* L, const LValue& func, const LValue* args, size_t count) {
-    if (func.type == ValueType::Function) {
-        LCFunction* f = static_cast<LCFunction*>(func.as_pointer());
-        if (f->direct) return f->direct(L, args, count);
-    }
-    return call_function(L, func, args, count, "", 0);
-}
+MultiValue call_direct(LState* L, const LValue& func, const LValue* args, size_t count);
 
 //------------------ Userdata block
 struct LUserdata : public LHeader {
@@ -762,6 +757,7 @@ struct LThread : public LHeader {
 //------------------ VM state
 struct LState {
     LTable* _G;
+    LCFunction* current_func = nullptr;
     LHeader* allocated_objects;
     LTable* free_tables;
     LCFunction* free_functions;
@@ -824,7 +820,7 @@ struct LState {
     ~LState();
 
     LValue create_table(size_t asize = 0, size_t hsize = 0);
-    LValue create_closure(CFunctionType func);
+    LValue create_closure(CFunctionType func, LTable* env = nullptr);
 
     std::vector<LHeader*> gc_worklist;
 

@@ -967,9 +967,9 @@ void LState::collect_garbage() {
         if (!v.is_gc_obj()) return;
         LHeader* h = v.as_pointer();
         if (h && h->marked == 0) {
-            h->marked = 1;
-            ValueType t = v.type;
-            if (t == Table || t == Thread) wl.push_back(h);
+        h->marked = 1;
+        ValueType t = v.type;
+        if (t == Table || t == Thread || t == Function) wl.push_back(h);
         }
     };
 
@@ -1030,6 +1030,9 @@ void LState::collect_garbage() {
             push_if_needed(th->function);
             for (size_t i = 0; i < th->yield_args.count;  ++i) push_if_needed(th->yield_args[i]);
             for (size_t i = 0; i < th->resume_args.count; ++i) push_if_needed(th->resume_args[i]);
+        } else if (curr->type == static_cast<uint8_t>(Function)) {
+            LCFunction* f = static_cast<LCFunction*>(curr);
+            if (f->env) push_if_needed(LValue(Table, f->env));
         }
     }
 
@@ -1092,12 +1095,16 @@ MultiValue call_function(LState* L, const LValue& func, const LValue* args, size
 
     if (func.type == Function) {
         LCFunction* f = static_cast<LCFunction*>(func.as_pointer());
+        LCFunction* saved_func = L->current_func;
+        L->current_func = f;
         if (f->direct) {
             MultiValue ret = f->direct(L, args, count);
+            L->current_func = saved_func;
             L->shadow_top = prev_shadow;
             return ret;
         }
         MultiValue ret = f->func(L, args, count);
+        L->current_func = saved_func;
         L->shadow_top = prev_shadow;
         return ret;
     }
@@ -1167,6 +1174,21 @@ MultiValue pcall_function(LState* L, const LValue& func, const LValue* args, siz
 
 
 
+//------------------ call_direct — fast path for LCFunction direct calls
+MultiValue call_direct(LState* L, const LValue& func, const LValue* args, size_t count) {
+    if (func.type == ValueType::Function) {
+        LCFunction* f = static_cast<LCFunction*>(func.as_pointer());
+        if (f->direct) {
+            LCFunction* saved = L->current_func;
+            L->current_func = f;
+            MultiValue ret = f->direct(L, args, count);
+            L->current_func = saved;
+            return ret;
+        }
+    }
+    return call_function(L, func, args, count, "", 0);
+}
+
 //------------------ getmetafield — get metatable field
 LValue getmetafield(LState* L, const LValue& obj, const char* field) {
     LTable* mt = nullptr;
@@ -1179,7 +1201,6 @@ LValue getmetafield(LState* L, const LValue& obj, const char* field) {
     LValue p = mt->gettable(LValue(L->intern_string(field)));
     return p.type != Nil ? p : LValue();
 }
-
 
 //------------------ callmeta — call metamethod
 bool callmeta(LState* L, const LValue& obj, const char* event) {
@@ -1305,7 +1326,7 @@ LValue LState::create_table(size_t asize, size_t hsize) {
 }
 
 //------------------ LState::create_closure — allocate a closure
-clx::LValue clx::LState::create_closure(CFunctionType func) {
+clx::LValue clx::LState::create_closure(CFunctionType func, LTable* env) {
     if (gc_running) {
         if (gc_phase == GCPhase::Sweeping) {
             gc_step();
@@ -1319,9 +1340,11 @@ clx::LValue clx::LState::create_closure(CFunctionType func) {
         f = free_functions;
         free_functions = static_cast<LCFunction*>(free_functions->next);
         f->func = std::move(func);
+        f->env = env ? env : _G;
         f->marked = 0;
     } else {
         f = new LCFunction(std::move(func));
+        f->env = env ? env : _G;
         allocated_bytes += sizeof(LCFunction);
     }
 
@@ -1333,11 +1356,6 @@ clx::LValue clx::LState::create_closure(CFunctionType func) {
     object_count++;
     return clx::LValue(Function, f);
 }
-
-
-
-
-
 
 //------------------ newuserdata — allocate userdata
 LValue newuserdata(LState* L, size_t size) {
