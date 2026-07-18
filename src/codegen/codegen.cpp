@@ -1117,6 +1117,7 @@ void CodeEmitter::emitFunctionDef(const ASTNode& node, uint32_t node_idx) {
             }
             out << "(clx::LState* L, const clx::LValue* args, size_t arg_count) mutable -> clx::MultiValue {\n";
             out << "clx::ScopeGuard _sg_func(L);\n";
+            out << "clx::LValue _ENV = (L->current_func && L->current_func->env) ? clx::LValue(clx::ValueType::Table, L->current_func->env) : clx::LValue(clx::ValueType::Table, L->_G);\n";
             out << "clx::CacheSlot __cs[" << cs_max << "]{};\n";
             uint32_t saved_arena_func = state.current_arena_func;
             if (state.arena_table_sizes.count(node_idx)) {
@@ -1201,7 +1202,7 @@ void CodeEmitter::emitFunctionDef(const ASTNode& node, uint32_t node_idx) {
             state.current_arena_func = saved_arena_func;
             out << "return clx::MultiValue();\n";
             out << "}";
-            if (!is_raw) out << ")";
+            if (!is_raw) out << ", static_cast<clx::LTable*>(_ENV.as_pointer()))";
 }
 
 //------------------ emitReturnStatement: handles NodeType::ReturnStatement
@@ -1535,7 +1536,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx) {
                                             if (a < state.func_param_counts[name] - 1) out << ", ";
                                         }
                                         out << "))));\n};\n";
-                                         out << "clx::LValue l_" << name << " = L->create_closure(_impl_" << name << ");\n";
+                                         out << "clx::LValue l_" << name << " = L->create_closure(_impl_" << name << ", static_cast<clx::LTable*>(_ENV.as_pointer()));\n";
                                          out << "L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&l_" << name << ".val, &l_" << name << ".type);\n";
                                         { size_t _sfi = std::distance(state.string_pool.begin(), std::find(state.string_pool.begin(), state.string_pool.end(), name)); out << "L->_G->settable(cstr_[" << _sfi << "], l_" << name << ");\n"; }
                                         locals.push_back({name, false});
@@ -1555,7 +1556,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx) {
                                         state.emit_raw_lambda = false;
                                         state.ref_capture.clear();
                                         out << ";\n";
-                                         out << "l_" << name << " = L->create_closure(_impl_" << name << ");\n";
+out << "l_" << name << " = L->create_closure(_impl_" << name << ", static_cast<clx::LTable*>(_ENV.as_pointer()));\n";
                                          out << "L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&l_" << name << ".val, &l_" << name << ".type);\n";
                                         { size_t _sfi = std::distance(state.string_pool.begin(), std::find(state.string_pool.begin(), state.string_pool.end(), name)); out << "L->_G->settable(cstr_[" << _sfi << "], l_" << name << ");\n"; }
                                     }
@@ -1697,64 +1698,71 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx) {
                         }
                     } else if (is_global && v_count == 0) {
                     } else if (t_node.as.ident.is_global) {
-                        state.global_constants.erase(name);
-                        auto it = std::find(state.native_numbers.begin(), state.native_numbers.end(), name);
-                        if (it != state.native_numbers.end()) state.native_numbers.erase(it);
-
-
-                        bool is_sb_concat = false;
-                        std::vector<uint32_t> ops;
-                        if (v_count > 0 && state.string_builders.count(name)) {
-                            uint32_t v_idx = ctx.block_statements[first_v];
-                            const auto& v_node = ctx.nodes[v_idx];
-                            if (v_node.type == NodeType::BinaryOp && v_node.as.bin_op.op == static_cast<int>(BinaryOp::Concat)) {
-                                std::vector<uint32_t> ws;
-                                ws.push_back(v_idx);
-                                while (!ws.empty()) {
-                                    uint32_t cur = ws.back(); ws.pop_back();
-                                    const auto& cn = ctx.nodes[cur];
-                                    if (cn.type == NodeType::BinaryOp && cn.as.bin_op.op == static_cast<int>(BinaryOp::Concat)) {
-                                        ws.push_back(cn.as.bin_op.right);
-                                        ws.push_back(cn.as.bin_op.left);
-                                    } else {
-                                        ops.push_back(cur);
-                                    }
-                                }
-                                if (!ops.empty() && ctx.nodes[ops[0]].type == NodeType::Identifier) {
-                                    std::string_view fn(ctx.nodes[ops[0]].as.ident.name, ctx.nodes[ops[0]].as.ident.length);
-                                    if (fn == name) is_sb_concat = true;
-                                }
-                            }
-                        }
-
-                        if (is_sb_concat) {
-
-                            out << "{ clx::LValue _gval = clx::get_env_var(L, _ENV, \"" << name << "\");\n";
-                            out << "  if (sb_" << name << ".empty() && _gval.type == clx::ValueType::String) {\n";
-                            out << "    sb_" << name << ".append(_gval.as_string(), _gval.string_len()); }\n";
-                            for (size_t i = 1; i < ops.size(); ++i) {
-                                uint32_t op_idx = ops[i];
-                                const auto& op_node = ctx.nodes[op_idx];
-                                if (op_node.type == NodeType::String) {
-                                    size_t sfi = std::distance(state.string_pool.begin(), std::find(state.string_pool.begin(), state.string_pool.end(), std::string_view(op_node.as.string.text, op_node.as.string.length)));
-                                    out << "  sb_" << name << ".append(cstr_[" << sfi << "].as_string(), cstr_[" << sfi << "].string_len());\n";
-                                } else if (op_node.type == NodeType::Integer) {
-                                    out << "  sb_" << name << ".append(L, clx::LValue(static_cast<double>(" << op_node.as.integer.val << ".0)));\n";
-                                } else if (op_node.type == NodeType::Number) {
-                                    out << "  sb_" << name << ".append(L, clx::LValue(static_cast<double>(" << op_node.as.number.val << ")));\n";
-                                } else {
-                                    out << "  sb_" << name << ".append(L, ";
-                                    emit_node(op_idx);
-                                    out << ");\n";
-                                }
-                            }
-                            out << "  clx::set_env_var(L, _ENV, \"" << name << "\", clx::LValue(sb_" << name << ".to_string(L)));\n";
-                            out << "}\n";
-                        } else {
-                            out << "clx::set_env_var(L, _ENV, \"" << name << "\", ";
+                        if (name == "_ENV") {
+                            out << "_ENV = ";
                             if (v_count > 0) emit_node(ctx.block_statements[first_v]);
                             else out << "clx::LValue()";
-                            out << ");\n";
+                            out << ";\n";
+                        } else {
+                            state.global_constants.erase(name);
+                            auto it = std::find(state.native_numbers.begin(), state.native_numbers.end(), name);
+                            if (it != state.native_numbers.end()) state.native_numbers.erase(it);
+
+
+                            bool is_sb_concat = false;
+                            std::vector<uint32_t> ops;
+                            if (v_count > 0 && state.string_builders.count(name)) {
+                                uint32_t v_idx = ctx.block_statements[first_v];
+                                const auto& v_node = ctx.nodes[v_idx];
+                                if (v_node.type == NodeType::BinaryOp && v_node.as.bin_op.op == static_cast<int>(BinaryOp::Concat)) {
+                                    std::vector<uint32_t> ws;
+                                    ws.push_back(v_idx);
+                                    while (!ws.empty()) {
+                                        uint32_t cur = ws.back(); ws.pop_back();
+                                        const auto& cn = ctx.nodes[cur];
+                                        if (cn.type == NodeType::BinaryOp && cn.as.bin_op.op == static_cast<int>(BinaryOp::Concat)) {
+                                            ws.push_back(cn.as.bin_op.right);
+                                            ws.push_back(cn.as.bin_op.left);
+                                        } else {
+                                            ops.push_back(cur);
+                                        }
+                                    }
+                                    if (!ops.empty() && ctx.nodes[ops[0]].type == NodeType::Identifier) {
+                                        std::string_view fn(ctx.nodes[ops[0]].as.ident.name, ctx.nodes[ops[0]].as.ident.length);
+                                        if (fn == name) is_sb_concat = true;
+                                    }
+                                }
+                            }
+
+                            if (is_sb_concat) {
+
+                                out << "{ clx::LValue _gval = clx::get_env_var(L, _ENV, \"" << name << "\");\n";
+                                out << "  if (sb_" << name << ".empty() && _gval.type == clx::ValueType::String) {\n";
+                                out << "    sb_" << name << ".append(_gval.as_string(), _gval.string_len()); }\n";
+                                for (size_t i = 1; i < ops.size(); ++i) {
+                                    uint32_t op_idx = ops[i];
+                                    const auto& op_node = ctx.nodes[op_idx];
+                                    if (op_node.type == NodeType::String) {
+                                        size_t sfi = std::distance(state.string_pool.begin(), std::find(state.string_pool.begin(), state.string_pool.end(), std::string_view(op_node.as.string.text, op_node.as.string.length)));
+                                        out << "  sb_" << name << ".append(cstr_[" << sfi << "].as_string(), cstr_[" << sfi << "].string_len());\n";
+                                    } else if (op_node.type == NodeType::Integer) {
+                                        out << "  sb_" << name << ".append(L, clx::LValue(static_cast<double>(" << op_node.as.integer.val << ".0)));\n";
+                                    } else if (op_node.type == NodeType::Number) {
+                                        out << "  sb_" << name << ".append(L, clx::LValue(static_cast<double>(" << op_node.as.number.val << ")));\n";
+                                    } else {
+                                        out << "  sb_" << name << ".append(L, ";
+                                        emit_node(op_idx);
+                                        out << ");\n";
+                                    }
+                                }
+                                out << "  clx::set_env_var(L, _ENV, \"" << name << "\", clx::LValue(sb_" << name << ".to_string(L)));\n";
+                                out << "}\n";
+                            } else {
+                                out << "clx::set_env_var(L, _ENV, \"" << name << "\", ";
+                                if (v_count > 0) emit_node(ctx.block_statements[first_v]);
+                                else out << "clx::LValue()";
+                                out << ");\n";
+                            }
                         }
                     } else if (is_loc) {
                         bool intercepted = false;
@@ -1806,8 +1814,8 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx) {
                                     }
 
                                     state.direct_callables.insert(name);
-                                    if (is_boxed) out << "(*l_" << name << ") = L->create_closure(_impl_" << name << ");\n";
-                                    else out << "l_" << name << " = L->create_closure(_impl_" << name << ");\n";
+                                    if (is_boxed) out << "(*l_" << name << ") = L->create_closure(_impl_" << name << ", static_cast<clx::LTable*>(_ENV.as_pointer()));\n";
+                                    else out << "l_" << name << " = L->create_closure(_impl_" << name << ", static_cast<clx::LTable*>(_ENV.as_pointer()));\n";
                                     { size_t _sfi2 = std::distance(state.string_pool.begin(), std::find(state.string_pool.begin(), state.string_pool.end(), name)); out << "L->_G->settable(cstr_[" << _sfi2 << "], " << (is_boxed ? "(*l_" + std::string(name) + ")" : "l_" + std::string(name)) << ");\n"; }
                                     intercepted = true;
                                 }
@@ -2021,7 +2029,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx) {
                                     out << ";\n";
                                 }
 
-                                out << "clx::LValue _tmp_" << node_idx << "_" << i << " = L->create_closure(_impl_" << fname << ");\n";
+                                out << "clx::LValue _tmp_" << node_idx << "_" << i << " = L->create_closure(_impl_" << fname << ", static_cast<clx::LTable*>(_ENV.as_pointer()));\n";
                                 state.direct_callables.insert(fname);
                                 intercepted = true;
                             }
@@ -2483,7 +2491,9 @@ void CodeEmitter::emitIdentifier(const ASTNode& node, uint32_t node_idx) {
             bool is_loc = this->is_local(name, is_boxed);
 
             if (node.as.ident.is_global) {
-                if (state.global_constants.count(name)) {
+                if (name == "_ENV") {
+                    out << "_ENV";
+                } else if (state.global_constants.count(name)) {
                     out << "clx::LValue(static_cast<double>(" << state.global_constants[name] << "))";
                 } else if (state.string_builders.count(name)) {
                     out << "(sb_" << name << ".empty() ? clx::get_env_var(L, _ENV, \"" << name << "\") : clx::LValue(sb_" << name << ".to_string(L)))";
