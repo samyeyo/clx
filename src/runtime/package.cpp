@@ -18,6 +18,7 @@ static MultiValue pack_require(LState* L, const LValue* args, size_t count) {
         throw_runtime_error("bad argument #1 to 'require' (string expected, got no value)");
 
     const char* modname = check_string(L, args[0]);
+    LValue env = (count > 1 && args[1].type != Nil) ? args[1] : LValue();
     LValue loaded_key = LValue(L->intern_string("loaded"));
     LValue preload_key = LValue(L->intern_string("preload"));
 
@@ -43,10 +44,17 @@ static MultiValue pack_require(LState* L, const LValue* args, size_t count) {
         LTable* preload = static_cast<LTable*>(preload_ptr.as_pointer());
         LValue loader = preload->gettable(mod_key);
         if (loader.type == Function) {
-            LValue loader_args[2] = { mod_key, loader };
+            LValue loader_args[1] = { mod_key };
             L->shadow_stack[L->shadow_top++] = TypedSlot(&loader_args[0].val, &loader_args[0].type);
-            L->shadow_stack[L->shadow_top++] = TypedSlot(&loader_args[1].val, &loader_args[1].type);
+
+            LTable* saved_G = L->_G;
+            LValue saved_G_val(ValueType::Table, saved_G);
+            L->shadow_stack[L->shadow_top++] = TypedSlot(&saved_G_val.val, &saved_G_val.type);
+
+            if (env.type == Table) L->_G = static_cast<LTable*>(env.as_pointer());
             MultiValue res = call_function(L, loader, loader_args, 1, __FILE__, __LINE__);
+            L->_G = saved_G;
+
             L->shadow_top -= 2;
 
             LValue result = (res.count > 0) ? res[0] : LValue(true);
