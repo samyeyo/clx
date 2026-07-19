@@ -95,6 +95,16 @@ inline bool yields_number(const ASTContext& ctx, const AnalysisState& state, uin
                 goto done;
             }
 
+            // Function parameters tracked as pure numeric arrays (integer-keyed)
+            auto fpit = state.pure_numeric_func_params.find(tn);
+            if (fpit != state.pure_numeric_func_params.end()) {
+                auto foi = state.node_func_owner.find(node_idx);
+                if (foi != state.node_func_owner.end() && fpit->second.count(foi->second)) {
+                    result = yields_number(ctx, state, n.as.table_access.key, known_numbers, self_name, param_numbers, depth);
+                    goto done;
+                }
+            }
+
 
             auto it = state.numeric_table_fields.find(tn);
             if (it == state.numeric_table_fields.end()) {
