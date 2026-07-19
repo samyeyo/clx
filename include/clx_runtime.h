@@ -479,6 +479,7 @@ struct LTable : public LHeader {
     size_t     hash_size;
     size_t     hash_count;
     size_t     hash_tombs;
+    uint64_t*  hash_bitmap;   // 1 bit per hash slot: 1 = occupied (ktype != Nil)
 
     uint32_t   hash_version;
     uint32_t   array_version;
