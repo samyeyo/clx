@@ -612,6 +612,50 @@ static CLX_INLINE_HOT bool lvalue_eq_fast(const LValue& a, const LValue& b) {
     return false;
 }
 
+//------------------ Bump arena for interned strings
+struct StringArena {
+    struct Block {
+        char*   base;
+        size_t  used;
+        size_t  capacity;
+        Block*  next;
+        Block(size_t cap) : base(new char[cap]()), used(0), capacity(cap), next(nullptr) {}
+        ~Block() { delete[] base; }
+    };
+
+    Block*  head    = nullptr;
+    Block*  current = nullptr;
+    size_t  block_size;
+
+    static constexpr size_t DEFAULT_BLOCK_SIZE = 65536;
+
+    StringArena(size_t bs = DEFAULT_BLOCK_SIZE) : block_size(bs) {
+        head = current = new Block(block_size);
+    }
+    ~StringArena() {
+        Block* b = head;
+        while (b) { Block* n = b->next; delete b; b = n; }
+    }
+    StringArena(const StringArena&) = delete;
+    StringArena& operator=(const StringArena&) = delete;
+
+    // Bump-allocate `size` bytes. Returns pointer to allocated region.
+    // Header (16 bytes) is included in size — caller writes the baked
+    // hash/len into the first 16 bytes and returns ptr + 16 as `baked`.
+    CLX_INLINE char* allocate(size_t size) {
+        // 16-byte align the allocation
+        size = (size + 15) & ~size_t(15);
+        if (!current || current->used + size > current->capacity) {
+            Block* b = new Block(std::max(block_size, size));
+            current->next = b;
+            current = b;
+        }
+        char* result = current->base + current->used;
+        current->used += size;
+        return result;
+    }
+};
+
 //------------------ String interning pool
 struct StringPool {
     struct Slot {
@@ -621,18 +665,17 @@ struct StringPool {
         bool empty() const { return baked == nullptr; }
     };
 
-    Slot*  slots    = nullptr;
-    size_t capacity = 0;
-    size_t count    = 0;
-    uint64_t guard = 0xDEADBEEFCAFEBABEULL;
+    Slot*       slots    = nullptr;
+    size_t      capacity = 0;
+    size_t      count    = 0;
+    StringArena arena;
+    uint64_t    guard = 0xDEADBEEFCAFEBABEULL;
 
     static constexpr size_t INIT_CAP = 64;
 
-    StringPool() { guard = 0xDEADBEEFCAFEBABEULL; rehash(INIT_CAP); }
+    StringPool() : arena(65536) { guard = 0xDEADBEEFCAFEBABEULL; rehash(INIT_CAP); }
     ~StringPool() {
-        if (!slots) return;
-        for (size_t i = 0; i < capacity; ++i)
-            if (slots[i].baked) delete[] (slots[i].baked - 16);
+        // Arena frees all string memory in bulk. Just free the slot table.
         delete[] slots;
     }
     StringPool(const StringPool&) = delete;
@@ -663,9 +706,11 @@ struct StringPool {
         for (;;) {
             Slot& s = slots[idx];
             if (s.empty()) {
-                s = Slot{prealloc, h, static_cast<uint32_t>(len)};
+                // Copy preallocated data into arena, free the heap buffer
+                s = make_slot(prealloc, len, h);
+                delete[] (prealloc - 16);
                 count++;
-                return prealloc;
+                return s.baked;
             }
             if (s.hash == h && s.len == static_cast<uint32_t>(len) &&
                 clx_memcmp(s.baked, prealloc, len) == 0) {
@@ -695,8 +740,11 @@ struct StringPool {
     }
 
 private:
-    static Slot make_slot(const char* str, size_t len, uint64_t h) {
-        char* mem = new char[16 + len + 1]();
+    Slot make_slot(const char* str, size_t len, uint64_t h) {
+        // Allocate 16 (header) + len + 1 (null) from arena, aligned to 16
+        size_t total = 16 + len + 1;
+        total = (total + 15) & ~size_t(15);
+        char* mem = arena.allocate(total);
         uint32_t len32 = static_cast<uint32_t>(len);
         uint32_t h_low = static_cast<uint32_t>(h);
         clx_memcpy(mem,     &h_low, 4);
@@ -706,6 +754,8 @@ private:
         return Slot{mem + 16, h, len32};
     }
 
+    // Rehash: only moves Slot entries. String data lives in the arena
+    // and never moves.
     void rehash(size_t new_cap) {
         Slot* old    = slots;
         size_t old_cap = capacity;
