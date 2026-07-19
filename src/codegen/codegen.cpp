@@ -798,7 +798,7 @@ void CodeEmitter::emitCallExpression(const ASTNode& node, uint32_t node_idx) {
                     out << "    for (size_t i = 0; i < _dyn_count; ++i) L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&_dyn_buf[i].val, &_dyn_buf[i].type);\n";
                     out << "    clx::MultiValue _main_ret = clx::call_direct(L, ";
                     if (is_method_call) out << "_m_func"; else emit_node(node.as.call_expr.target);
-                    out << ", _dyn_buf, _dyn_count);\n";
+                    out << ", _dyn_buf, _dyn_count, \"" << ctx.filename << "\", " << node.line << ");\n";
                     out << "    L->shadow_top -= _dyn_count;\n";
                 }
 
@@ -840,7 +840,7 @@ void CodeEmitter::emitCallExpression(const ASTNode& node, uint32_t node_idx) {
                         out << "    for (size_t i = 0; i < " << node.as.call_expr.arg_count << "; ++i) L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&args[i].val, &args[i].type);\n";
                         out << "    clx::MultiValue _main_ret = clx::call_direct(L, ";
                         if (is_method_call) out << "_m_func"; else emit_node(node.as.call_expr.target);
-                        out << ", args, " << node.as.call_expr.arg_count << ");\n";
+                        out << ", args, " << node.as.call_expr.arg_count << ", \"" << ctx.filename << "\", " << node.line << ");\n";
                         out << "    L->shadow_top -= " << node.as.call_expr.arg_count << ";\n";
                     }
                 } else {
@@ -863,7 +863,7 @@ void CodeEmitter::emitCallExpression(const ASTNode& node, uint32_t node_idx) {
                     } else { _call_direct_normal2:;
                         out << "    clx::MultiValue _main_ret = clx::call_direct(L, ";
                         if (is_method_call) out << "_m_func"; else emit_node(node.as.call_expr.target);
-                        out << ", nullptr, 0);\n";
+                        out << ", nullptr, 0, \"" << ctx.filename << "\", " << node.line << ");\n";
                     }
                 }
 

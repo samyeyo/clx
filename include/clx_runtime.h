@@ -431,7 +431,7 @@ struct LCFunction : public LHeader {
 };
 
 //------------------ Fast path for LCFunction direct calls
-MultiValue call_direct(LState* L, const LValue& func, const LValue* args, size_t count);
+MultiValue call_direct(LState* L, const LValue& func, const LValue* args, size_t count, const char* file, int line);
 
 //------------------ Userdata block
 struct LUserdata : public LHeader {

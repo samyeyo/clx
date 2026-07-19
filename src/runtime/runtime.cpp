@@ -1318,7 +1318,7 @@ MultiValue pcall_function(LState* L, const LValue& func, const LValue* args, siz
 
 
 //------------------ call_direct — fast path for LCFunction direct calls
-MultiValue call_direct(LState* L, const LValue& func, const LValue* args, size_t count) {
+MultiValue call_direct(LState* L, const LValue& func, const LValue* args, size_t count, const char* file, int line) {
     if (func.type == ValueType::Function) {
         LCFunction* f = static_cast<LCFunction*>(func.as_pointer());
         if (f->direct) {
@@ -1329,7 +1329,7 @@ MultiValue call_direct(LState* L, const LValue& func, const LValue* args, size_t
             return ret;
         }
     }
-    return call_function(L, func, args, count, "", 0);
+    return call_function(L, func, args, count, file, line);
 }
 
 //------------------ getmetafield — get metatable field
