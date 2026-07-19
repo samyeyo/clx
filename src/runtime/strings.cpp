@@ -121,17 +121,17 @@ MultiValue str_sub(LState* L, const LValue* args, size_t count) {
         if (subl <= 6)
             return MultiValue(LValue::istr(src, subl));
 
-        uint32_t h = subl <= 8 ? swar_hash_8(src, subl) : wyhash_str(src, subl);
+        uint64_t h = subl <= 8 ? swar_hash_8(src, subl) : wyhash_str(src, subl);
 
         if (const char* hit = L->string_pool.lookup(src, subl, h))
             return MultiValue(LValue(hit));
         uint32_t len32 = static_cast<uint32_t>(subl);
-        char* mem = new char[8 + subl + 1];
+        char* mem = new char[16 + subl + 1]();
         clx_memcpy(mem,     &h,     4);
-        clx_memcpy(mem + 4, &len32, 4);
-        clx_memcpy(mem + 8, src, subl);
-        mem[8 + subl] = '\0';
-        return MultiValue(LValue(L->string_pool.intern_preallocated(mem + 8, h, subl)));
+        clx_memcpy(mem + 8, &len32, 4);
+        clx_memcpy(mem + 16, src, subl);
+        mem[16 + subl] = '\0';
+        return MultiValue(LValue(L->string_pool.intern_preallocated(mem + 16, h, subl)));
     } else {
         return MultiValue(LValue(L->intern_string("", 0)));
     }
@@ -148,18 +148,18 @@ MultiValue str_reverse(LState* L, const LValue* args, size_t count) {
         return MultiValue(LValue::istr(buf, static_cast<uint32_t>(l)));
     }
     uint32_t len32 = static_cast<uint32_t>(l);
-    char* mem = new char[8 + l + 1];
-    clx_memcpy(mem + 4, &len32, 4);
-    char* dst = mem + 8;
+    char* mem = new char[16 + l + 1]();
+    clx_memcpy(mem + 8, &len32, 4);
+    char* dst = mem + 16;
     for (size_t i = 0; i < l; i++)
         dst[i] = s[l - i - 1];
     dst[l] = '\0';
-    uint32_t h = l <= 8 ? swar_hash_8(dst, l) : wyhash_str(dst, l);
+    uint64_t h = l <= 8 ? swar_hash_8(dst, l) : wyhash_str(dst, l);
     if (const char* hit = L->string_pool.lookup(dst, l, h)) {
         delete[] mem;
         return MultiValue(LValue(hit));
     }
-    clx_memcpy(mem, &h, 4);
+    clx_memcpy(mem, &h, 8);
     return MultiValue(LValue(L->string_pool.intern_preallocated(dst, h, l)));
 }
 
@@ -174,18 +174,18 @@ MultiValue str_lower(LState* L, const LValue* args, size_t count) {
         return MultiValue(LValue::istr(buf, static_cast<uint32_t>(l)));
     }
     uint32_t len32 = static_cast<uint32_t>(l);
-    char* mem = new char[8 + l + 1];
-    clx_memcpy(mem + 4, &len32, 4);
-    char* dst = mem + 8;
+    char* mem = new char[16 + l + 1]();
+    clx_memcpy(mem + 8, &len32, 4);
+    char* dst = mem + 16;
     for (size_t i = 0; i < l; i++)
         dst[i] = (char)std::tolower((unsigned char)s[i]);
     dst[l] = '\0';
-    uint32_t h = l <= 8 ? swar_hash_8(dst, l) : wyhash_str(dst, l);
+    uint64_t h = l <= 8 ? swar_hash_8(dst, l) : wyhash_str(dst, l);
     if (const char* hit = L->string_pool.lookup(dst, l, h)) {
         delete[] mem;
         return MultiValue(LValue(hit));
     }
-    clx_memcpy(mem, &h, 4);
+    clx_memcpy(mem, &h, 8);
     return MultiValue(LValue(L->string_pool.intern_preallocated(dst, h, l)));
 }
 
@@ -200,18 +200,18 @@ MultiValue str_upper(LState* L, const LValue* args, size_t count) {
         return MultiValue(LValue::istr(buf, static_cast<uint32_t>(l)));
     }
     uint32_t len32 = static_cast<uint32_t>(l);
-    char* mem = new char[8 + l + 1];
-    clx_memcpy(mem + 4, &len32, 4);
-    char* dst = mem + 8;
+    char* mem = new char[16 + l + 1]();
+    clx_memcpy(mem + 8, &len32, 4);
+    char* dst = mem + 16;
     for (size_t i = 0; i < l; i++)
         dst[i] = (char)std::toupper((unsigned char)s[i]);
     dst[l] = '\0';
-    uint32_t h = l <= 8 ? swar_hash_8(dst, l) : wyhash_str(dst, l);
+    uint64_t h = l <= 8 ? swar_hash_8(dst, l) : wyhash_str(dst, l);
     if (const char* hit = L->string_pool.lookup(dst, l, h)) {
         delete[] mem;
         return MultiValue(LValue(hit));
     }
-    clx_memcpy(mem, &h, 4);
+    clx_memcpy(mem, &h, 8);
     return MultiValue(LValue(L->string_pool.intern_preallocated(dst, h, l)));
 }
 
@@ -241,22 +241,22 @@ MultiValue str_rep(LState* L, const LValue* args, size_t count) {
         return MultiValue(LValue::istr(buf, static_cast<uint32_t>(totallen)));
     }
     uint32_t len32 = static_cast<uint32_t>(totallen);
-    char* mem = new char[8 + totallen + 1];
-    clx_memcpy(mem + 4, &len32, 4);
-    char* p = mem + 8;
+    char* mem = new char[16 + totallen + 1]();
+    clx_memcpy(mem + 8, &len32, 4);
+    char* p = mem + 16;
     for (int64_t i = 0; i < n - 1; i++) {
         std::memcpy(p, s, len); p += len;
         if (lsep > 0) { std::memcpy(p, sep, lsep); p += lsep; }
     }
     std::memcpy(p, s, len);
     p[len] = '\0';
-    uint32_t h = totallen <= 8 ? swar_hash_8(mem + 8, totallen) : wyhash_str(mem + 8, totallen);
-    if (const char* hit = L->string_pool.lookup(mem + 8, totallen, h)) {
+    uint64_t h = totallen <= 8 ? swar_hash_8(mem + 16, totallen) : wyhash_str(mem + 16, totallen);
+    if (const char* hit = L->string_pool.lookup(mem + 16, totallen, h)) {
         delete[] mem;
         return MultiValue(LValue(hit));
     }
-    clx_memcpy(mem, &h, 4);
-    return MultiValue(LValue(L->string_pool.intern_preallocated(mem + 8, h, totallen)));
+    clx_memcpy(mem, &h, 8);
+    return MultiValue(LValue(L->string_pool.intern_preallocated(mem + 16, h, totallen)));
 }
 
 
@@ -299,9 +299,9 @@ MultiValue str_char(LState* L, const LValue* args, size_t count) {
         }
         return MultiValue(LValue::istr(buf, count));
     }
-    char* mem = new char[8 + count + 1];
-    clx_memcpy(mem + 4, &count, 4);
-    char* dst = mem + 8;
+    char* mem = new char[16 + count + 1]();
+    clx_memcpy(mem + 8, &count, 4);
+    char* dst = mem + 16;
     for (size_t i = 0; i < count; i++) {
         int64_t c;
         if (!to_integer(args[i], c) || c < 0 || c > 255) {
@@ -313,8 +313,8 @@ MultiValue str_char(LState* L, const LValue* args, size_t count) {
         dst[i] = (char)(unsigned char)c;
     }
     dst[count] = '\0';
-    uint32_t h = count <= 8 ? swar_hash_8(dst, count) : wyhash_str(dst, count);
-    clx_memcpy(mem, &h, 4);
+    uint64_t h = count <= 8 ? swar_hash_8(dst, count) : wyhash_str(dst, count);
+    clx_memcpy(mem, &h, 8);
     return MultiValue(LValue(L->string_pool.intern_preallocated(dst, h, count)));
 }
 

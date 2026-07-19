@@ -86,20 +86,20 @@ static LValue read_all(LState* L, FILE* fp) {
     if (hint > 0 && hint <= SINGLE_SHOT_LIMIT) {
 
         uint32_t len32 = static_cast<uint32_t>(hint);
-        char* mem = new char[8 + hint + 1];
-        clx_memcpy(mem + 4, &len32, 4);
-        char* dst = mem + 8;
+        char* mem = new char[16 + hint + 1]();
+        clx_memcpy(mem + 8, &len32, 4);
+        char* dst = mem + 16;
         size_t r = std::fread(dst, 1, hint, fp);
         dst[r] = '\0';
         if (r > 0) {
-            uint32_t h = r <= 8 ? swar_hash_8(dst, r) : wyhash_str(dst, r);
+            uint64_t h = r <= 8 ? swar_hash_8(dst, r) : wyhash_str(dst, r);
             if (const char* hit = L->string_pool.lookup(dst, r, h)) {
                 delete[] mem;
                 return LValue(hit);
             }
-            clx_memcpy(mem, &h, 4);
+            clx_memcpy(mem, &h, 8);
 
-            if (r != hint) { len32 = static_cast<uint32_t>(r); clx_memcpy(mem + 4, &len32, 4); }
+            if (r != hint) { len32 = static_cast<uint32_t>(r); clx_memcpy(mem + 8, &len32, 4); }
             return LValue(L->string_pool.intern_preallocated(dst, h, r));
         }
         delete[] mem;
@@ -193,13 +193,13 @@ static LValue make_file(LState* L, FILE* fp, bool close_on_gc, bool is_pipe = fa
                 }
                 size_t sz = static_cast<size_t>(n);
                 uint32_t len32 = static_cast<uint32_t>(sz);
-                char* mem = new char[8 + sz + 1];
-                clx_memcpy(mem + 4, &len32, 4);
-                size_t r = std::fread(mem + 8, 1, sz, f->fp);
-                mem[8 + r] = '\0';
-                uint32_t h = r <= 8 ? swar_hash_8(mem + 8, r) : wyhash_str(mem + 8, r);
-                clx_memcpy(mem, &h, 4);
-                results.push_back(LValue(L->string_pool.intern_preallocated(mem + 8, h, r)));
+                char* mem = new char[16 + sz + 1]();
+                clx_memcpy(mem + 8, &len32, 4);
+                size_t r = std::fread(mem + 16, 1, sz, f->fp);
+                mem[16 + r] = '\0';
+                uint64_t h = r <= 8 ? swar_hash_8(mem + 16, r) : wyhash_str(mem + 16, r);
+                clx_memcpy(mem, &h, 8);
+                results.push_back(LValue(L->string_pool.intern_preallocated(mem + 16, h, r)));
             } else if (a[i].type == String) {
                 const char* fmt = a[i].as_string();
                 if (std::strcmp(fmt, "*a") == 0 || std::strcmp(fmt, "*all") == 0) {
@@ -381,13 +381,13 @@ static LValue get_std_file(LState* L, FILE* fp) {
                 if (n <= 0) { results.push_back(LValue(L->intern_string("", 0))); continue; }
                 size_t sz = static_cast<size_t>(n);
                 uint32_t len32 = static_cast<uint32_t>(sz);
-                char* mem = new char[8 + sz + 1];
-                clx_memcpy(mem + 4, &len32, 4);
-                size_t r = std::fread(mem + 8, 1, sz, f->fp);
-                mem[8 + r] = '\0';
-                uint32_t h = r <= 8 ? swar_hash_8(mem + 8, r) : wyhash_str(mem + 8, r);
-                clx_memcpy(mem, &h, 4);
-                results.push_back(LValue(L->string_pool.intern_preallocated(mem + 8, h, r)));
+                char* mem = new char[16 + sz + 1]();
+                clx_memcpy(mem + 8, &len32, 4);
+                size_t r = std::fread(mem + 16, 1, sz, f->fp);
+                mem[16 + r] = '\0';
+                uint64_t h = r <= 8 ? swar_hash_8(mem + 16, r) : wyhash_str(mem + 16, r);
+                clx_memcpy(mem, &h, 8);
+                results.push_back(LValue(L->string_pool.intern_preallocated(mem + 16, h, r)));
             } else if (a[i].type == String) {
                 const char* fmt = a[i].as_string();
                 if (std::strcmp(fmt, "*a") == 0 || std::strcmp(fmt, "*all") == 0) {
@@ -622,13 +622,13 @@ static MultiValue io_read(LState* L, const LValue* args, size_t count) {
             if (n <= 0) { results.push_back(LValue(L->intern_string("", 0))); continue; }
             size_t sz = static_cast<size_t>(n);
             uint32_t len32 = static_cast<uint32_t>(sz);
-            char* mem = new char[8 + sz + 1];
-            clx_memcpy(mem + 4, &len32, 4);
-            size_t r = std::fread(mem + 8, 1, sz, f->fp);
-            mem[8 + r] = '\0';
-            uint32_t h = r <= 8 ? swar_hash_8(mem + 8, r) : wyhash_str(mem + 8, r);
-            clx_memcpy(mem, &h, 4);
-            results.push_back(LValue(L->string_pool.intern_preallocated(mem + 8, h, r)));
+            char* mem = new char[16 + sz + 1]();
+            clx_memcpy(mem + 8, &len32, 4);
+            size_t r = std::fread(mem + 16, 1, sz, f->fp);
+            mem[16 + r] = '\0';
+            uint64_t h = r <= 8 ? swar_hash_8(mem + 16, r) : wyhash_str(mem + 16, r);
+            clx_memcpy(mem, &h, 8);
+            results.push_back(LValue(L->string_pool.intern_preallocated(mem + 16, h, r)));
         } else if (args[i].type == String) {
             const char* fmt = args[i].as_string();
             if (std::strcmp(fmt, "*a") == 0 || std::strcmp(fmt, "*all") == 0) {

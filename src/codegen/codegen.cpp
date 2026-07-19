@@ -396,14 +396,14 @@ void CodeEmitter::emit(uint32_t root_node, std::string_view module_name) {
 
     if (!state.string_pool.empty()) {
         size_t n = state.string_pool.size();
-        out << "    static const struct { const char* s; unsigned int len; unsigned int hash; } _cstr_data[" << n << "] = {\n";
+        out << "    static const struct { const char* s; unsigned int len; uint64_t hash; } _cstr_data[" << n << "] = {\n";
         for (size_t i = 0; i < n; ++i) {
             auto& s = state.string_pool[i];
             std::string decoded = lua_decode_string(s);
             out << "        {\"" << cpp_escape(decoded) << "\", "
                 << decoded.length() << ", "
                 << (decoded.length() <= 8 ? swar_hash_8(decoded.data(), decoded.length()) : wyhash_str(decoded.data(), decoded.length()))
-                << "U},\n";
+                << "ULL},\n";
         }
         out << "    };\n";
         out << "    for (size_t _i = 0; _i < " << n << "; ++_i)\n";

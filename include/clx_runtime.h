@@ -231,7 +231,7 @@ struct LValue {
             if (top) return static_cast<uint32_t>(top);
             if (val.payload.u64 == 0) return 0;
             uint32_t len;
-            clx_memcpy(&len, static_cast<const char*>(val.payload.ptr) - 4, 4);
+            clx_memcpy(&len, static_cast<const char*>(val.payload.ptr) - 8, 4);
             return len;
         }
         return 0;
@@ -508,22 +508,22 @@ static constexpr uint64_t WY_SECRET0 = 0xa0761d6478bd642fULL;
 static constexpr uint64_t WY_SECRET1 = 0xe7037ed1a0b428dbULL;
 
 //------------------ 64-bit wyhash mix
-static CLX_INLINE_HOT uint32_t wyhash64(uint64_t v) {
+static CLX_INLINE_HOT uint64_t wyhash64(uint64_t v) {
     v ^= WY_SECRET0;
     uint64_t lo, hi;
     lo = clx_umul128(v, v ^ WY_SECRET1, &hi);
-    return static_cast<uint32_t>(lo ^ hi);
+    return lo ^ hi;
 }
 
 //------------------ SWAR hash for <=8 byte strings
-static CLX_INLINE uint32_t swar_hash_8(const char* p, size_t len) {
+static CLX_INLINE uint64_t swar_hash_8(const char* p, size_t len) {
     uint64_t data = 0;
     if (len > 0 && len <= 8) clx_memcpy(&data, p, len);
     return wyhash64(data ^ static_cast<uint64_t>(len));
 }
 
 //------------------ Wyhash for arbitrary-length strings
-static CLX_INLINE uint32_t wyhash_str(const char* p, size_t len) {
+static CLX_INLINE uint64_t wyhash_str(const char* p, size_t len) {
     uint64_t seed = WY_SECRET0 ^ static_cast<uint64_t>(len);
     size_t i = 0;
     for (; i + 8 <= len; i += 8) {
@@ -554,18 +554,18 @@ static CLX_INLINE uint32_t wyhash_str(const char* p, size_t len) {
         lo = clx_umul128(seed, tail, &hi);
         seed = lo ^ hi;
     }
-    return static_cast<uint32_t>(seed ^ (seed >> 32));
+    return seed ^ (seed >> 32);
 }
 
 //------------------ Reads baked hash from interned string header
-static CLX_INLINE_COLD uint32_t string_baked_hash(const char* ptr) {
-    uint32_t h;
-    clx_memcpy(&h, ptr - 8, 4);
+static CLX_INLINE_COLD uint64_t string_baked_hash(const char* ptr) {
+    uint64_t h;
+    clx_memcpy(&h, ptr - 16, 8);
     return h;
 }
 
 //------------------ Hash an LValue by type
-static CLX_INLINE_HOT uint32_t lvalue_hash(const LValue& key) {
+static CLX_INLINE_HOT uint64_t lvalue_hash(const LValue& key) {
     if (key.type == ValueType::String) {
         if (key.val.payload.u64 >> 56) {
             uint32_t len = static_cast<uint32_t>(key.val.payload.u64 >> 56);
@@ -574,8 +574,8 @@ static CLX_INLINE_HOT uint32_t lvalue_hash(const LValue& key) {
         }
         if (key.val.payload.u64 == 0) return swar_hash_8("", 0);
         const char* ptr = static_cast<const char*>(key.val.payload.ptr);
-        uint32_t h;
-        clx_memcpy(&h, ptr - 8, 4);
+        uint64_t h;
+        clx_memcpy(&h, ptr - 16, 8);
         return h;
     }
     if (key.type == ValueType::Int64) {
@@ -583,13 +583,13 @@ static CLX_INLINE_HOT uint32_t lvalue_hash(const LValue& key) {
         v ^= WY_SECRET0;
         uint64_t lo, hi;
         lo = clx_umul128(v, v ^ WY_SECRET1, &hi);
-        return static_cast<uint32_t>(lo ^ hi);
+        return lo ^ hi;
     }
     uint64_t v = key.val.payload.u64 ^ (static_cast<uint64_t>(static_cast<uint8_t>(key.type)) << 56);
     v ^= WY_SECRET0;
     uint64_t lo, hi;
     lo = clx_umul128(v, v ^ WY_SECRET1, &hi);
-    return static_cast<uint32_t>(lo ^ hi);
+    return lo ^ hi;
 }
 
 //------------------ Fast cross-type equality (string/int/number/double)
@@ -615,7 +615,7 @@ static CLX_INLINE_HOT bool lvalue_eq_fast(const LValue& a, const LValue& b) {
 struct StringPool {
     struct Slot {
         char*    baked;
-        uint32_t hash;
+        uint64_t hash;
         uint32_t len;
         bool empty() const { return baked == nullptr; }
     };
@@ -631,13 +631,13 @@ struct StringPool {
     ~StringPool() {
         if (!slots) return;
         for (size_t i = 0; i < capacity; ++i)
-            if (slots[i].baked) delete[] (slots[i].baked - 8);
+            if (slots[i].baked) delete[] (slots[i].baked - 16);
         delete[] slots;
     }
     StringPool(const StringPool&) = delete;
     StringPool& operator=(const StringPool&) = delete;
 
-    const char* intern(const char* str, size_t len, uint32_t h) {
+    const char* intern(const char* str, size_t len, uint64_t h) {
         if (count * 2 >= capacity) rehash(capacity * 2);
         size_t mask = capacity - 1;
         size_t idx  = h & mask;
@@ -655,7 +655,7 @@ struct StringPool {
         }
     }
 
-    const char* intern_preallocated(char* prealloc, uint32_t h, size_t len) {
+    const char* intern_preallocated(char* prealloc, uint64_t h, size_t len) {
         if (count * 2 >= capacity) rehash(capacity * 2);
         size_t mask = capacity - 1;
         size_t idx  = h & mask;
@@ -668,14 +668,14 @@ struct StringPool {
             }
             if (s.hash == h && s.len == static_cast<uint32_t>(len) &&
                 clx_memcmp(s.baked, prealloc, len) == 0) {
-                delete[] (prealloc - 8);
+                delete[] (prealloc - 16);
                 return s.baked;
             }
             idx = (idx + 1) & mask;
         }
     }
 
-    const char* lookup(const char* str, size_t len, uint32_t h) const {
+    const char* lookup(const char* str, size_t len, uint64_t h) const {
         if (count == 0) return nullptr;
         size_t mask = capacity - 1;
         size_t idx  = h & mask;
@@ -694,14 +694,15 @@ struct StringPool {
     }
 
 private:
-    static Slot make_slot(const char* str, size_t len, uint32_t h) {
-        char* mem = new char[8 + len + 1];
+    static Slot make_slot(const char* str, size_t len, uint64_t h) {
+        char* mem = new char[16 + len + 1]();
         uint32_t len32 = static_cast<uint32_t>(len);
-        clx_memcpy(mem,     &h,     4);
-        clx_memcpy(mem + 4, &len32, 4);
-        clx_memcpy(mem + 8, str, len);
-        mem[8 + len] = '\0';
-        return Slot{mem + 8, h, len32};
+        uint32_t h_low = static_cast<uint32_t>(h);
+        clx_memcpy(mem,     &h_low, 4);
+        clx_memcpy(mem + 8, &len32, 4);
+        clx_memcpy(mem + 16, str, len);
+        mem[16 + len] = '\0';
+        return Slot{mem + 16, h, len32};
     }
 
     void rehash(size_t new_cap) {
@@ -803,7 +804,7 @@ struct LState {
         return intern_lvalue(s.data(), s.size());
     }
     CLX_INLINE const char* intern_string(const char* str, size_t len) {
-        uint32_t h = len <= 8 ? swar_hash_8(str, len) : wyhash_str(str, len);
+        uint64_t h = len <= 8 ? swar_hash_8(str, len) : wyhash_str(str, len);
         return string_pool.intern(str, len, h);
     }
     CLX_INLINE const char* intern_string(const std::string& s) {
@@ -812,7 +813,7 @@ struct LState {
     CLX_INLINE const char* intern_string(const char* str) {
         return intern_string(str, __builtin_strlen(str));
     }
-    CLX_INLINE const char* intern_prehashed(const char* str, size_t len, uint32_t h) {
+    CLX_INLINE const char* intern_prehashed(const char* str, size_t len, uint64_t h) {
         return string_pool.intern(str, len, h);
     }
 
@@ -970,14 +971,14 @@ public:
         if (cached) return cached;
         if (count == 0) { cached = L->intern_string("", 0); return cached; }
         uint32_t len32 = static_cast<uint32_t>(total_len);
-        char* mem = new char[8 + total_len + 1];
-        clx_memcpy(mem + 4, &len32, 4);
-        char* p = mem + 8;
+        char* mem = new char[16 + total_len + 1]();
+        clx_memcpy(mem + 8, &len32, 4);
+        char* p = mem + 16;
         for (size_t i = 0; i < count; ++i) { clx_memcpy(p, parts[i], lens[i]); p += lens[i]; }
         *p = '\0';
-        uint32_t h = total_len <= 8 ? swar_hash_8(mem + 8, total_len) : wyhash_str(mem + 8, total_len);
-        clx_memcpy(mem, &h, 4);
-        cached = L->string_pool.intern_preallocated(mem + 8, h, total_len);
+        uint64_t h = total_len <= 8 ? swar_hash_8(mem + 16, total_len) : wyhash_str(mem + 16, total_len);
+        clx_memcpy(mem, &h, 8);
+        cached = L->string_pool.intern_preallocated(mem + 16, h, total_len);
         return cached;
     }
 
@@ -1430,19 +1431,19 @@ CLX_INLINE_COLD LValue concat_multi(LState* L, const LValue* args, size_t count)
             return LValue::istr(buf, static_cast<uint32_t>(total_len));
         }
         uint32_t len32 = static_cast<uint32_t>(total_len);
-        char* mem = new char[8 + total_len + 1];
+        char* mem = new char[16 + total_len + 1]();
         clx_memcpy(mem,     &len32, 4);
-        clx_memcpy(mem + 4, &len32, 4);
-        char* p = mem + 8;
+        clx_memcpy(mem + 8, &len32, 4);
+        char* p = mem + 16;
         for (size_t i = 0; i < count; ++i) {
             clx_memcpy(p, ptrs[i], lens[i]);
             p += lens[i];
             if (args[i].type != ValueType::String) delete[] ptrs[i];
         }
         *p = '\0';
-        uint32_t h = total_len <= 8 ? swar_hash_8(mem + 8, total_len) : wyhash_str(mem + 8, total_len);
-        clx_memcpy(mem, &h, 4);
-        const char* result = L->string_pool.intern_preallocated(mem + 8, h, total_len);
+        uint64_t h = total_len <= 8 ? swar_hash_8(mem + 16, total_len) : wyhash_str(mem + 16, total_len);
+        clx_memcpy(mem, &h, 8);
+        const char* result = L->string_pool.intern_preallocated(mem + 16, h, total_len);
         return LValue(result);
     }
 

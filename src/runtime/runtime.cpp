@@ -375,7 +375,7 @@ void LTable::resize_hash(size_t new_size) {
     if (entries) {
         for (size_t i = 0; i < hash_size; ++i) {
             if (entries[i].ktype == Nil) continue;
-            uint32_t h = lvalue_hash(LValue(entries[i].key, entries[i].ktype)) & mask;
+            uint64_t h = lvalue_hash(LValue(entries[i].key, entries[i].ktype)) & mask;
             while (new_entries[h].ktype != Nil)
                 h = (h + 1) & mask;
             new_entries[h].key = entries[i].key;
@@ -410,7 +410,7 @@ LValue LTable::gettable(const LValue& key) {
     }
     if (hash_size == 0) return LValue();
     uint32_t mask = static_cast<uint32_t>(hash_size - 1);
-    uint32_t h    = lvalue_hash(key) & mask;
+    uint64_t h    = lvalue_hash(key) & mask;
     for (;;) {
         HashEntry& e = entries[h];
         if (e.ktype == Nil) {
@@ -520,7 +520,7 @@ void LTable::settable(const LValue& key, const LValue& val) {
     if (val.type == Nil) {
         if (hash_size == 0) return;
         uint32_t mask = static_cast<uint32_t>(hash_size - 1);
-        uint32_t h = lvalue_hash(key) & mask;
+        uint64_t h = lvalue_hash(key) & mask;
         for (;;) {
             HashEntry& e = entries[h];
             if (e.ktype == Nil) {
@@ -545,7 +545,7 @@ void LTable::settable(const LValue& key, const LValue& val) {
     }
 
     uint32_t mask = static_cast<uint32_t>(hash_size - 1);
-    uint32_t h    = lvalue_hash(key) & mask;
+    uint64_t h    = lvalue_hash(key) & mask;
     int32_t  tomb = -1;
     for (;;) {
         HashEntry& e = entries[h];
