@@ -772,6 +772,10 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                 if (ctx.nodes[t_idx].type == NodeType::Identifier && ctx.nodes[v_idx].type == NodeType::TableConstructor) {
                     std::string_view name(ctx.nodes[t_idx].as.ident.name, ctx.nodes[t_idx].as.ident.length);
                     const auto& tc = ctx.nodes[v_idx].as.table_cons;
+                    // Record known length for tables with fixed constructors
+                    if (tc.count > 0 && state.known_table_lengths.find(name) == state.known_table_lengths.end()) {
+                        state.known_table_lengths[name] = tc.count;
+                    }
                     if (tc.count > 0) {
                         bool has_string_key = false;
                         bool all_numeric = true;
@@ -888,6 +892,31 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                 }
             }
         } else if (n.type == NodeType::CallExpression) {
+            // Detect setmetatable(t, mt) / table.insert(t, ...) / table.remove(t, ...)
+            // — mark first arg as having dynamic length
+            uint32_t _call_target = n.as.call_expr.target;
+            if (_call_target < ctx.nodes.size() && n.as.call_expr.arg_count >= 1) {
+                uint32_t _arg0 = ctx.block_statements[n.as.call_expr.first_arg];
+                if (_arg0 < ctx.nodes.size() && ctx.nodes[_arg0].type == NodeType::Identifier) {
+                    std::string_view _arg_name(ctx.nodes[_arg0].as.ident.name, ctx.nodes[_arg0].as.ident.length);
+                    bool _is_dynamic = false;
+                    if (ctx.nodes[_call_target].type == NodeType::Identifier) {
+                        std::string_view _fname(ctx.nodes[_call_target].as.ident.name, ctx.nodes[_call_target].as.ident.length);
+                        _is_dynamic = (_fname == "setmetatable");
+                    } else if (ctx.nodes[_call_target].type == NodeType::TableAccess) {
+                        uint32_t _tbl = ctx.nodes[_call_target].as.table_access.table;
+                        uint32_t _key = ctx.nodes[_call_target].as.table_access.key;
+                        if (_tbl < ctx.nodes.size() && ctx.nodes[_tbl].type == NodeType::Identifier &&
+                            _key < ctx.nodes.size() && ctx.nodes[_key].type == NodeType::String) {
+                            std::string_view _tbl_n(ctx.nodes[_tbl].as.ident.name, ctx.nodes[_tbl].as.ident.length);
+                            std::string_view _key_n(ctx.nodes[_key].as.string.text, ctx.nodes[_key].as.string.length);
+                            _is_dynamic = (_tbl_n == "table" && (_key_n == "insert" || _key_n == "remove"));
+                        }
+                    }
+                    if (_is_dynamic) state.tables_with_dynamic_length.insert(_arg_name);
+                }
+            }
+
             for (uint32_t i = 0; i < n.as.call_expr.arg_count; ++i) {
                 uint32_t v = ctx.block_statements[n.as.call_expr.first_arg + i];
                 if (v < ctx.nodes.size()) {
