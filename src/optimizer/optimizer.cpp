@@ -869,6 +869,15 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                                 disqualified_arrays.insert(tname);
                             }
                         } else {
+                            // Key is numeric — but only simple identifiers and literals
+                            // qualify for the vector path. Expressions like i*1000 or i+1
+                            // produce sparse keys that would blow up the vector.
+                            {
+                                NodeType ktype = ctx.nodes[k_idx].type;
+                                if (ktype != NodeType::Identifier && ktype != NodeType::Number && ktype != NodeType::Integer) {
+                                    disqualified_arrays.insert(tname);
+                                }
+                            }
                             uint32_t v_idx = ctx.block_statements[n.as.assign.first_value];
                         if (!yields_number(ctx, state, v_idx, &known_numbers) && ctx.nodes[v_idx].type != NodeType::TrueLiteral &&
                             ctx.nodes[v_idx].type != NodeType::FalseLiteral && ctx.nodes[v_idx].type != NodeType::TableAccess) {
