@@ -82,7 +82,7 @@ struct AnalysisState {
     uint32_t current_func_body = 0xFFFFFFFF;
     uint32_t current_arena_func = 0xFFFFFFFF;  // node index of current function if it has an arena
 
-    static constexpr int cs_max = 20;
+    static constexpr int cs_max = 4;
 };
 
 //------------------ is_purely_integer_expr: returns true if a node always evaluates to an integer.
