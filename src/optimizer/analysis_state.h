@@ -43,8 +43,10 @@ struct AnalysisState {
     std::vector<std::string> param_names;
     std::map<uint32_t, uint32_t> table_presize;
     std::map<std::string_view, double> global_constants;
-    std::set<uint32_t> bce_safe_nodes;                 
+    std::set<uint32_t> bce_safe_nodes;
     std::set<std::string_view> pure_numeric_arrays;
+    std::set<std::string_view> tables_with_dynamic_length;  // tables whose # may change (setmetatable, table.insert, table.remove)
+    std::map<std::string_view, size_t> known_table_lengths;  // table name → known length (# operator)
     std::map<std::string_view, std::set<uint32_t>> pure_numeric_func_params;  // param name → set of FunctionDef node indices
     std::map<uint32_t, uint32_t> node_func_owner;  // node index → FunctionDef node index that owns it
     std::set<std::string, std::less<>> native_integers;
