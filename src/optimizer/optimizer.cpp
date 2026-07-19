@@ -1367,6 +1367,140 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
         }
     }
 
+    // Build node→function owner map: for each FunctionDef, mark all nodes within its body
+    state.node_func_owner.clear();
+    for (uint32_t fi = 0; fi < ctx.nodes.size(); ++fi) {
+        const auto& fn = ctx.nodes[fi];
+        if (fn.type != NodeType::FunctionDef) continue;
+        uint32_t body = fn.as.func_def.body_block;
+        if (body >= ctx.nodes.size()) continue;
+        std::vector<uint32_t> stk = {body};
+        while (!stk.empty()) {
+            uint32_t ni = stk.back(); stk.pop_back();
+            if (ni >= ctx.nodes.size()) continue;
+            state.node_func_owner[ni] = fi;
+            const auto& nn = ctx.nodes[ni];
+            auto push = [&](uint32_t idx) { if (idx < ctx.nodes.size()) stk.push_back(idx); };
+            if (nn.type == NodeType::Block)
+                for (uint32_t bi = 0; bi < nn.as.block.count; ++bi)
+                    push(ctx.block_statements[nn.as.block.first_statement + bi]);
+            if (nn.type == NodeType::ForStatement) { push(nn.as.for_stmt.start_expr); push(nn.as.for_stmt.limit_expr); if (nn.as.for_stmt.step_expr != 0xFFFFFFFF) push(nn.as.for_stmt.step_expr); push(nn.as.for_stmt.body_block); }
+            if (nn.type == NodeType::WhileStatement || nn.type == NodeType::RepeatStatement) { push(nn.as.while_stmt.condition); push(nn.as.while_stmt.body_block); }
+            if (nn.type == NodeType::IfStatement) { push(nn.as.if_stmt.condition); if (nn.as.if_stmt.then_block != 0xFFFFFFFF) push(nn.as.if_stmt.then_block); if (nn.as.if_stmt.else_block != 0xFFFFFFFF) push(nn.as.if_stmt.else_block); }
+            if (nn.type == NodeType::BinaryOp) { push(nn.as.bin_op.left); push(nn.as.bin_op.right); }
+            if (nn.type == NodeType::UnaryOp) { push(nn.as.unary_op.expr); }
+            if (nn.type == NodeType::ParenExpression) { push(nn.as.paren_expr.expr); }
+            if (nn.type == NodeType::TableAccess) { push(nn.as.table_access.table); push(nn.as.table_access.key); }
+            if (nn.type == NodeType::CallExpression) { for (uint32_t ai = 0; ai < nn.as.call_expr.arg_count; ++ai) push(ctx.block_statements[nn.as.call_expr.first_arg + ai]); }
+            if (nn.type == NodeType::LocalDecl) { for (uint32_t vi = 0; vi < nn.as.local_decl.value_count; ++vi) push(ctx.block_statements[nn.as.local_decl.first_value + vi]); }
+            if (nn.type == NodeType::Assignment) { for (uint32_t vi = 0; vi < nn.as.assign.value_count; ++vi) push(ctx.block_statements[nn.as.assign.first_value + vi]); }
+            if (nn.type == NodeType::ReturnStatement) { for (uint32_t vi = 0; vi < nn.as.return_stmt.value_count; ++vi) push(ctx.block_statements[nn.as.return_stmt.first_value + vi]); }
+            if (nn.type == NodeType::FunctionDef) { push(nn.as.func_def.body_block); }
+        }
+    }
+
+    // Pass 4: Detect function parameters used as pure numeric arrays (integer-keyed)
+    // e.g., function MultiplyAv(N, v, out) where v[j] is used in arithmetic
+    {
+        // Collect all loop variable names (for j = 1, N do → j is always numeric)
+        std::set<std::string_view> loop_vars;
+        for (const auto& nd : ctx.nodes) {
+            if (nd.type == NodeType::ForStatement) {
+                uint32_t vi = nd.as.for_stmt.var_ident;
+                if (vi < ctx.nodes.size() && ctx.nodes[vi].type == NodeType::Identifier) {
+                    loop_vars.insert(std::string_view(ctx.nodes[vi].as.ident.name, ctx.nodes[vi].as.ident.length));
+                }
+            }
+        }
+
+        // Collect all function definitions (both top-level and local)
+        std::vector<const ASTNode*> func_defs;
+        for (const auto& nd : ctx.nodes) {
+            if (nd.type == NodeType::FunctionDef) {
+                func_defs.push_back(&nd);
+            } else if (nd.type == NodeType::LocalDecl) {
+                for (uint32_t ii = 0; ii < nd.as.local_decl.value_count; ++ii) {
+                    uint32_t vi = ctx.block_statements[nd.as.local_decl.first_value + ii];
+                    if (vi < ctx.nodes.size() && ctx.nodes[vi].type == NodeType::FunctionDef) {
+                        func_defs.push_back(&ctx.nodes[vi]);
+                    }
+                }
+            }
+        }
+        for (const auto* fnd : func_defs) {
+            const auto& nd = *fnd;
+            // Collect function parameter names
+            std::set<std::string_view> func_params;
+            for (size_t p = 0; p < nd.as.func_def.param_count; ++p) {
+                uint32_t pi = ctx.block_statements[nd.as.func_def.first_param + p];
+                if (pi < ctx.nodes.size() && ctx.nodes[pi].type == NodeType::Identifier)
+                    func_params.insert(std::string_view(ctx.nodes[pi].as.ident.name, ctx.nodes[pi].as.ident.length));
+            }
+            if (func_params.empty()) continue;
+
+            // Check if any parameter is reassigned — if so, skip it
+            for (const auto& scan : ctx.nodes) {
+                if (scan.type == NodeType::Assignment) {
+                    for (uint32_t ii = 0; ii < scan.as.assign.target_count; ++ii) {
+                        uint32_t ti = ctx.block_statements[scan.as.assign.first_target + ii];
+                        if (ctx.nodes[ti].type == NodeType::Identifier) {
+                            std::string_view nm(ctx.nodes[ti].as.ident.name, ctx.nodes[ti].as.ident.length);
+                            func_params.erase(nm);
+                        }
+                    }
+                }
+            }
+            if (func_params.empty()) continue;
+
+            // Find parameters accessed with integer keys in arithmetic
+            for (const auto& bn : ctx.nodes) {
+                if (bn.type != NodeType::BinaryOp) continue;
+                int bop = bn.as.bin_op.op;
+                bool is_arith = (bop >= static_cast<int>(BinaryOp::Add) && bop <= static_cast<int>(BinaryOp::Div));
+                if (!is_arith) continue;
+
+                std::function<void(uint32_t)> check_side;
+                check_side = [&](uint32_t side_idx) {
+                    if (side_idx >= ctx.nodes.size()) return;
+                    const auto& sn = ctx.nodes[side_idx];
+                    if (sn.type == NodeType::TableAccess) {
+                        uint32_t stbl = sn.as.table_access.table;
+                        if (stbl < ctx.nodes.size() && ctx.nodes[stbl].type == NodeType::Identifier) {
+                            std::string_view sname(ctx.nodes[stbl].as.ident.name, ctx.nodes[stbl].as.ident.length);
+                            if (func_params.count(sname)) {
+                                uint32_t key_idx = sn.as.table_access.key;
+                                if (key_idx < ctx.nodes.size()) {
+                                    const auto& kn = ctx.nodes[key_idx];
+                                    bool key_is_num = (kn.type == NodeType::Number || kn.type == NodeType::Integer);
+                                    if (!key_is_num && kn.type == NodeType::Identifier) {
+                                        std::string_view knm(kn.as.ident.name, kn.as.ident.length);
+                                        key_is_num = state.native_integers.count(knm) > 0;
+                                        if (!key_is_num) {
+                                            key_is_num = std::find(state.native_numbers.begin(), state.native_numbers.end(), knm) != state.native_numbers.end();
+                                        }
+                                        if (!key_is_num) {
+                                            key_is_num = loop_vars.count(knm) > 0;
+                                        }
+                                    }
+                                    if (key_is_num) {
+                                        state.pure_numeric_func_params[sname].insert(static_cast<uint32_t>(fnd - ctx.nodes.data()));
+                                    }
+                                }
+                            }
+                        }
+                    } else if (sn.type == NodeType::ParenExpression) {
+                        check_side(sn.as.paren_expr.expr);
+                    } else if (sn.type == NodeType::BinaryOp) {
+                        check_side(sn.as.bin_op.left);
+                        check_side(sn.as.bin_op.right);
+                    }
+                };
+                check_side(bn.as.bin_op.left);
+                check_side(bn.as.bin_op.right);
+            }
+        }
+    }
+
     //-------- Escape analysis: classify which local tables can be arena-allocated
     state.escaping_vars.clear();
     state.arena_safe_table_nodes.clear();
