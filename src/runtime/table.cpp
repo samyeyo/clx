@@ -6,7 +6,6 @@
 // └─────────────────────────────────────────────┘
 
 #include "clx.h"
-#include "../include/clx_simd.h"
 #include <cstring>
 #include <algorithm>
 #include <vector>
@@ -24,9 +23,11 @@ static size_t get_array_len(LState* L, LTable* t) {
             return 0;
         }
     }
-    if (t->array_size > 0 && t->array_types[t->array_size - 1] != Nil)
-        return t->array_size;
-    int64_t lo = 0;
+    // SIMD: find first nil gap in the array part
+    size_t n = clx_find_first_nil(reinterpret_cast<const uint8_t*>(t->array_types), t->array_size);
+    if (n < t->array_size) return n;
+    // No nil found in array part — fall back to hash-probing binary search
+    int64_t lo = static_cast<int64_t>(t->array_size);
     int64_t hi = static_cast<int64_t>(t->array_size) + 1;
     while (true) {
         LValue p = t->gettable(LValue(hi));
@@ -77,48 +78,8 @@ MultiValue table_concat(LState* L, const LValue* args, size_t count) {
 
     // SIMD: validate that all elements in [i..j] are String/Double/Int64
     {
-        size_t count = j - i + 1;
-        size_t k = i;
-#if defined(CLX_HAS_SSE2)
-        // Mask of allowed types: String(4), Double(3), Int64(2)
-        // For each byte, check if it's 2, 3, or 4.
-        for (; k + 16 <= j; k += 16) {
-            const uint8_t* tp = reinterpret_cast<const uint8_t*>(&list->array_types[k - 1]);
-            __m128i v = _mm_loadu_si128(reinterpret_cast<const __m128i*>(tp));
-            // Check: type <= 4 and type >= 2
-            __m128i lo = _mm_set1_epi8(2);
-            __m128i hi = _mm_set1_epi8(4);
-            __m128i ge2 = _mm_or_si128(_mm_cmpgt_epi8(v, lo), _mm_cmpeq_epi8(v, lo)); // v >= lo
-            __m128i le4 = _mm_or_si128(_mm_cmpgt_epi8(hi, v), _mm_cmpeq_epi8(hi, v)); // hi >= v
-            __m128i ok = _mm_and_si128(ge2, le4);
-            int mask = _mm_movemask_epi8(ok);
-            if (mask != 0xFFFF) {
-                // Find first invalid element
-                int bad = clx_ctz(~static_cast<unsigned>(mask) & 0xFFFF);
-                throw_runtime_error("bad argument #1 to 'concat' (table contains non-string/number value)");
-            }
-        }
-#elif defined(CLX_HAS_NEON)
-        for (; k + 16 <= j; k += 16) {
-            const uint8_t* tp = reinterpret_cast<const uint8_t*>(&list->array_types[k - 1]);
-            uint8x16_t v = vld1q_u8(tp);
-            uint8x16_t lo = vdupq_n_u8(2);
-            uint8x16_t hi = vdupq_n_u8(4);
-            uint8x16_t ge2 = vcgeq_u8(v, lo);
-            uint8x16_t le4 = vcleq_u8(v, hi);
-            uint8x16_t ok = vandq_u8(ge2, le4);
-            uint8_t lane_vals[16];
-            vst1q_u8(lane_vals, vmvnq_u8(ok));
-            for (int bit = 0; bit < 16; ++bit) {
-                if (lane_vals[bit]) throw_runtime_error("bad argument #1 to 'concat' (table contains non-string/number value)");
-            }
-        }
-#endif
-        for (; k <= j; ++k) {
-            LValue v = get_elem(list, k);
-            if (v.type != String && v.type != Double && v.type != Int64)
-                throw_runtime_error("bad argument #1 to 'concat' (table contains non-string/number value)");
-        }
+        if (!clx_validate_types_range(reinterpret_cast<const uint8_t*>(list->array_types), i - 1, j - i + 1, 2, 4))
+            throw_runtime_error("bad argument #1 to 'concat' (table contains non-string/number value)");
     }
 
     StringBuilder sb;
@@ -208,6 +169,26 @@ MultiValue table_sort(LState* L, const LValue* args, size_t count) {
     LTable* list = check_table(L, args[0]);
     size_t len = get_array_len(L, list);
     if (len == 0) return MultiValue();
+
+    // Fast path: no comparator, all elements numeric, all within array part — sort doubles directly
+    if ((count < 2 || args[1].type == Nil) && len <= list->array_size) {
+        if (clx_validate_types_range(reinterpret_cast<const uint8_t*>(list->array_types), 0, len, 2, 4)) {
+            std::vector<double> nums(len);
+            for (size_t k = 0; k < len; ++k) {
+                if (list->array_types[k] == Double)
+                    nums[k] = list->array[k].payload.f64;
+                else
+                    nums[k] = static_cast<double>(list->array[k].payload.i64);
+            }
+            std::sort(nums.begin(), nums.end());
+            for (size_t k = 0; k < len; ++k) {
+                list->array[k].payload.f64 = nums[k];
+                list->array_types[k] = Double;
+            }
+            list->array_version++;
+            return MultiValue();
+        }
+    }
 
     auto extract_elems = [&](LTable* t, size_t n) {
         std::vector<LValue> elems;
@@ -300,6 +281,19 @@ MultiValue table_move(LState* L, const LValue* args, size_t count) {
     LTable* dst = src;
     if (count >= 5 && args[4].type != Nil)
         dst = check_table(L, args[4]);
+
+    // Fast path: same table, both ranges within array part — use memmove
+    if (src == dst && f >= 1 && e >= f && t >= 1
+        && static_cast<size_t>(e) <= src->array_size
+        && static_cast<size_t>(t + (e - f)) <= src->array_size) {
+        size_t n = static_cast<size_t>(e - f + 1);
+        size_t src_off = static_cast<size_t>(f - 1);
+        size_t dst_off = static_cast<size_t>(t - 1);
+        std::memmove(&dst->array[dst_off], &src->array[src_off], n * sizeof(TValue));
+        std::memmove(&dst->array_types[dst_off], &src->array_types[src_off], n * sizeof(ValueType));
+        dst->array_version++;
+        return MultiValue(LValue(dst));
+    }
 
     if (t >= f) {
         for (int64_t k = e; k >= f; --k) {
