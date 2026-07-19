@@ -347,6 +347,7 @@ static CLX_INLINE_COLD size_t next_pow2(size_t n) {
 LTable::LTable()
     : array(nullptr), array_types(nullptr), array_size(0), array_cap(0),
       entries(nullptr), hash_size(0), hash_count(0), hash_tombs(0),
+      hash_bitmap(nullptr),
       hash_version(0), array_version(0), metatable(nullptr), is_arena(false)
 {
     type = static_cast<uint8_t>(Table);
@@ -360,6 +361,7 @@ LTable::~LTable() {
         if (array)   delete[] array;
         if (array_types) delete[] array_types;
         if (entries) delete[] entries;
+        if (hash_bitmap) delete[] hash_bitmap;
     }
 }
 
@@ -370,6 +372,9 @@ void LTable::resize_hash(size_t new_size) {
 
     HashEntry* new_entries = new HashEntry[new_size];
     for (size_t i = 0; i < new_size; ++i) { new_entries[i].key.payload.u64 = HASH_EMPTY; new_entries[i].ktype = Nil; }
+
+    size_t bm_words = (new_size + 63) / 64;
+    uint64_t* new_bitmap = new uint64_t[bm_words]();
 
     uint32_t mask = static_cast<uint32_t>(new_size - 1);
     if (entries) {
@@ -382,6 +387,7 @@ void LTable::resize_hash(size_t new_size) {
             new_entries[h].ktype = entries[i].ktype;
             new_entries[h].val = entries[i].val;
             new_entries[h].vtype = entries[i].vtype;
+            new_bitmap[h / 64] |= (1ULL << (h % 64));
         }
         if (!is_arena) {
             delete[] entries;
@@ -392,6 +398,8 @@ void LTable::resize_hash(size_t new_size) {
     entries    = new_entries;
     hash_size  = new_size;
     hash_tombs = 0;
+    if (hash_bitmap) delete[] hash_bitmap;
+    hash_bitmap = new_bitmap;
     hash_version++;
 }
 
@@ -463,6 +471,7 @@ void LTable::settable(const LValue& key, const LValue& val) {
                         hash_count--;
                         hash_tombs++;
                         hash_version++;
+                        if (hash_bitmap) hash_bitmap[i / 64] &= ~(1ULL << (i % 64));
                     }
                 }
             }
@@ -508,6 +517,7 @@ void LTable::settable(const LValue& key, const LValue& val) {
                             hash_count--;
                             hash_tombs++;
                             hash_version++;
+                            if (hash_bitmap) hash_bitmap[i / 64] &= ~(1ULL << (i % 64));
                         }
                     }
                 }
@@ -532,6 +542,7 @@ void LTable::settable(const LValue& key, const LValue& val) {
                 hash_count--;
                 hash_tombs++;
                 hash_version++;
+                if (hash_bitmap) hash_bitmap[h / 64] &= ~(1ULL << (h % 64));
                 return;
             }
             h = (h + 1) & mask;
@@ -556,6 +567,10 @@ void LTable::settable(const LValue& key, const LValue& val) {
             if (tomb != -1) hash_tombs--;
             hash_count++;
             hash_version++;
+            if (hash_bitmap) {
+                size_t bit_idx = (tomb != -1) ? static_cast<size_t>(tomb) : h;
+                hash_bitmap[bit_idx / 64] |= (1ULL << (bit_idx % 64));
+            }
             return;
         }
         if (e.key.payload.u64 == HASH_TOMBSTONE && e.ktype == Nil) {
@@ -690,6 +705,7 @@ LState::LState()
 static void dtor_free_table(LTable* t) {
     if (t->array) { delete[] t->array; t->array = nullptr; } if (t->array_types) { delete[] t->array_types; t->array_types = nullptr; }
     if (t->entries) { delete[] t->entries; t->entries = nullptr; }
+    if (t->hash_bitmap) { delete[] t->hash_bitmap; t->hash_bitmap = nullptr; }
     t->array_size = t->array_cap = t->hash_size = t->hash_count = 0;
     t->hash_count = t->hash_tombs = 0;
     delete t;
@@ -872,6 +888,7 @@ bool LState::gc_step() {
                     if (t->array_cap > 0) allocated_bytes -= sizeof(TValue) * t->array_cap + sizeof(ValueType) * t->array_cap;
                     if (t->array) { delete[] t->array; t->array = nullptr; } if (t->array_types) { delete[] t->array_types; t->array_types = nullptr; }
                     if (t->entries) { delete[] t->entries; t->entries = nullptr; }
+                    if (t->hash_bitmap) { delete[] t->hash_bitmap; t->hash_bitmap = nullptr; }
                                     t->array_size = t->array_cap = t->hash_size = t->hash_count = 0;
                     t->hash_count = t->hash_tombs = 0;
                     t->next = free_tables;
@@ -985,11 +1002,34 @@ void LState::collect_garbage() {
 
         if (curr->type == static_cast<uint8_t>(Table)) {
             LTable* t = static_cast<LTable*>(curr);
-            // SIMD: scan type array in 16-byte chunks, only process non-nil entries
+            // SIMD: scan type array in 32/16-byte chunks, only process non-nil entries
             {
                 const uint8_t* types_raw = reinterpret_cast<const uint8_t*>(t->array_types);
                 size_t i = 0;
-#if defined(CLX_HAS_SSE2)
+#if defined(CLX_HAS_AVX2)
+                const __m256i zero256 = _mm256_setzero_si256();
+                for (; i + 32 <= t->array_size; i += 32) {
+                    __m256i types = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(types_raw + i));
+                    __m256i cmp = _mm256_cmpeq_epi8(types, zero256);
+                    uint32_t mask = ~_mm256_movemask_epi8(cmp);
+                    while (mask) {
+                        int bit = clx_ctz(mask);
+                        push_if_needed(LValue(t->array[i + bit], t->array_types[i + bit]));
+                        mask &= mask - 1;
+                    }
+                }
+                // Remainder as 16-byte SSE2
+                for (; i + 16 <= t->array_size; i += 16) {
+                    __m128i types = _mm_loadu_si128(reinterpret_cast<const __m128i*>(types_raw + i));
+                    __m128i cmp = _mm_cmpeq_epi8(types, _mm_setzero_si128());
+                    uint32_t mask = static_cast<uint32_t>(~_mm_movemask_epi8(cmp)) & 0xFFFF;
+                    while (mask) {
+                        int bit = clx_ctz(mask);
+                        push_if_needed(LValue(t->array[i + bit], t->array_types[i + bit]));
+                        mask &= mask - 1;
+                    }
+                }
+#elif defined(CLX_HAS_SSE2)
                 const __m128i zero = _mm_setzero_si128();
                 for (; i + 16 <= t->array_size; i += 16) {
                     __m128i types = _mm_loadu_si128(reinterpret_cast<const __m128i*>(types_raw + i));
@@ -1015,11 +1055,26 @@ void LState::collect_garbage() {
 #endif
                 for (; i < t->array_size; ++i) push_if_needed(LValue(t->array[i], t->array_types[i]));
             }
-            for (size_t _i = 0; _i < t->hash_size; ++_i) {
-                if (t->entries[_i].ktype == Nil) continue;
-                LValue kv(t->entries[_i].key, t->entries[_i].ktype);
-                push_if_needed(kv);
-                push_if_needed(LValue(t->entries[_i].val, t->entries[_i].vtype));
+            if (t->hash_bitmap) {
+                size_t bm_words = (t->hash_size + 63) / 64;
+                for (size_t word = 0; word < bm_words; ++word) {
+                    uint64_t bits = t->hash_bitmap[word];
+                    while (bits) {
+                        size_t idx = word * 64 + clx_ctzll(bits);
+                        if (idx >= t->hash_size) break;
+                        LValue kv(t->entries[idx].key, t->entries[idx].ktype);
+                        push_if_needed(kv);
+                        push_if_needed(LValue(t->entries[idx].val, t->entries[idx].vtype));
+                        bits &= bits - 1;
+                    }
+                }
+            } else {
+                for (size_t _i = 0; _i < t->hash_size; ++_i) {
+                    if (t->entries[_i].ktype == Nil) continue;
+                    LValue kv(t->entries[_i].key, t->entries[_i].ktype);
+                    push_if_needed(kv);
+                    push_if_needed(LValue(t->entries[_i].val, t->entries[_i].vtype));
+                }
             }
             if (t->metatable && t->metatable->marked == 0) {
                 t->metatable->marked = 1;
@@ -1050,14 +1105,101 @@ void LState::collect_garbage() {
         LHeader* curr = protect_wl.back(); protect_wl.pop_back();
         if (curr->type == static_cast<uint8_t>(Table)) {
             LTable* tt = static_cast<LTable*>(curr);
-            for (size_t i = 0; i < tt->array_size; ++i) {
-                LValue v = LValue(tt->array[i], tt->array_types[i]);
-                if (v.is_gc_obj()) {
-                    LHeader* h = v.as_pointer();
-                    if (h && h->marked == 0) { h->marked = 2; protect_wl.push_back(h); }
+            // SIMD: scan array type tags, skip nil entries
+            {
+                const uint8_t* types_raw = reinterpret_cast<const uint8_t*>(tt->array_types);
+                size_t i = 0;
+#if defined(CLX_HAS_AVX2)
+                const __m256i zero256 = _mm256_setzero_si256();
+                for (; i + 32 <= tt->array_size; i += 32) {
+                    __m256i types = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(types_raw + i));
+                    __m256i cmp = _mm256_cmpeq_epi8(types, zero256);
+                    uint32_t mask = ~_mm256_movemask_epi8(cmp);
+                    while (mask) {
+                        int bit = clx_ctz(mask);
+                        LValue v = LValue(tt->array[i + bit], tt->array_types[i + bit]);
+                        if (v.is_gc_obj()) {
+                            LHeader* h = v.as_pointer();
+                            if (h && h->marked == 0) { h->marked = 2; protect_wl.push_back(h); }
+                        }
+                        mask &= mask - 1;
+                    }
+                }
+                for (; i + 16 <= tt->array_size; i += 16) {
+                    __m128i types = _mm_loadu_si128(reinterpret_cast<const __m128i*>(types_raw + i));
+                    __m128i cmp = _mm_cmpeq_epi8(types, _mm_setzero_si128());
+                    uint32_t mask = static_cast<uint32_t>(~_mm_movemask_epi8(cmp)) & 0xFFFF;
+                    while (mask) {
+                        int bit = clx_ctz(mask);
+                        LValue v = LValue(tt->array[i + bit], tt->array_types[i + bit]);
+                        if (v.is_gc_obj()) {
+                            LHeader* h = v.as_pointer();
+                            if (h && h->marked == 0) { h->marked = 2; protect_wl.push_back(h); }
+                        }
+                        mask &= mask - 1;
+                    }
+                }
+#elif defined(CLX_HAS_SSE2)
+                const __m128i zero = _mm_setzero_si128();
+                for (; i + 16 <= tt->array_size; i += 16) {
+                    __m128i types = _mm_loadu_si128(reinterpret_cast<const __m128i*>(types_raw + i));
+                    __m128i cmp = _mm_cmpeq_epi8(types, zero);
+                    uint32_t mask = static_cast<uint32_t>(~_mm_movemask_epi8(cmp)) & 0xFFFF;
+                    while (mask) {
+                        int bit = clx_ctz(mask);
+                        LValue v = LValue(tt->array[i + bit], tt->array_types[i + bit]);
+                        if (v.is_gc_obj()) {
+                            LHeader* h = v.as_pointer();
+                            if (h && h->marked == 0) { h->marked = 2; protect_wl.push_back(h); }
+                        }
+                        mask &= mask - 1;
+                    }
+                }
+#elif defined(CLX_HAS_NEON)
+                const uint8x16_t zero = vdupq_n_u8(0);
+                for (; i + 16 <= tt->array_size; i += 16) {
+                    uint8x16_t types = vld1q_u8(types_raw + i);
+                    uint8x16_t cmp = vceqq_u8(types, zero);
+                    uint8_t lane_vals[16];
+                    vst1q_u8(lane_vals, vmvnq_u8(cmp));
+                    for (int k = 0; k < 16; ++k) {
+                        if (lane_vals[k]) {
+                            LValue v = LValue(tt->array[i + k], tt->array_types[i + k]);
+                            if (v.is_gc_obj()) {
+                                LHeader* h = v.as_pointer();
+                                if (h && h->marked == 0) { h->marked = 2; protect_wl.push_back(h); }
+                            }
+                        }
+                    }
+                }
+#endif
+                for (; i < tt->array_size; ++i) {
+                    LValue v = LValue(tt->array[i], tt->array_types[i]);
+                    if (v.is_gc_obj()) {
+                        LHeader* h = v.as_pointer();
+                        if (h && h->marked == 0) { h->marked = 2; protect_wl.push_back(h); }
+                    }
                 }
             }
-            for (size_t _pi = 0; _pi < tt->hash_size; ++_pi) {
+            if (tt->hash_bitmap) {
+                size_t bm_words = (tt->hash_size + 63) / 64;
+                for (size_t word = 0; word < bm_words; ++word) {
+                    uint64_t bits = tt->hash_bitmap[word];
+                    while (bits) {
+                        size_t idx = word * 64 + clx_ctzll(bits);
+                        if (idx >= tt->hash_size) break;
+                        LValue kv(tt->entries[idx].key, tt->entries[idx].ktype);
+                        for (LValue v : { kv, LValue(tt->entries[idx].val, tt->entries[idx].vtype) }) {
+                            if (v.is_gc_obj()) {
+                                LHeader* h = v.as_pointer();
+                                if (h && h->marked == 0) { h->marked = 2; protect_wl.push_back(h); }
+                            }
+                        }
+                        bits &= bits - 1;
+                    }
+                }
+            } else {
+                for (size_t _pi = 0; _pi < tt->hash_size; ++_pi) {
                     if (tt->entries[_pi].ktype == Nil) continue;
                     LValue kv(tt->entries[_pi].key, tt->entries[_pi].ktype);
                     for (LValue v : { kv, LValue(tt->entries[_pi].val, tt->entries[_pi].vtype) }) {
@@ -1066,6 +1208,7 @@ void LState::collect_garbage() {
                             if (h && h->marked == 0) { h->marked = 2; protect_wl.push_back(h); }
                         }
                     }
+                }
             }
         }
     }
