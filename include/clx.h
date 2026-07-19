@@ -376,13 +376,31 @@ CLX_INLINE MultiValue next(LState* L, const LValue& table, const LValue& key) {
     if (t->hash_size == 0) return MultiValue();
 
     bool found_key = (key.type == ValueType::Nil);
-    for (size_t i = 0; i < t->hash_size; ++i) {
-        HashEntry& e = t->entries[i];
-        if (e.ktype == ValueType::Nil) continue;
-        if (!found_key) {
-            if (lvalue_eq_fast(LValue(e.key, e.ktype), key)) found_key = true;
-        } else if (e.vtype != ValueType::Nil) {
-            return MultiValue({LValue(e.key, e.ktype), LValue(e.val, e.vtype)});
+    if (t->hash_bitmap) {
+        size_t bm_words = (t->hash_size + 63) / 64;
+        for (size_t word = 0; word < bm_words; ++word) {
+            uint64_t bits = t->hash_bitmap[word];
+            while (bits) {
+                size_t idx = word * 64 + clx_ctzll(bits);
+                if (idx >= t->hash_size) break;
+                HashEntry& e = t->entries[idx];
+                if (!found_key) {
+                    if (lvalue_eq_fast(LValue(e.key, e.ktype), key)) found_key = true;
+                } else if (e.vtype != ValueType::Nil) {
+                    return MultiValue({LValue(e.key, e.ktype), LValue(e.val, e.vtype)});
+                }
+                bits &= bits - 1;
+            }
+        }
+    } else {
+        for (size_t i = 0; i < t->hash_size; ++i) {
+            HashEntry& e = t->entries[i];
+            if (e.ktype == ValueType::Nil) continue;
+            if (!found_key) {
+                if (lvalue_eq_fast(LValue(e.key, e.ktype), key)) found_key = true;
+            } else if (e.vtype != ValueType::Nil) {
+                return MultiValue({LValue(e.key, e.ktype), LValue(e.val, e.vtype)});
+            }
         }
     }
     return MultiValue();
