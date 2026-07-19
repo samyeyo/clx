@@ -45,6 +45,8 @@ struct AnalysisState {
     std::map<std::string_view, double> global_constants;
     std::set<uint32_t> bce_safe_nodes;                 
     std::set<std::string_view> pure_numeric_arrays;
+    std::map<std::string_view, std::set<uint32_t>> pure_numeric_func_params;  // param name → set of FunctionDef node indices
+    std::map<uint32_t, uint32_t> node_func_owner;  // node index → FunctionDef node index that owns it
     std::set<std::string, std::less<>> native_integers;
 
     //------------------ Arena analysis data
