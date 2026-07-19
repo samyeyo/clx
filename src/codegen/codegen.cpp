@@ -522,7 +522,7 @@ void CodeEmitter::emit_native(uint32_t n_idx) {
                             if (it->second.count(fn)) {
                                 size_t idx = std::distance(state.string_pool.begin(),
                                     std::find(state.string_pool.begin(), state.string_pool.end(), fn));
-                                int _cs_i = (state.cs_index < cs_max) ? state.cs_index++ : -1;
+                                int _cs_i = state.cs_index < cs_max ? state.cs_index++ : (state.cs_index++ % cs_max);
                                 if (_cs_i >= 0) {
                                     out << "clx::table_get_cs(L, "; emit_node(n.as.table_access.table);
                                     out << ", cstr_[" << idx << "], &__cs[" << _cs_i << "]).as_number()";
@@ -745,7 +745,7 @@ void CodeEmitter::emitCallExpression(const ASTNode& node, uint32_t node_idx) {
                 if (key_is_native) {
                     out << "    _m_func = ([&](){ clx::LTable* _t = static_cast<clx::LTable*>(_m_self.as_pointer()); size_t _k = static_cast<size_t>("; emit_native( k_idx); out << "); return (_k - 1 < _t->array_size) ? clx::LValue(_t->array[_k - 1], _t->array_types[_k - 1]) : clx::table_get_int(L, clx::LValue(clx::ValueType::Table, _t), _k); }());\n";
                 } else {
-                    int _cs_i = (state.cs_index < cs_max) ? state.cs_index++ : -1;
+                    int _cs_i = state.cs_index < cs_max ? state.cs_index++ : (state.cs_index++ % cs_max);
                     if (_cs_i >= 0) {
                         out << "    _m_func = clx::table_get_cs(L, _m_self, "; emit_node(k_idx); out << ", &__cs[" << _cs_i << "]);\n";
                     } else {
@@ -1938,14 +1938,36 @@ out << "l_" << name << " = L->create_closure(_impl_" << name << ", static_cast<c
                                 uint32_t tbl_idx = t_node.as.table_access.table;
                                 bool tbl_is_stable = tbl_idx < ctx.nodes.size() &&
                                                      ctx.nodes[tbl_idx].type == NodeType::Identifier;
-                                int _cs_i = (tbl_is_stable && state.cs_index < cs_max) ? state.cs_index++ : -1;
-                                if (_cs_i >= 0) {
-                                    out << "clx::table_set_cs(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << (std::distance(state.string_pool.begin(), std::find(state.string_pool.begin(), state.string_pool.end(), std::string_view(ctx.nodes[kt].as.string.text, ctx.nodes[kt].as.string.length)))) << "], ";
+                                // Check if this is a known record field (skip existence check)
+                                bool is_known_field = false;
+                                if (tbl_is_stable) {
+                                    std::string_view _tn(ctx.nodes[tbl_idx].as.ident.name, ctx.nodes[tbl_idx].as.ident.length);
+                                    std::string_view _kn(ctx.nodes[kt].as.string.text, ctx.nodes[kt].as.string.length);
+                                    auto _it = state.numeric_table_fields.find(_tn);
+                                    if (_it != state.numeric_table_fields.end() && _it->second.count(_kn))
+                                        is_known_field = true;
+                                }
+                                int _cs_i = tbl_is_stable ? (state.cs_index < cs_max ? state.cs_index++ : (state.cs_index++ % cs_max)) : -1;
+                                size_t _cstr_idx = std::distance(state.string_pool.begin(), std::find(state.string_pool.begin(), state.string_pool.end(), std::string_view(ctx.nodes[kt].as.string.text, ctx.nodes[kt].as.string.length)));
+                                if (is_known_field) {
+                                    if (_cs_i >= 0) {
+                                        out << "clx::table_set_direct_cs(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << _cstr_idx << "], ";
+                                        if (v_count > 0) emit_node(ctx.block_statements[first_v]);
+                                        else out << "clx::LValue()";
+                                        out << ", &__cs[" << _cs_i << "]);\n";
+                                    } else {
+                                        out << "clx::table_set_direct(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << _cstr_idx << "], ";
+                                        if (v_count > 0) emit_node(ctx.block_statements[first_v]);
+                                        else out << "clx::LValue()";
+                                        out << ");\n";
+                                    }
+                                } else if (_cs_i >= 0) {
+                                    out << "clx::table_set_cs(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << _cstr_idx << "], ";
                                     if (v_count > 0) emit_node(ctx.block_statements[first_v]);
                                     else out << "clx::LValue()";
                                     out << ", &__cs[" << _cs_i << "]);\n";
                                 } else {
-                                    out << "clx::table_set(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << (std::distance(state.string_pool.begin(), std::find(state.string_pool.begin(), state.string_pool.end(), std::string_view(ctx.nodes[kt].as.string.text, ctx.nodes[kt].as.string.length)))) << "], ";
+                                    out << "clx::table_set(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << _cstr_idx << "], ";
                                     if (v_count > 0) emit_node(ctx.block_statements[first_v]);
                                     else out << "clx::LValue()";
                                     out << ");\n";
@@ -2243,11 +2265,26 @@ out << "l_" << name << " = L->create_closure(_impl_" << name << ", static_cast<c
                                 uint32_t tbl_idx = t_node.as.table_access.table;
                                 bool tbl_is_stable = tbl_idx < ctx.nodes.size() &&
                                                      ctx.nodes[tbl_idx].type == NodeType::Identifier;
-                                int _cs_i = (tbl_is_stable && state.cs_index < cs_max) ? state.cs_index++ : -1;
-                                if (_cs_i >= 0) {
-                                    out << "clx::table_set_cs(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << (std::distance(state.string_pool.begin(), std::find(state.string_pool.begin(), state.string_pool.end(), std::string_view(ctx.nodes[kt2].as.string.text, ctx.nodes[kt2].as.string.length)))) << "], " << val_str << ", &__cs[" << _cs_i << "]);\n";
+                                bool is_known_field = false;
+                                if (tbl_is_stable) {
+                                    std::string_view _tn(ctx.nodes[tbl_idx].as.ident.name, ctx.nodes[tbl_idx].as.ident.length);
+                                    std::string_view _kn(ctx.nodes[kt2].as.string.text, ctx.nodes[kt2].as.string.length);
+                                    auto _it = state.numeric_table_fields.find(_tn);
+                                    if (_it != state.numeric_table_fields.end() && _it->second.count(_kn))
+                                        is_known_field = true;
+                                }
+                                int _cs_i = tbl_is_stable ? (state.cs_index < cs_max ? state.cs_index++ : (state.cs_index++ % cs_max)) : -1;
+                                size_t _cstr_idx = std::distance(state.string_pool.begin(), std::find(state.string_pool.begin(), state.string_pool.end(), std::string_view(ctx.nodes[kt2].as.string.text, ctx.nodes[kt2].as.string.length)));
+                                if (is_known_field) {
+                                    if (_cs_i >= 0) {
+                                        out << "clx::table_set_direct_cs(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << _cstr_idx << "], " << val_str << ", &__cs[" << _cs_i << "]);\n";
+                                    } else {
+                                        out << "clx::table_set_direct(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << _cstr_idx << "], " << val_str << ");\n";
+                                    }
+                                } else if (_cs_i >= 0) {
+                                    out << "clx::table_set_cs(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << _cstr_idx << "], " << val_str << ", &__cs[" << _cs_i << "]);\n";
                                 } else {
-                                    out << "clx::table_set(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << (std::distance(state.string_pool.begin(), std::find(state.string_pool.begin(), state.string_pool.end(), std::string_view(ctx.nodes[kt2].as.string.text, ctx.nodes[kt2].as.string.length)))) << "], " << val_str << ");\n";
+                                    out << "clx::table_set(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << _cstr_idx << "], " << val_str << ");\n";
                                 }
                             } else {
                                 out << "clx::table_set(L, "; emit_node(t_node.as.table_access.table); out << ", "; emit_node(t_node.as.table_access.key); out << ", " << val_str << ");\n";
@@ -2294,6 +2331,13 @@ if (node.as.unary_op.op == static_cast<int>(UnaryOp::Len)) {
                 }
                 if (!_len_tname.empty() && state.pure_numeric_arrays.count(_len_tname)) {
                     out << "clx::LValue(static_cast<int64_t>(l_" << _len_tname << ".size()))";
+                } else if (!_len_tname.empty() && !state.tables_with_dynamic_length.count(_len_tname)) {
+                    auto _klit = state.known_table_lengths.find(_len_tname);
+                    if (_klit != state.known_table_lengths.end()) {
+                        out << "clx::LValue(static_cast<int64_t>(" << _klit->second << "))";
+                    } else {
+                        out << "clx::len(L, "; emit_node(node.as.unary_op.expr); out << ")";
+                    }
                 } else {
                     out << "clx::len(L, "; emit_node(node.as.unary_op.expr); out << ")";
                 }
@@ -2726,7 +2770,7 @@ void CodeEmitter::emitForStatement(const ASTNode& node, uint32_t node_idx) {
             _invariant_lookups.erase(std::unique(_invariant_lookups.begin(), _invariant_lookups.end()), _invariant_lookups.end());
             for (uint32_t _h_node : _invariant_lookups) {
                 std::string _h_name = "_hoist_" + std::to_string(_h_node);
-                int _cs_i = (state.cs_index < cs_max) ? state.cs_index++ : -1;
+                int _cs_i = state.cs_index < cs_max ? state.cs_index++ : (state.cs_index++ % cs_max);
                 if (_cs_i >= 0) {
                     out << "clx::LValue " << _h_name << " = clx::table_get_cs(L, ";
                     emit_node(ctx.nodes[_h_node].as.table_access.table);
@@ -3089,7 +3133,7 @@ void CodeEmitter::emitTableAccess(const ASTNode& node, uint32_t node_idx) {
                         uint32_t tbl_idx = node.as.table_access.table;
                         bool tbl_is_stable = tbl_idx < ctx.nodes.size() &&
                                              ctx.nodes[tbl_idx].type == NodeType::Identifier;
-                        int _cs_i = (tbl_is_stable && state.cs_index < cs_max) ? state.cs_index++ : -1;
+                        int _cs_i = tbl_is_stable ? (state.cs_index < cs_max ? state.cs_index++ : (state.cs_index++ % cs_max)) : -1;
                         if (_cs_i >= 0) {
                             out << "clx::table_get_cs(L, "; emit_node(node.as.table_access.table); out << ", cstr_[" << (std::distance(state.string_pool.begin(), std::find(state.string_pool.begin(), state.string_pool.end(), std::string_view(ctx.nodes[kt].as.string.text, ctx.nodes[kt].as.string.length)))) << "], &__cs[" << _cs_i << "])";
                         } else {
