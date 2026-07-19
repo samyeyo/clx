@@ -1774,6 +1774,30 @@ CLX_INLINE_HOT void table_set_cs(LState* L, const LValue& obj, const LValue& key
     }
 }
 
+//------------------ Direct table write (skips existence check / metatable)
+// Use when the field is known to exist and the table has no __newindex metamethod.
+CLX_INLINE_HOT void table_set_direct(LState* L, const LValue& obj, const LValue& key, const LValue& val) {
+    if (obj.type == ValueType::Table) {
+        LTable* t = static_cast<LTable*>(obj.as_pointer());
+        t->settable(key, val);
+        return;
+    }
+    table_set(L, obj, key, val);
+}
+
+//------------------ Direct table write with cache slot
+CLX_INLINE_HOT void table_set_direct_cs(LState* L, const LValue& obj, const LValue& key, const LValue& val, CacheSlot* cs) {
+    table_set_direct(L, obj, key, val);
+    if (obj.type == ValueType::Table && key.type != ValueType::Int64) {
+        LTable* t        = static_cast<LTable*>(obj.val.payload.ptr);
+        cs->valid        = true;
+        cs->table_val    = obj.val;
+        cs->key_val      = key.val;
+        cs->hash_version = t->hash_version;
+        cs->cached       = val;
+    }
+}
+
 MultiValue str_len(LState*, const LValue*, size_t);
 MultiValue str_sub(LState*, const LValue*, size_t);
 MultiValue str_reverse(LState*, const LValue*, size_t);
