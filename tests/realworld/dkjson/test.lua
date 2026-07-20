@@ -1,0 +1,5 @@
+local json = require("dkjson")
+local s = json.encode({x=42})
+local t = json.decode(s)
+assert(t.x == 42)
+print("[PASS] dkjson")

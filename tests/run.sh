@@ -57,6 +57,50 @@ for dir in conformance regression stress edge_cases; do
     done
 done
 
+# Real-world compatibility tests
+if [ -d "realworld" ]; then
+    echo ""
+    echo "--- realworld ---"
+
+    for dir in realworld/*; do
+        [ -d "$dir" ] || continue
+        [ -f "$dir/test.lua" ] || continue
+
+        name=$(basename "$dir")
+
+        bin="$SCRIPT_DIR/realworld_${name}"
+        compile_log="$bin.compile.log"
+        output_log="$bin.output.log"
+
+        "$COMPILER" "$dir"/*.lua --output "$bin" > "$compile_log" 2>&1
+
+        if [ -f "$bin" ]; then
+            "$bin" > "$output_log" 2>&1
+            exit_code=$?
+
+            cat "$output_log"
+
+            if [ "$exit_code" -ne 0 ]; then
+                echo "[FAIL] realworld/$name -- runtime exit code $exit_code"
+                FAIL=$((FAIL + 1))
+            elif grep -q "\[FAIL\]" "$output_log"; then
+                echo "[FAIL] realworld/$name"
+                FAIL=$((FAIL + 1))
+            else
+                echo "[PASS] realworld/$name"
+                PASS=$((PASS + 1))
+            fi
+
+            rm -f "$bin" "$compile_log" "$output_log"
+        else
+            echo "[FAIL] realworld/$name -- compilation failed"
+            cat "$compile_log"
+            FAIL=$((FAIL + 1))
+            rm -f "$compile_log"
+        fi
+    done
+fi
+
 # Native module test (--modules)
 NATIVE_SRC="$SCRIPT_DIR/conformance/native_mod.cpp"
 NATIVE_TEST_LUA="$SCRIPT_DIR/conformance/test_native_mod.lua"
