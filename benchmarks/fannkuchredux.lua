@@ -102,7 +102,7 @@ local function fannkuch(N)
     end
 end
 
-N = N or 7
+N = N or 10
 local ret = fannkuch(N)
 local checksum = ret[1]
 local flips    = ret[2]
