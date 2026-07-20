@@ -6,6 +6,7 @@
 // └─────────────────────────────────────────────┘
 
 #include "clx_runtime.h"
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstring>
@@ -34,21 +35,9 @@ static const char* get_string(LState* L, const LValue* args, size_t count, size_
     return args[idx - 1].as_string();
 }
 
-//------------------ get_binary_string — extract binary-string arg (same as get_string)
-static const char* get_binary_string(LState* L, const LValue* args, size_t count, size_t& len, int idx) {
-    if (idx < 1 || idx > (int)count) {
-        char buf[128];
-        std::snprintf(buf, sizeof(buf), "bad argument #%d to a string function (string expected, got no value)", idx);
-        throw_runtime_error(buf);
-    }
-    if (args[idx - 1].type != String) {
-        char buf[128];
-        std::snprintf(buf, sizeof(buf), "bad argument #%d to a string function (string expected, got %s)", idx,
-            args[idx - 1].type == Double ? "number" : "table");
-        throw_runtime_error(buf);
-    }
-    len = args[idx - 1].string_len();
-    return args[idx - 1].as_string();
+//------------------ get_binary_string — extract binary-string arg (identical checks to get_string)
+static inline const char* get_binary_string(LState* L, const LValue* args, size_t count, size_t& len, int idx) {
+    return get_string(L, args, count, len, idx);
 }
 
 //------------------ get_integer — extract integer arg with type coercion
@@ -126,7 +115,8 @@ MultiValue str_sub(LState* L, const LValue* args, size_t count) {
         if (const char* hit = L->string_pool.lookup(src, subl, h))
             return MultiValue(LValue(hit));
         uint32_t len32 = static_cast<uint32_t>(subl);
-        char* mem = new char[16 + subl + 1]();
+        char* mem = new char[16 + subl + 1];
+        std::memset(mem, 0, 16);
         clx_memcpy(mem,     &h,     4);
         clx_memcpy(mem + 8, &len32, 4);
         clx_memcpy(mem + 16, src, subl);
@@ -148,7 +138,8 @@ MultiValue str_reverse(LState* L, const LValue* args, size_t count) {
         return MultiValue(LValue::istr(buf, static_cast<uint32_t>(l)));
     }
     uint32_t len32 = static_cast<uint32_t>(l);
-    char* mem = new char[16 + l + 1]();
+    char* mem = new char[16 + l + 1];
+    std::memset(mem, 0, 16);
     clx_memcpy(mem + 8, &len32, 4);
     char* dst = mem + 16;
     for (size_t i = 0; i < l; i++)
@@ -174,7 +165,8 @@ MultiValue str_lower(LState* L, const LValue* args, size_t count) {
         return MultiValue(LValue::istr(buf, static_cast<uint32_t>(l)));
     }
     uint32_t len32 = static_cast<uint32_t>(l);
-    char* mem = new char[16 + l + 1]();
+    char* mem = new char[16 + l + 1];
+    std::memset(mem, 0, 16);
     clx_memcpy(mem + 8, &len32, 4);
     char* dst = mem + 16;
     for (size_t i = 0; i < l; i++)
@@ -200,7 +192,8 @@ MultiValue str_upper(LState* L, const LValue* args, size_t count) {
         return MultiValue(LValue::istr(buf, static_cast<uint32_t>(l)));
     }
     uint32_t len32 = static_cast<uint32_t>(l);
-    char* mem = new char[16 + l + 1]();
+    char* mem = new char[16 + l + 1];
+    std::memset(mem, 0, 16);
     clx_memcpy(mem + 8, &len32, 4);
     char* dst = mem + 16;
     for (size_t i = 0; i < l; i++)
@@ -241,7 +234,8 @@ MultiValue str_rep(LState* L, const LValue* args, size_t count) {
         return MultiValue(LValue::istr(buf, static_cast<uint32_t>(totallen)));
     }
     uint32_t len32 = static_cast<uint32_t>(totallen);
-    char* mem = new char[16 + totallen + 1]();
+    char* mem = new char[16 + totallen + 1];
+    std::memset(mem, 0, 16);
     clx_memcpy(mem + 8, &len32, 4);
     char* p = mem + 16;
     for (int64_t i = 0; i < n - 1; i++) {
@@ -299,7 +293,8 @@ MultiValue str_char(LState* L, const LValue* args, size_t count) {
         }
         return MultiValue(LValue::istr(buf, count));
     }
-    char* mem = new char[16 + count + 1]();
+    char* mem = new char[16 + count + 1];
+    std::memset(mem, 0, 16);
     clx_memcpy(mem + 8, &count, 4);
     char* dst = mem + 16;
     for (size_t i = 0; i < count; i++) {
@@ -334,17 +329,18 @@ MultiValue str_format(LState* L, const LValue* args, size_t count) {
     int arg = 2;
 
     StringBuilder result;
+    if (sfl > 32) result.reserve(sfl / 4 + 8);  // rough upper bound on (literal + spec) fragments
     while (strfrmt < end) {
         if (*strfrmt != '%') {
 
             const char* lit = strfrmt;
             while (strfrmt < end && *strfrmt != '%') strfrmt++;
-            result.append(L->intern_string(lit, strfrmt - lit), static_cast<uint32_t>(strfrmt - lit));
+            result.append(lit, static_cast<uint32_t>(strfrmt - lit));
             continue;
         }
         strfrmt++;
         if (*strfrmt == '%') {
-            result.append(L->intern_string("%", 1), 1);
+            result.append("%", 1);
             strfrmt++;
             continue;
         }
@@ -464,11 +460,11 @@ MultiValue str_format(LState* L, const LValue* args, size_t count) {
                 break;
             }
             default:
-                result.append(L->intern_string(fmt_buf, fmt_pos), static_cast<uint32_t>(fmt_pos));
+                result.append_owned(fmt_buf, static_cast<uint32_t>(fmt_pos));
                 continue;
         }
         if (written > 0)
-            result.append(L->intern_string(buf, written), static_cast<uint32_t>(written));
+            result.append_owned(buf, static_cast<uint32_t>(written));
     }
     return MultiValue(result.to_lvalue(L));
 }
@@ -939,6 +935,7 @@ MultiValue str_gsub(LState* L, const LValue* args, size_t count) {
 
 
     StringBuilder result;
+    if (srcl > 64) result.reserve(std::min<size_t>(srcl / 4 + 8, 4096));
 
     while (n < max_s) {
         reprepstate(&ms);
@@ -951,14 +948,15 @@ MultiValue str_gsub(LState* L, const LValue* args, size_t count) {
                 const char* news = args[2].as_string();
                 size_t l = args[2].string_len();
                 StringBuilder repl;
-                for (size_t i = 0; i < l; i++) {
+                size_t i = 0;
+                while (i < l) {
                     if (news[i] == L_ESC && i + 1 < l) {
                         i++;
                         if (news[i] == L_ESC) {
-                            repl.append(L->intern_string("%", 1), 1);
+                            repl.append("%", 1);
                         } else if (news[i] == '0') {
                             size_t ml = e - src_pos;
-                            repl.append(L->intern_string(src_pos, ml), static_cast<uint32_t>(ml));
+                            repl.append(src_pos, static_cast<uint32_t>(ml));
                         } else if (std::isdigit((unsigned char)news[i])) {
                             int ci = news[i] - '1';
                             const char* cap;
@@ -966,13 +964,18 @@ MultiValue str_gsub(LState* L, const LValue* args, size_t count) {
                             if (capl == CAP_POSITION) {
                                 char tmp[24];
                                 int tw = std::snprintf(tmp, sizeof(tmp), "%lld", (long long)((cap - src) + 1));
-                                repl.append(L->intern_string(tmp, tw), static_cast<uint32_t>(tw));
+                                repl.append_owned(tmp, static_cast<uint32_t>(tw));
                             } else {
-                                repl.append(L->intern_string(cap, (size_t)capl), static_cast<uint32_t>(capl));
+                                repl.append(cap, static_cast<uint32_t>(capl));
                             }
                         }
+                        i++;
                     } else {
-                        repl.append(L->intern_string(&news[i], 1), 1);
+                        // Batch a run of plain literal bytes into a single raw append
+                        // instead of interning (and discarding) one character at a time.
+                        size_t start = i;
+                        while (i < l && news[i] != L_ESC) i++;
+                        repl.append(&news[start], static_cast<uint32_t>(i - start));
                     }
                 }
                 result.append(repl);
@@ -1241,8 +1244,7 @@ MultiValue str_pack(LState* L, const LValue* args, size_t count) {
         if (ntoalign + size > (size_t)-1 - totalsize)
             throw_runtime_error("result too long");
         totalsize += ntoalign + size;
-        for (unsigned i = 0; i < ntoalign; i++)
-            buf += (char)LUAL_PACKPADBYTE;
+        buf.append(ntoalign, (char)LUAL_PACKPADBYTE);
         arg++;
         switch (opt) {
             case Kint: {
