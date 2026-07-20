@@ -234,7 +234,7 @@ MultiValue table_pack(LState* L, const LValue* args, size_t count) {
     LTable* tbl = static_cast<LTable*>(t.as_pointer());
     for (size_t k = 0; k < count; ++k)
         tbl->settable(LValue(static_cast<int64_t>(k + 1)), args[k]);
-    tbl->settable(LValue(L->intern_string("n")), LValue(static_cast<int64_t>(count)));
+    clx::set_field(L, t, "n", LValue(static_cast<int64_t>(count)));
     return MultiValue(t);
 }
 
