@@ -107,9 +107,8 @@ static MultiValue lua_getmetatable(LState* L, const LValue* args, size_t count) 
 
 //------------------ clx_setmetatable: sets the metatable of a table
 static MultiValue lua_setmetatable(LState* L, const LValue* args, size_t count) {
-    if (count < 2 || !clx::is_table(args[0])) {
-        clx::error(L, "bad argument to 'setmetatable' (table expected)");
-    }
+    if (count < 2) clx::error(L, "bad argument to 'setmetatable' (table expected)");
+    clx::check_table(L, args[0]);
     clx::setmetatable(L, args[0], args[1]);
     return MultiValue(args[0]);
 }
@@ -190,8 +189,10 @@ static MultiValue type(LState* L, const LValue* args, size_t count) {
     if (count == 0) {
         clx::error(L, "bad argument #1 to 'type' (value expected)");
     }
-    static const char* names[] = {"nil", "boolean", "number", "number", "string", "table", "function", "userdata", "thread"};
-    return MultiValue(clx::string(L, names[static_cast<uint8_t>(args[0].type)]));
+    // Lua 5.5 type() returns "number" for both Int64 and Double
+    const char* name = VALUE_TYPE_NAMES[static_cast<uint8_t>(args[0].type)];
+    if (args[0].type == ValueType::Int64) name = "number";
+    return MultiValue(clx::string(L, name));
 }
 
 //------------------ clx_assert: asserts a condition (global assert function)
@@ -251,17 +252,15 @@ static MultiValue lua_rawequal(LState* L, const LValue* args, size_t count) {
 
 //------------------ clx_rawget: gets table value without metamethods
 static MultiValue rawget(LState* L, const LValue* args, size_t count) {
-    if (count < 2 || !clx::is_table(args[0])) {
-        clx::error(L, "bad argument #1 to 'rawget' (table expected)");
-    }
+    if (count < 2) clx::error(L, "bad argument #1 to 'rawget' (table expected)");
+    clx::check_table(L, args[0]);
     return MultiValue(clx::raw_get(L, args[0], args[1]));
 }
 
 //------------------ clx_rawset: sets table value without metamethods
 static MultiValue rawset(LState* L, const LValue* args, size_t count) {
-    if (count < 3 || !clx::is_table(args[0])) {
-        clx::error(L, "bad argument #1 to 'rawset' (table expected)");
-    }
+    if (count < 3) clx::error(L, "bad argument #1 to 'rawset' (table expected)");
+    clx::check_table(L, args[0]);
     clx::raw_set(L, args[0], args[1], args[2]);
     return MultiValue(args[0]);
 }
@@ -271,25 +270,7 @@ static MultiValue lua_rawlen(LState* L, const LValue* args, size_t count) {
     if (count < 1) {
         clx::error(L, "bad argument #1 to 'rawlen' (value expected)");
     }
-    const LValue& v = args[0];
-
-    if (clx::is_string(v)) {
-        return MultiValue(clx::integer(static_cast<int64_t>(std::string_view(v.as_string()).length())));
-    }
-    if (clx::is_table(v)) {
-        LTable* t = static_cast<LTable*>(v.as_pointer());
-        size_t n = clx_rawlen_array(reinterpret_cast<const uint8_t*>(t->array_types), t->array_size);
-        if (n < t->array_size) return MultiValue(clx::integer(static_cast<int64_t>(n)));
-        int64_t len = static_cast<int64_t>(t->array_size);
-        while (true) {
-            LValue p = t->gettable(LValue(static_cast<double>(len + 1)));
-            if (p.type == Nil) break;
-            len++;
-        }
-        return MultiValue(clx::integer(len));
-    }
-
-    clx::error(L, "bad argument #1 to 'rawlen' (string or table expected)");
+    return MultiValue(clx::integer(clx::rawlen(args[0])));
 }
 
 //------------------ warnings_enabled: global flag tracking whether warnings are on/off
@@ -326,9 +307,8 @@ static MultiValue require(LState* L, const LValue* args, size_t count) {
 
 //------------------ clx_next: returns next key-value pair from a table (global next function)
 static MultiValue lua_next(LState* L, const LValue* args, size_t count) {
-    if (count == 0 || !clx::is_table(args[0])) {
-        clx::error(L, "bad argument #1 to 'next' (table expected)");
-    }
+    if (count == 0) clx::error(L, "bad argument #1 to 'next' (table expected)");
+    clx::check_table(L, args[0]);
     LValue key = (count > 1) ? args[1] : LValue();
     return clx::next(L, args[0], key);
 }
