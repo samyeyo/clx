@@ -361,6 +361,13 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
             std::string_view name(ctx.nodes[node.as.for_stmt.var_ident].as.ident.name, ctx.nodes[node.as.for_stmt.var_ident].as.ident.length);
             known_numbers.insert(name);
 
+            // For-loop limit is always numeric — mark it too
+            uint32_t limit_expr = node.as.for_stmt.limit_expr;
+            if (limit_expr < ctx.nodes.size() && ctx.nodes[limit_expr].type == NodeType::Identifier) {
+                std::string_view lim_name(ctx.nodes[limit_expr].as.ident.name, ctx.nodes[limit_expr].as.ident.length);
+                known_numbers.insert(lim_name);
+            }
+
             std::string vname = get_ast_string(ctx, node.as.for_stmt.var_ident);
             if (!vname.empty()) {
                 if (loop_limits.count(vname) && loop_limits[vname] != node.as.for_stmt.limit_expr) {
@@ -813,6 +820,30 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                 if (v < ctx.nodes.size() && ctx.nodes[v].type == NodeType::Identifier && !yields_number(ctx, state, v, &known_numbers)) {
                     std::string_view name(ctx.nodes[v].as.ident.name, ctx.nodes[v].as.ident.length);
                     disqualified_arrays.insert(name);
+                }
+            }
+            // Detect x = x ± literal (while-loop counter pattern)
+            if (n.as.assign.target_count == 1) {
+                uint32_t t_idx = ctx.block_statements[n.as.assign.first_target];
+                uint32_t v_idx = ctx.block_statements[n.as.assign.first_value];
+                if (ctx.nodes[t_idx].type == NodeType::Identifier &&
+                    v_idx < ctx.nodes.size() && ctx.nodes[v_idx].type == NodeType::BinaryOp) {
+                    const auto& bin = ctx.nodes[v_idx].as.bin_op;
+                    int op = bin.op;
+                    if (op == static_cast<int>(BinaryOp::Add) || op == static_cast<int>(BinaryOp::Sub)) {
+                        uint32_t left = bin.left;
+                        uint32_t right = bin.right;
+                        if (left < ctx.nodes.size() && ctx.nodes[left].type == NodeType::Identifier) {
+                            std::string_view tname(ctx.nodes[t_idx].as.ident.name, ctx.nodes[t_idx].as.ident.length);
+                            std::string_view lname(ctx.nodes[left].as.ident.name, ctx.nodes[left].as.ident.length);
+                            if (tname == lname) {
+                                if (right < ctx.nodes.size() &&
+                                    (ctx.nodes[right].type == NodeType::Number || ctx.nodes[right].type == NodeType::Integer)) {
+                                    known_numbers.insert(tname);
+                                }
+                            }
+                        }
+                    }
                 }
             }
             if (n.as.assign.target_count == 1) {
