@@ -245,7 +245,7 @@ static MultiValue os_tmpname(LState* L, const LValue* args, size_t count) {
 void luastd_os(LState* L) {
     LValue t = L->create_table();
     LTable* tbl = static_cast<LTable*>(t.as_pointer());
-    tbl->bind_all(L, {
+    static constexpr clx::LazyReg os_funcs[] = {
         {"clock", os_clock},
         {"date", os_date},
         {"difftime", os_difftime},
@@ -257,7 +257,8 @@ void luastd_os(LState* L) {
         {"setlocale", os_setlocale},
         {"time", os_time},
         {"tmpname", os_tmpname}
-    });
+    };
+    clx::set_lazy_funcs(L, t, os_funcs, std::size(os_funcs));
     set_global(L, "os", t);
 }
 }

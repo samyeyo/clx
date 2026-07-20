@@ -313,7 +313,7 @@ MultiValue table_move(LState* L, const LValue* args, size_t count) {
 void luastd_table(LState* L) {
     LValue t = L->create_table();
     LTable* tbl = static_cast<LTable*>(t.as_pointer());
-    tbl->bind_all(L, {
+    static constexpr clx::LazyReg table_funcs[] = {
         {"concat", table_concat},
         {"insert", table_insert},
         {"remove", table_remove},
@@ -321,7 +321,8 @@ void luastd_table(LState* L) {
         {"pack", table_pack},
         {"unpack", table_unpack},
         {"move", table_move}
-    });
+    };
+    clx::set_lazy_funcs(L, t, table_funcs, std::size(table_funcs));
     set_global(L, "table", t);
 }
 

@@ -257,13 +257,14 @@ static MultiValue utf8_offset(LState* L, const LValue* args, size_t count) {
 void luastd_utf8(LState* L) {
     LValue t = L->create_table();
     LTable* tbl = static_cast<LTable*>(t.as_pointer());
-    tbl->bind_all(L, {
+    static constexpr clx::LazyReg utf8_funcs[] = {
         {"char", utf8_char},
         {"codes", utf8_codes},
         {"codepoint", utf8_codepoint},
         {"len", utf8_len},
         {"offset", utf8_offset}
-    });
+    };
+    clx::set_lazy_funcs(L, t, utf8_funcs, std::size(utf8_funcs));
     tbl->settable(LValue(L->intern_string("charpattern")),
                   LValue(L->intern_string(utf8_charpattern, sizeof(utf8_charpattern) - 1)));
     set_global(L, "utf8", t);

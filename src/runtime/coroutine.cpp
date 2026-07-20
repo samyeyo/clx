@@ -116,13 +116,16 @@ clx::MultiValue coroutine_close(clx::LState* L, const clx::LValue* args, size_t 
 //------------------ luastd_coroutine: registers the coroutine library into the global state
 void luastd_coroutine(LState* L) {
     clx::LValue co = clx::table(L);
-    clx::set_function(L, co, "create", coroutine_create);
-    clx::set_function(L, co, "resume", coroutine_resume);
-    clx::set_function(L, co, "yield", coroutine_yield);
-    clx::set_function(L, co, "running", coroutine_running);
-    clx::set_function(L, co, "status", coroutine_status);
-    clx::set_function(L, co, "wrap", coroutine_wrap);
-    clx::set_function(L, co, "close", coroutine_close);
+    static constexpr clx::LazyReg coro_funcs[] = {
+        {"create",  coroutine_create},
+        {"resume",  coroutine_resume},
+        {"yield",   coroutine_yield},
+        {"running", coroutine_running},
+        {"status",  coroutine_status},
+        {"wrap",    coroutine_wrap},
+        {"close",   coroutine_close},
+    };
+    set_lazy_funcs(L, co, coro_funcs, std::size(coro_funcs));
     clx::set_global(L, "coroutine", co);
 }
 

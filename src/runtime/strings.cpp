@@ -1457,7 +1457,7 @@ void luastd_string(LState* L) {
     LValue string_table = L->create_table();
     LTable* t = static_cast<LTable*>(string_table.as_pointer());
 
-    t->bind_all(L,
+    static constexpr clx::LazyReg strings_funcs[] =
     {
         {"len",      str_len},
         {"sub",      str_sub},
@@ -1476,7 +1476,8 @@ void luastd_string(LState* L) {
         {"pack",     str_pack},
         {"packsize", str_packsize},
         {"unpack",   str_unpack}
-    });
+    };
+    clx::set_lazy_funcs(L, string_table, strings_funcs, std::size(strings_funcs));
     set_global(L, "string", string_table);
 
     LValue mt = L->create_table();
