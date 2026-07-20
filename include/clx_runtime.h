@@ -414,7 +414,7 @@ LValue getmetafield(LState* L, const LValue& obj, const char* field);
 bool callmeta(LState* L, const LValue& obj, const char* event);
 
 //------------------ Creates a shared upvalue
-inline LUpValue make_upvalue(const LValue& val) {
+CLX_INLINE_HOT LUpValue make_upvalue(const LValue& val) {
     return std::make_shared<LValue>(val);
 }
 
@@ -897,6 +897,7 @@ struct LState {
 //------------------ String builder (part list)
 class StringBuilder {
     static constexpr size_t INLINE_CAP = 8;
+    static constexpr size_t ARENA_BLOCK = 4096;
 
     const char* parts_[INLINE_CAP];
     uint32_t    lens_[INLINE_CAP];
@@ -907,6 +908,15 @@ class StringBuilder {
     size_t       total_len;
     mutable const char*  cached;
 
+    // Owned scratch storage for fragments that don't outlive the call on
+    // their own (e.g. formatted into a stack buffer). append_owned() copies
+    // into here once; append() itself never copies. Blocks are freed when
+    // the builder is destroyed, which happens after to_string()/to_lvalue()
+    // have already materialized the final string.
+    std::vector<std::unique_ptr<char[]>> arena_blocks;
+    char* arena_cur = nullptr;
+    char* arena_end = nullptr;
+
     void grow() {
         size_t new_cap = cap * 2;
         auto* np = new const char*[new_cap];
@@ -914,6 +924,18 @@ class StringBuilder {
         for (size_t i = 0; i < count; ++i) { np[i] = parts[i]; nl[i] = lens[i]; }
         if (parts != parts_) { delete[] parts; delete[] lens; }
         parts = np; lens = nl; cap = new_cap;
+    }
+
+    char* arena_alloc(size_t n) {
+        if (static_cast<size_t>(arena_end - arena_cur) < n) {
+            size_t blk = n > ARENA_BLOCK ? n : ARENA_BLOCK;
+            arena_blocks.push_back(std::make_unique<char[]>(blk));
+            arena_cur = arena_blocks.back().get();
+            arena_end = arena_cur + blk;
+        }
+        char* p = arena_cur;
+        arena_cur += n;
+        return p;
     }
 
 public:
@@ -926,23 +948,16 @@ public:
 
     StringBuilder(const StringBuilder& o)
         : parts(parts_), lens(lens_), count(0), cap(INLINE_CAP), total_len(0), cached(nullptr) {
-        for (size_t i = 0; i < o.count; ++i) {
-            char* p = new char[o.lens[i]];
-            clx_memcpy(p, o.parts[i], o.lens[i]);
-            append(p, o.lens[i]);
-            delete[] p;
-        }
+        for (size_t i = 0; i < o.count; ++i)
+            append_owned(o.parts[i], o.lens[i]);
     }
     StringBuilder& operator=(const StringBuilder& o) {
         if (this != &o) {
             if (parts != parts_) { delete[] parts; delete[] lens; }
             parts = parts_; lens = lens_; count = 0; cap = INLINE_CAP; total_len = 0; cached = nullptr;
-            for (size_t i = 0; i < o.count; ++i) {
-                char* p = new char[o.lens[i]];
-                clx_memcpy(p, o.parts[i], o.lens[i]);
-                append(p, o.lens[i]);
-                delete[] p;
-            }
+            arena_blocks.clear(); arena_cur = nullptr; arena_end = nullptr;
+            for (size_t i = 0; i < o.count; ++i)
+                append_owned(o.parts[i], o.lens[i]);
         }
         return *this;
     }
@@ -951,12 +966,15 @@ public:
         : parts(o.parts == o.parts_ ? parts_ : o.parts),
           lens(o.lens == o.lens_ ? lens_ : o.lens),
           count(o.count), cap(o.cap),
-          total_len(o.total_len), cached(o.cached) {
+          total_len(o.total_len), cached(o.cached),
+          arena_blocks(std::move(o.arena_blocks)),
+          arena_cur(o.arena_cur), arena_end(o.arena_end) {
         if (o.parts == o.parts_) {
             for (size_t i = 0; i < count; ++i) { parts_[i] = o.parts_[i]; lens_[i] = o.lens_[i]; }
         }
         o.parts = o.parts_; o.lens = o.lens_; o.count = 0; o.cap = INLINE_CAP;
         o.total_len = 0; o.cached = nullptr;
+        o.arena_cur = nullptr; o.arena_end = nullptr;
     }
 
     StringBuilder& operator=(StringBuilder&& o) noexcept {
@@ -965,11 +983,14 @@ public:
         lens = o.lens == o.lens_ ? lens_ : o.lens;
         count = o.count; cap = o.cap;
         total_len = o.total_len; cached = o.cached;
+        arena_blocks = std::move(o.arena_blocks);
+        arena_cur = o.arena_cur; arena_end = o.arena_end;
         if (o.parts == o.parts_) {
             for (size_t i = 0; i < count; ++i) { parts_[i] = o.parts_[i]; lens_[i] = o.lens_[i]; }
         }
         o.parts = o.parts_; o.lens = o.lens_; o.count = 0; o.cap = INLINE_CAP;
         o.total_len = 0; o.cached = nullptr;
+        o.arena_cur = nullptr; o.arena_end = nullptr;
         return *this;
     }
 
@@ -977,6 +998,23 @@ public:
         cached = nullptr;
         count = 0;
         total_len = 0;
+        // Arena blocks are intentionally kept (not freed) so a builder reused
+        // in a loop doesn't repay allocation cost every time; they're only
+        // released when the builder itself is destroyed.
+        arena_cur = nullptr;
+        arena_end = nullptr;
+    }
+
+    // Reserve room for `n` fragments up front to avoid repeated grow()
+    // reallocation when the caller has a rough upper bound in advance
+    // (e.g. format-string length as a proxy for spec count).
+    void reserve(size_t n) {
+        if (n <= cap) return;
+        auto* np = new const char*[n];
+        auto* nl = new uint32_t[n];
+        for (size_t i = 0; i < count; ++i) { np[i] = parts[i]; nl[i] = lens[i]; }
+        if (parts != parts_) { delete[] parts; delete[] lens; }
+        parts = np; lens = nl; cap = n;
     }
 
     CLX_INLINE StringBuilder& append(const char* s, uint32_t len) {
@@ -984,6 +1022,17 @@ public:
         if (count >= cap) grow();
         parts[count] = s; lens[count] = len; count++; total_len += len;
         return *this;
+    }
+
+    // Like append(), but copies `s` into builder-owned scratch memory first.
+    // Use this whenever `s` points at a buffer that will be overwritten or
+    // go out of scope before to_string()/to_lvalue() runs (e.g. a stack
+    // buffer used to format a number). Cheaper than interning: no global
+    // pool hash/lookup, and the copy is a bump-pointer allocation.
+    CLX_INLINE StringBuilder& append_owned(const char* s, uint32_t len) {
+        char* p = arena_alloc(len);
+        clx_memcpy(p, s, len);
+        return append(p, len);
     }
 
     CLX_INLINE StringBuilder& append(StringBuilder& other) {
@@ -1004,14 +1053,12 @@ public:
             char buf[32];
             size_t n = static_cast<size_t>(std::snprintf(buf, sizeof(buf), "%lld",
                 static_cast<long long>(v.val.payload.i64)));
-            char* s = new char[n]; clx_memcpy(s, buf, n);
-            return append(s, static_cast<uint32_t>(n));
+            return append_owned(buf, static_cast<uint32_t>(n));
         }
         if (v.type == ValueType::Double) {
             char buf[32];
             size_t n = static_cast<size_t>(std::snprintf(buf, sizeof(buf), "%.14g", v.val.payload.f64));
-            char* s = new char[n]; clx_memcpy(s, buf, n);
-            return append(s, static_cast<uint32_t>(n));
+            return append_owned(buf, static_cast<uint32_t>(n));
         }
         if (v.type == ValueType::Nil) return append("nil", 3);
         if (v.type == ValueType::Boolean) return append(v.as_bool() ? "true" : "false", v.as_bool() ? 4 : 5);
@@ -1088,27 +1135,27 @@ struct FuncArena {
     size_t capacity;
 };
 
-inline void arena_init(FuncArena* a, size_t size) {
+CLX_INLINE_HOT void arena_init(FuncArena* a, size_t size) {
     a->base = static_cast<char*>(std::malloc(size));
     a->ptr = a->base;
     a->capacity = size;
 }
 
-inline void* arena_alloc(FuncArena* a, size_t bytes, size_t align = 8) {
+CLX_INLINE_HOT void* arena_alloc(FuncArena* a, size_t bytes, size_t align = 8) {
     uintptr_t current = reinterpret_cast<uintptr_t>(a->ptr);
     uintptr_t aligned = (current + align - 1) & ~(align - 1);
     a->ptr = reinterpret_cast<char*>(aligned + bytes);
     return reinterpret_cast<char*>(aligned);
 }
 
-inline void arena_reset(FuncArena* a) {
+CLX_INLINE_HOT void arena_reset(FuncArena* a) {
     if (a->base) std::free(a->base);
     a->base = nullptr;
     a->ptr = nullptr;
     a->capacity = 0;
 }
 
-inline LValue arena_create_table(LState* L, FuncArena* a, size_t asize, size_t hsize) {
+CLX_INLINE_HOT LValue arena_create_table(LState* L, FuncArena* a, size_t asize, size_t hsize) {
 #if CLX_ARENA_DEFAULT_FIELDS > 0
     if (asize < CLX_ARENA_DEFAULT_FIELDS) asize = CLX_ARENA_DEFAULT_FIELDS;
     if (hsize < CLX_ARENA_DEFAULT_FIELDS) hsize = CLX_ARENA_DEFAULT_FIELDS;
@@ -1153,28 +1200,28 @@ struct CloseGuard {
 };
 
 //------------------ Reads a variable from environment table (shared_ptr upvalue)
-inline LValue get_env_var(LState* L, LUpValue env, const char* name) {
+CLX_INLINE_HOT LValue get_env_var(LState* L, LUpValue env, const char* name) {
     LTable* t = static_cast<LTable*>((*env).val.payload.ptr);
     LValue key = LValue(L->intern_string(name));
     return t->gettable(key);
 }
 
 //------------------ Reads a variable from environment table (direct LValue)
-inline LValue get_env_var(LState* L, const LValue& env, const char* name) {
+CLX_INLINE_HOT LValue get_env_var(LState* L, const LValue& env, const char* name) {
     LTable* t = static_cast<LTable*>(env.val.payload.ptr);
     LValue key = LValue(L->intern_string(name));
     return t->gettable(key);
 }
 
 //------------------ Writes a variable to environment table (shared_ptr upvalue)
-inline void set_env_var(LState* L, LUpValue env, const char* name, const LValue& val) {
+CLX_INLINE_HOT void set_env_var(LState* L, LUpValue env, const char* name, const LValue& val) {
     LTable* t = static_cast<LTable*>((*env).val.payload.ptr);
     LValue key = LValue(L->intern_string(name));
     t->settable(key, val);
 }
 
 //------------------ Writes a variable to environment table (direct LValue)
-inline void set_env_var(LState* L, const LValue& env, const char* name, const LValue& val) {
+CLX_INLINE_HOT void set_env_var(LState* L, const LValue& env, const char* name, const LValue& val) {
     LTable* t = static_cast<LTable*>(env.val.payload.ptr);
     LValue key = LValue(L->intern_string(name));
     t->settable(key, val);
@@ -1526,12 +1573,12 @@ CLX_INLINE LValue make_string(LState* L, const char* s) {
     return LValue(L->intern_string(s, len));
 }
 
-inline LValue make_string(LState* L, const std::string& s) {
+CLX_INLINE_HOT LValue make_string(LState* L, const std::string& s) {
     return make_string(L, s.data(), s.size());
 }
 
 //------------------ Table read with __index fallback
-inline LValue table_get(LState* L, const LValue& obj, const LValue& key) {
+CLX_INLINE_HOT LValue table_get(LState* L, const LValue& obj, const LValue& key) {
     LTable* mt = nullptr;
     LValue direct;
 
@@ -1614,7 +1661,7 @@ inline LValue table_get(LState* L, const LValue& obj, const LValue& key) {
 }
 
 //------------------ Table write with __newindex fallback
-inline void table_set(LState* L, const LValue& obj, const LValue& key, const LValue& val) {
+CLX_INLINE_HOT void table_set(LState* L, const LValue& obj, const LValue& key, const LValue& val) {
     LTable* mt = nullptr;
 
     if (obj.type == ValueType::Table) {
@@ -1661,7 +1708,7 @@ inline void table_set(LState* L, const LValue& obj, const LValue& key, const LVa
 }
 
 //------------------ Integer-key table read (fast path)
-inline LValue table_get_int(LState* L, const LValue& obj, size_t idx) {
+CLX_INLINE_HOT LValue table_get_int(LState* L, const LValue& obj, size_t idx) {
     LTable* mt = nullptr;
     LValue key_val = LValue(static_cast<int64_t>(idx));
 
@@ -1696,7 +1743,7 @@ inline LValue table_get_int(LState* L, const LValue& obj, size_t idx) {
 }
 
 //------------------ Integer-key table write (fast path)
-inline void table_set_int(LState* L, const LValue& obj, size_t idx, const LValue& val) {
+CLX_INLINE_HOT void table_set_int(LState* L, const LValue& obj, size_t idx, const LValue& val) {
     LValue key_val = LValue(static_cast<int64_t>(idx));
 
     if (obj.type == ValueType::Table) {
