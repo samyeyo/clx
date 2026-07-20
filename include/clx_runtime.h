@@ -739,6 +739,47 @@ struct StringPool {
         if (n > capacity) rehash(n);
     }
 
+    // Pre-computed entry for bulk fill — slot positions computed at codegen time
+    struct PrecomputedEntry {
+        const char* s;
+        uint32_t    len;
+        uint64_t    hash;
+        uint32_t    slot;
+    };
+
+    // Fill hash table directly at pre-computed slot positions — zero probing
+    void bulk_fill_precomputed(const PrecomputedEntry* entries, size_t n) {
+        // Compute total arena bytes needed for all strings
+        size_t total_arena = 0;
+        for (size_t i = 0; i < n; ++i) {
+            size_t entry_size = 16 + entries[i].len + 1;
+            total_arena += (entry_size + 15) & ~size_t(15);
+        }
+
+        // Single arena allocation for all string data
+        char* arena_base = arena.allocate(total_arena);
+        char* arena_ptr = arena_base;
+
+        // Fill slots directly at pre-computed indices
+        for (size_t i = 0; i < n; ++i) {
+            uint32_t len32 = entries[i].len;
+            uint32_t h_low = static_cast<uint32_t>(entries[i].hash);
+            clx_memcpy(arena_ptr,     &h_low, 4);
+            clx_memcpy(arena_ptr + 8, &len32, 4);
+            clx_memcpy(arena_ptr + 16, entries[i].s, entries[i].len);
+            arena_ptr[16 + entries[i].len] = '\0';
+
+            Slot& s = slots[entries[i].slot];
+            s.baked = arena_ptr + 16;
+            s.hash  = entries[i].hash;
+            s.len   = len32;
+
+            size_t entry_size = 16 + entries[i].len + 1;
+            arena_ptr += (entry_size + 15) & ~size_t(15);
+        }
+        count += n;
+    }
+
 private:
     Slot make_slot(const char* str, size_t len, uint64_t h) {
         // Allocate 16 (header) + len + 1 (null) from arena, aligned to 16
