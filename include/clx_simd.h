@@ -37,22 +37,22 @@
 
 #ifdef _MSC_VER
     #include <intrin.h>
-    inline int clx_ctz(unsigned x) { unsigned long i; _BitScanForward(&i, x); return static_cast<int>(i); }
+    CLX_INLINE_HOT int clx_ctz(unsigned x) { unsigned long i; _BitScanForward(&i, x); return static_cast<int>(i); }
     #ifdef _WIN64
-        inline int clx_ctzll(unsigned long long x) { unsigned long i; _BitScanForward64(&i, x); return static_cast<int>(i); }
+        CLX_INLINE_HOT int clx_ctzll(unsigned long long x) { unsigned long i; _BitScanForward64(&i, x); return static_cast<int>(i); }
     #else
-        inline int clx_ctzll(unsigned long long x) {
+        CLX_INLINE_HOT int clx_ctzll(unsigned long long x) {
             if (static_cast<unsigned>(x)) return clx_ctz(static_cast<unsigned>(x));
             return clx_ctz(static_cast<unsigned>(x >> 32)) + 32;
         }
     #endif
 #else
-    inline int clx_ctz(unsigned x) { return __builtin_ctz(x); }
-    inline int clx_ctzll(unsigned long long x) { return __builtin_ctzll(x); }
+    CLX_INLINE_HOT int clx_ctz(unsigned x) { return __builtin_ctz(x); }
+    CLX_INLINE_HOT int clx_ctzll(unsigned long long x) { return __builtin_ctzll(x); }
 #endif
 
 //------------------ clx_find_first_nil : scans types[0..size) and returns the index of the first nil, returns size if none found.
-inline size_t clx_find_first_nil(const uint8_t* types, size_t size) {
+CLX_INLINE_HOT size_t clx_find_first_nil(const uint8_t* types, size_t size) {
     size_t i = 0;
 
     //------------------ 32-byte AVX2 path
@@ -101,7 +101,7 @@ inline size_t clx_find_first_nil(const uint8_t* types, size_t size) {
 }
 
 //------------------ clx_find_first_nonnil : scans types[start..size) and returns the index of the first non-nil, returns size if none found.
-inline size_t clx_find_first_nonnil(const uint8_t* types, size_t size, size_t start = 0) {
+CLX_INLINE_HOT size_t clx_find_first_nonnil(const uint8_t* types, size_t size, size_t start = 0) {
     size_t i = start;
 
     //------------------ 32-byte AVX2 path
@@ -153,7 +153,7 @@ inline size_t clx_find_first_nonnil(const uint8_t* types, size_t size, size_t st
 
 //------------------ clx_type_mask_nonnil : returns a bitmask where bit k is 1 if types[offset + k] != 0, used for GC batch scanning.
 //  32-byte AVX2 path returns 32-bit mask; 16-byte SSE2/NEON path returns 16-bit mask.
-inline uint32_t clx_type_mask_nonnil(const uint8_t* types, size_t offset, size_t count) {
+CLX_INLINE_HOT uint32_t clx_type_mask_nonnil(const uint8_t* types, size_t offset, size_t count) {
     (void)count;
     //------------------ 32-byte AVX2 path
 #if defined(CLX_HAS_AVX2)
@@ -188,7 +188,7 @@ inline uint32_t clx_type_mask_nonnil(const uint8_t* types, size_t offset, size_t
 //------------------ clx_type_mask32_nonnil : returns a 32-bit bitmask for 32 bytes at offset.
 //  Used by GC mark loop for AVX2-accelerated scanning.
 #if defined(CLX_HAS_AVX2)
-inline uint32_t clx_type_mask32_nonnil(const uint8_t* types, size_t offset) {
+CLX_INLINE_HOT uint32_t clx_type_mask32_nonnil(const uint8_t* types, size_t offset) {
     const __m256i zero256 = _mm256_setzero_si256();
     __m256i v = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(types + offset));
     __m256i cmp = _mm256_cmpeq_epi8(v, zero256);
@@ -198,7 +198,7 @@ inline uint32_t clx_type_mask32_nonnil(const uint8_t* types, size_t offset) {
 
 //------------------ clx_validate_types_range : validates that all types in [start..start+count) are in [lo, hi] using SIMD.
 //  Returns true if all valid, false if any invalid. For table_concat validation.
-inline bool clx_validate_types_range(const uint8_t* types, size_t start, size_t count, uint8_t lo, uint8_t hi) {
+CLX_INLINE_HOT bool clx_validate_types_range(const uint8_t* types, size_t start, size_t count, uint8_t lo, uint8_t hi) {
     size_t k = start;
     size_t end = start + count;
 
@@ -247,7 +247,7 @@ inline bool clx_validate_types_range(const uint8_t* types, size_t start, size_t 
 }
 
 //------------------ clx_rawlen_array : SIMD-optimized rawlen for the array part of a table, returns the count of leading non-nil elements.
-inline size_t clx_rawlen_array(const uint8_t* types, size_t array_size) {
+CLX_INLINE_HOT size_t clx_rawlen_array(const uint8_t* types, size_t array_size) {
     return clx_find_first_nil(types, array_size);
 }
 
