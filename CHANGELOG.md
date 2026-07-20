@@ -19,6 +19,13 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 * Integrated AnalysisState into the CLI driver for code generation (e91b04d)
 * Wired Optimizer into CLI driver — each file now runs escape/numeric analysis before codegen (35f83d4)
 * Arena tables fall back to heap allocation on growth instead of refusing arena (e949fd2)
+* Bumped wyhash to 64-bit and grew baked string header to 16 bytes (f70ac4e)
+* Reduced cs_max from 20 to 4 in AnalysisState for less memory overhead and faster code (14750ed)
+* Replaced bind_all with set_lazy_funcs for lazy registration of coroutine, os, string, table, and utf8 modules (48cb301)
+* Record known_table_lengths for tables created with fixed constructors; detect setmetatable, table.insert, and table.remove to populate tables_with_dynamic_length, preventing incorrect # constant folding on mutated tables (bbf80ea)
+* Optimized string interning at startup: strings ≤6 bytes now use inline `LValue::istr()` instead of going through the StringPool, eliminating ~60-80% of pool operations (e155f2c)
+* Long strings (>6 bytes) now use pre-computed slot positions — codegen simulates the hash table insertion at transpile time and emits a `PrecomputedEntry` array, allowing `bulk_fill_precomputed()` to write all slots in a single pass with zero linear probing (9b7e6eb)
+* Fixed hash function mismatch for 7-byte strings: codegen now uses `swar_hash_8` for strings ≤8 bytes to match the runtime `intern_string()` threshold (e155f2c)
 
 ### Added
 
@@ -30,6 +37,41 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 * Added per-function memory arena allocator (FuncArena) to reduce GC pressure for short-lived tables (ad72242)
 * Added escape analysis pass that classifies local tables as escaping (captured, returned, global-stored, function-arg, method-target, grown) vs arena-safe (e949fd2)
 * Added CLX_ARENA_DEFAULT_FIELDS configurable define for arena table preallocation size (default 8) (e949fd2)
+* Added arena analysis fields to AnalysisState (5950ccd)
+* Added escape analysis and arena size computation to optimizer (6b3cef9)
+* Added arena allocation for non-escaping tables in codegen (35f83d4)
+* Added `_ENV` support for closures in LCFunction and LState (4d7cd48)
+* Added `set_fenv()` and `get_fenv()` to manage a function's `_ENV` (209974b)
+* Added `_ENV` support for closures in CodeEmitter (b586674)
+* Enhanced `require()` to support custom `_ENV` as second parameter (56e2a0e)
+* Added `StringPool::PrecomputedEntry` struct and `bulk_fill_precomputed()` method for zero-probing string pool initialization (9b7e6eb)
+* Added AVX2 optimizations and new SIMD validation functions (9a2e0d7)
+* Added hash_bitmap to LTable for efficient hash slot occupancy tracking (a9c65d1)
+* Added bitmap-based `next()` hash-part iteration (7b527c8)
+* Added mappings for pure numeric function parameters and node ownership in optimizer (45d4019)
+* Added function parameter tracking as pure numeric in `yields_number` with scope validation (6305c91)
+* Added Pass 4: detect function params used as integer-keyed numeric arrays; node_func_owner scope map (95ab663)
+* Added AVX2 GC mark loop + protect_wl SIMD; bitmap alloc/update/free; bitmap-based GC hash scanning (cf62396)
+* Added SIMD enhancements and fast paths for table concat, sort, and move (44a7697)
+* Added StringArena for efficient string memory management in StringPool (f577737)
+* Added `table_set_direct()` and `table_set_direct_cs()` for direct table writes bypassing `set_value()`'s redundant gettable check (3794233)
+* Added `tables_with_dynamic_length` set and `known_table_lengths` map to AnalysisState (6924cb8)
+* Added 3 new table optimizations in codegen (76a86d2)
+* Added `StringPool::PrecomputedEntry` struct and `bulk_fill_precomputed()` for zero-probing startup interning (9b7e6eb)
+* Added sets for integer-returning functions and typed locals in optimizer (40a966b)
+* Added empty-table-in-loop promotion: detects `local t = {}; for i=1,N do t[i]=v end` patterns and promotes `t` to `pure_numeric_arrays` for fast vector-indexed reads (abb3187)
+* Added real-world compatibility tests (422a86d)
+* Added tests for custom `_ENV` in child functions and in `require()` (c5f4def, 563f92a)
+
+### Fixed
+
+* Fixed missing file/line in "attempt to call a nil value" error (7459b98)
+* Fixed issues #17 and #18 with MSVC compiler (e6640c7)
+* Fixed #16 by splitting `get_string`/`intern_string` to prevent uninitialized len in `utf8.codes()` (168ac0c)
+* Fixed #15 by correcting the inverted SSE2 operands in `table_concat` type range check (1030340)
+* Fixed annoying MSVC warning message D9025 when compiling clx_size.lib (d716fa1)
+* Fixed GC quadratic hash scan, CacheSlot stability, sub-alloc tracking, double-free (5a1f442)
+* Fixed CacheSlot reads for numeric fields and int64 inner loops for `j=i+1` (e89a8e9)
 
 ### Refactored
 
@@ -38,6 +80,25 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 * Improved pure integers detection in the optimizer (19cf523)
 * Consolidated 6 duplicated integer-detection lambdas in codegen into calls to the shared `is_purely_integer_expr` function (ad72242)
 * Replaced optimizer's incomplete `is_int_expr` lambda with the shared function, enabling detection of Mod, And, Or, FloorDiv, ParenExpression, UnaryOp(Minus) as integer-producing (ad72242)
+* Marked several functions as `CLX_INLINE_HOT` for performance improvements (6c84a86, fa67b2f)
+* Replaced hardcoded minimum fields with `CLX_ARENA_DEFAULT_FIELDS` constant for consistency (247d16b)
+* Refactored `get_binary_string` to use `get_string` for consistency and simplified code (7867dda)
+* Enhanced for-loop and while-loop detection in optimizer (62fdd9a)
+* Enhanced vector path qualification by disqualifying non-simple keys in array optimizations (37c49e7)
+* Reduced cs_max from 20 to 4 in AnalysisState (14750ed)
+
+### Documentation
+
+* Corrected spelling (86b5c03)
+
+### Build
+
+* Installed `clx_simd.h` alongside the other public headers (9f0df50)
+* Derived `--version` from the CMake project version (c838d99)
+
+### Benchmarks
+
+* Updated default N values in fannkuchredux and fasta benchmarks (78d8a7e)
 
 ---
 
