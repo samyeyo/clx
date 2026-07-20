@@ -50,6 +50,8 @@ struct AnalysisState {
     std::map<std::string_view, std::set<uint32_t>> pure_numeric_func_params;  // param name → set of FunctionDef node indices
     std::map<uint32_t, uint32_t> node_func_owner;  // node index → FunctionDef node index that owns it
     std::set<std::string, std::less<>> native_integers;
+    std::set<std::string_view> int_returning_funcs;
+    std::set<std::string, std::less<>> int_typed_locals;
 
     //------------------ Arena analysis data
     std::set<std::string_view> escaping_vars;
