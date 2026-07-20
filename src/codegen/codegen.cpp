@@ -49,6 +49,56 @@ const char* lookup_builtin(std::string_view module, std::string_view func) {
 }
 
 
+//------------------ collect_string_builder_refs: walk an argument subtree and
+// collect names from `state.string_builders` that appear as Identifier nodes
+// in the expression. Used to limit StringBuilder pre-declarations inside
+// CallExpression lambdas to only those actually referenced (otherwise
+// every call site would unconditionally declare every StringBuilder).
+void collect_string_builder_refs(const ASTContext& ctx, uint32_t n_idx,
+                                 const std::set<std::string_view>& sb_set,
+                                 std::set<std::string_view>& out) {
+    if (n_idx == 0xFFFFFFFF || n_idx >= ctx.nodes.size()) return;
+    const auto& nd = ctx.nodes[n_idx];
+    if (nd.type == NodeType::Identifier) {
+        std::string_view nm(nd.as.ident.name, nd.as.ident.length);
+        if (sb_set.count(nm)) out.insert(nm);
+        return;
+    }
+    if (nd.type == NodeType::BinaryOp) {
+        collect_string_builder_refs(ctx, nd.as.bin_op.left, sb_set, out);
+        collect_string_builder_refs(ctx, nd.as.bin_op.right, sb_set, out);
+        return;
+    }
+    if (nd.type == NodeType::UnaryOp) {
+        collect_string_builder_refs(ctx, nd.as.unary_op.expr, sb_set, out);
+        return;
+    }
+    if (nd.type == NodeType::ParenExpression) {
+        collect_string_builder_refs(ctx, nd.as.paren_expr.expr, sb_set, out);
+        return;
+    }
+    // Note: there is no `IfExpression` AST node in this codebase — Lua's
+    // conditional expression `a and b or c` is represented as BinaryOp, and
+    // the codegen's `(sb_X.empty() ? l_X : clx::LValue(sb_X.to_string(L)))`
+    // pattern is a SYNTHETIC compile-time idiom emitted when an Identifier
+    // whose name is in `state.string_builders` is referenced — not an AST
+    // traversal case. So Identifier-via-string-builder detection suffices.
+    if (nd.type == NodeType::TableAccess) {
+        collect_string_builder_refs(ctx, nd.as.table_access.table, sb_set, out);
+        collect_string_builder_refs(ctx, nd.as.table_access.key, sb_set, out);
+        return;
+    }
+    if (nd.type == NodeType::CallExpression) {
+        collect_string_builder_refs(ctx, nd.as.call_expr.target, sb_set, out);
+        for (uint32_t j = 0; j < nd.as.call_expr.arg_count; ++j) {
+            collect_string_builder_refs(ctx, ctx.block_statements[nd.as.call_expr.first_arg + j], sb_set, out);
+        }
+        return;
+    }
+    // Literals / intrinsics / other leaf-like nodes can't contain an Identifier
+    // referencing sb_<name> — skip recursion.
+}
+
 //------------------ var_reassigned_non_int: checks if a variable receives any non-integer value in a block tree
 bool CodeEmitter::var_reassigned_non_int(std::string_view name, uint32_t block_idx) {
 
@@ -236,16 +286,16 @@ static std::string cpp_escape(std::string_view s) {
 
 
 //------------------ emit: generates C++ code for the AST rooted at root_node
-void CodeEmitter::emit(uint32_t root_node, std::string_view module_name) {
-
-    state.native_numbers.clear();
-    state.string_pool.clear();
-    state.table_presize.clear();
-    state.global_constants.clear();
-    state.bce_safe_nodes.clear();
-    state.direct_callables.clear();
-    state.fast_callables.clear();
-    state.native_return_funcs.clear();
+void CodeEmitter::emit(uint32_t root_node, std::string_view module_name) {        state.native_numbers.clear();
+        state.string_pool.clear();
+        state.table_presize.clear();
+        state.global_constants.clear();
+        state.bce_safe_nodes.clear();
+        state.direct_callables.clear();
+        state.fast_callables.clear();
+        state.native_return_funcs.clear();
+        state.int_returning_funcs.clear();
+        state.int_typed_locals.clear();
     state.func_param_counts.clear();
     state.param_numbers.clear();
     state.param_names.clear();
@@ -388,26 +438,80 @@ void CodeEmitter::emit(uint32_t root_node, std::string_view module_name) {
 
 
     if (!state.string_pool.empty()) {
+        // Split strings: ≤6 bytes use istr() (zero alloc), >6 bytes go through pool
         size_t n = state.string_pool.size();
-        size_t cap = 64;
-        while (cap < n * 2) cap *= 2;
-        out << "    L->string_pool.reserve(" << cap << ");\n";
-    }
+        size_t long_count = 0;
 
-    if (!state.string_pool.empty()) {
-        size_t n = state.string_pool.size();
-        out << "    static const struct { const char* s; unsigned int len; uint64_t hash; } _cstr_data[" << n << "] = {\n";
+        // Count long strings for pool reservation
+        for (size_t i = 0; i < n; ++i) {
+            std::string decoded = lua_decode_string(state.string_pool[i]);
+            if (decoded.length() > 6) long_count++;
+        }
+
+        if (long_count > 0) {
+            size_t cap = 64;
+            while (cap < long_count * 2) cap *= 2;
+            out << "    L->string_pool.reserve(" << cap << ");\n";
+        }
+
+        // Short strings (≤6 bytes): inline, zero allocation
         for (size_t i = 0; i < n; ++i) {
             auto& s = state.string_pool[i];
             std::string decoded = lua_decode_string(s);
-            out << "        {\"" << cpp_escape(decoded) << "\", "
-                << decoded.length() << ", "
-                << (decoded.length() <= 8 ? swar_hash_8(decoded.data(), decoded.length()) : wyhash_str(decoded.data(), decoded.length()))
-                << "ULL},\n";
+            if (decoded.length() <= 6) {
+                out << "    cstr_[" << i << "] = clx::LValue::istr(\"" << cpp_escape(decoded) << "\", " << decoded.length() << ");\n";
+            }
         }
-        out << "    };\n";
-        out << "    for (size_t _i = 0; _i < " << n << "; ++_i)\n";
-        out << "        cstr_[_i] = clx::LValue(L->intern_prehashed(_cstr_data[_i].s, _cstr_data[_i].len, _cstr_data[_i].hash));\n";
+
+        // Long strings (>6 bytes): pool-interned with pre-computed slot positions
+        if (long_count > 0) {
+            // Simulate hash table insertion to find final slot index for each string
+            size_t cap = 64;
+            while (cap < long_count * 2) cap *= 2;
+            std::vector<uint8_t> occupied(cap, 0);
+            std::vector<size_t> slot_assignments;
+            size_t mask = cap - 1;
+
+            for (size_t i = 0; i < n; ++i) {
+                auto& s = state.string_pool[i];
+                std::string decoded = lua_decode_string(s);
+                if (decoded.length() > 6) {
+                    uint64_t h = (decoded.length() <= 8) ? swar_hash_8(decoded.data(), decoded.length()) : wyhash_str(decoded.data(), decoded.length());
+                    size_t idx = h & mask;
+                    while (occupied[idx]) idx = (idx + 1) & mask;
+                    occupied[idx] = 1;
+                    slot_assignments.push_back(idx);
+                }
+            }
+
+            out << "    static const clx::StringPool::PrecomputedEntry _cstr_long[" << long_count << "] = {\n";
+            size_t li = 0;
+            for (size_t i = 0; i < n; ++i) {
+                auto& s = state.string_pool[i];
+                std::string decoded = lua_decode_string(s);
+                if (decoded.length() > 6) {
+                    uint64_t h = (decoded.length() <= 8) ? swar_hash_8(decoded.data(), decoded.length()) : wyhash_str(decoded.data(), decoded.length());
+                    out << "        {\"" << cpp_escape(decoded) << "\", "
+                        << (unsigned int)decoded.length() << ", "
+                        << h << "ULL, "
+                        << (unsigned int)slot_assignments[li] << "},\n";
+                    li++;
+                }
+            }
+            out << "    };\n";
+            out << "    L->string_pool.bulk_fill_precomputed(_cstr_long, " << long_count << ");\n";
+
+            // Set cstr_[] for long strings from the pool
+            li = 0;
+            for (size_t i = 0; i < n; ++i) {
+                auto& s = state.string_pool[i];
+                std::string decoded = lua_decode_string(s);
+                if (decoded.length() > 6) {
+                    out << "    cstr_[" << i << "] = clx::LValue(L->string_pool.slots[" << slot_assignments[li] << "].baked);\n";
+                    li++;
+                }
+            }
+        }
     }
 
     if (!ctx.nodes.empty()) {
@@ -458,6 +562,13 @@ void CodeEmitter::emit_native(uint32_t n_idx) {
             if (n.type == NodeType::Identifier) {
                 std::string_view name(n.as.ident.name, n.as.ident.length);
                 if (state.global_constants.count(name)) { out << state.global_constants[name]; return; }
+                // Locals that received an int-typed result from a call to a
+                // known int-returning function can be unwrapped inline so
+                // `letters[l_ix]` becomes a direct array read.
+                if (state.int_typed_locals.count(name)) {
+                    out << "static_cast<size_t>(l_" << name << ".as_integer())";
+                    return;
+                }
                  if (std::find(state.native_numbers.begin(), state.native_numbers.end(), name) != state.native_numbers.end()) {
                     bool is_boxed = false;
                     this->is_local(name, is_boxed);
@@ -475,8 +586,17 @@ void CodeEmitter::emit_native(uint32_t n_idx) {
                     return;
                 }
                 if (op >= static_cast<int>(BinaryOp::Add) && op <= static_cast<int>(BinaryOp::Div)) {
+                    // For Div specifically, cast both operands to double before the divide
+                    // so that e.g. Lua's `1/0` (float division -> inf) never reaches
+                    // `int64_t(1) / int64_t(0)` which is undefined behaviour in C++.
+                    if (op == static_cast<int>(BinaryOp::Div)) {
+                        out << "(static_cast<double>("; emit_native(n.as.bin_op.left);
+                        out << ") / static_cast<double>(";
+                        emit_native(n.as.bin_op.right); out << "))";
+                        return;
+                    }
                     out << "("; emit_native( n.as.bin_op.left);
-                    if (op==1) out<<" + "; if (op==2) out<<" - "; if (op==3) out<<" * "; if (op==4) out<<" / ";
+                    if (op==1) out<<" + "; if (op==2) out<<" - "; if (op==3) out<<" * ";
                     emit_native( n.as.bin_op.right); out << ")";
                     return;
                 }
@@ -807,6 +927,23 @@ void CodeEmitter::emitCallExpression(const ASTNode& node, uint32_t node_idx) {
                 if (want_multi) out << "    return _main_ret;\n";
                 else out << "    return (_main_ret.count > 0) ? _main_ret[0] : clx::LValue();\n";
             } else {
+                // Pre-declare only the StringBuilders actually referenced by this
+                // call's argument expressions (the empty()/to_string() pattern).
+                // Pre-declaring all string_builders unconditionally per call
+                // emitted ~75K spurious StringBuilder arena inits for fasta's hot
+                // path. Use the helper to walk each arg subtree and collect
+                // names; gate the decls on the resulting set.
+                std::set<std::string_view> used_sb;
+                for (uint32_t i = 0; i < node.as.call_expr.arg_count; ++i) {
+                    uint32_t av = ctx.block_statements[node.as.call_expr.first_arg + i];
+                    collect_string_builder_refs(ctx, av, state.string_builders, used_sb);
+                }
+                for (const auto& sb_name : used_sb) {
+                    if (!state.global_string_builders.count(sb_name)
+                        && !state.module_string_builders.count(sb_name)) {
+                        out << "    clx::StringBuilder sb_" << sb_name << ";\n";
+                    }
+                }
                 if (node.as.call_expr.arg_count > 0) {
                     out << "    clx::LValue args[] = {";
                     for (uint32_t i = 0; i < node.as.call_expr.arg_count; ++i) {
@@ -2258,7 +2395,7 @@ out << "l_" << name << " = L->create_closure(_impl_" << name << ", static_cast<c
                         if (yields_number(ctx, state, k_idx, nullptr, state.current_fast_func)) key_is_native = true;
 
                         if (key_is_native) {
-                            out << "{ clx::LTable* _t = static_cast<clx::LTable*>(("; emit_node(t_node.as.table_access.table); out << ").as_pointer()); size_t _k = static_cast<size_t>("; emit_native( k_idx); out << "); if (_k - 1 < _t->array_size) { _t->array[_k - 1] = " << val_str << ".val; _t->array_types[_k - 1] = " << val_str << ".type; } else clx::table_set_int(L, clx::LValue(clx::ValueType::Table, _t), _k, " << val_str << "); }\n";
+                            out << "{ clx::LTable* _t = static_cast<clx::LTable*>(("; emit_node(t_node.as.table_access.table); out << ").as_pointer()); size_t _k = static_cast<size_t>("; emit_native( k_idx); out << "); if (_k - 1 < _t->array_size) [[likely]] { _t->array[_k - 1] = " << val_str << ".val; _t->array_types[_k - 1] = " << val_str << ".type; } else clx::table_set_int(L, clx::LValue(clx::ValueType::Table, _t), _k, " << val_str << "); }\n";
                         } else {
                             uint32_t kt2 = t_node.as.table_access.key;
                             if (kt2 < ctx.nodes.size() && ctx.nodes[kt2].type == NodeType::String) {
@@ -2380,7 +2517,7 @@ void CodeEmitter::emitBinaryOp(const ASTNode& node, uint32_t node_idx) {
                  if (op == static_cast<int>(BinaryOp::Add)) { out << (both_int ? "clx::LValue(static_cast<int64_t>(" : "clx::LValue(static_cast<double>("); emit_native( node.as.bin_op.left); out << " + "; emit_native( node.as.bin_op.right); out << "))"; return; }
                  if (op == static_cast<int>(BinaryOp::Sub)) { out << (both_int ? "clx::LValue(static_cast<int64_t>(" : "clx::LValue(static_cast<double>("); emit_native( node.as.bin_op.left); out << " - "; emit_native( node.as.bin_op.right); out << "))"; return; }
                  if (op == static_cast<int>(BinaryOp::Mul)) { out << (both_int ? "clx::LValue(static_cast<int64_t>(" : "clx::LValue(static_cast<double>("); emit_native( node.as.bin_op.left); out << " * "; emit_native( node.as.bin_op.right); out << "))"; return; }
-                 if (op == static_cast<int>(BinaryOp::Div)) { out << "clx::LValue(static_cast<double>("; emit_native( node.as.bin_op.left); out << " / "; emit_native( node.as.bin_op.right); out << "))"; return; }
+                 if (op == static_cast<int>(BinaryOp::Div)) { out << "clx::LValue(static_cast<double>("; emit_native( node.as.bin_op.left); out << ") / static_cast<double>("; emit_native( node.as.bin_op.right); out << "))"; return; }
                  if (op == static_cast<int>(BinaryOp::Mod)) {
                      if (both_int) {
                          out << "clx::LValue(static_cast<int64_t>(static_cast<int64_t>("; emit_native( node.as.bin_op.left); out << ") % static_cast<int64_t>("; emit_native( node.as.bin_op.right); out << ")))"; return;
