@@ -769,6 +769,8 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
     state.pure_numeric_arrays.clear();
     std::set<std::string_view> pure_candidates;
     std::set<std::string_view> disqualified_arrays;
+    std::set<std::string_view> empty_array_candidates;
+
 
     auto purity_cb = [&](uint32_t idx) {
         if (idx == 0xFFFFFFFF || idx >= ctx.nodes.size()) return;
@@ -802,8 +804,8 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                         } else {
                             disqualified_arrays.insert(name);
                         }
-                    } else {
-                        pure_candidates.insert(name);
+                    } else if (tc.count == 0) {
+                        empty_array_candidates.insert(name);
                     }
                 }
             }
@@ -1006,6 +1008,35 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
             state.pure_numeric_arrays.insert(name);
         }
     }
+
+    std::set<std::string_view> captured_bases;
+    for (const auto& nd : ctx.nodes) {
+        if (nd.type == NodeType::Identifier && nd.as.ident.is_captured) {
+            captured_bases.insert(std::string_view(nd.as.ident.name, nd.as.ident.length));
+        }
+    }
+
+    std::set<std::string_view> promote_ready;
+    for (const auto& nd : ctx.nodes) {
+        if (nd.type != NodeType::TableAccess) continue;
+        if (nd.as.table_access.table >= ctx.nodes.size()) continue;
+        if (ctx.nodes[nd.as.table_access.table].type != NodeType::Identifier) continue;
+        std::string_view tname(ctx.nodes[nd.as.table_access.table].as.ident.name,
+                               ctx.nodes[nd.as.table_access.table].as.ident.length);
+        if (!empty_array_candidates.count(tname)) continue;
+        if (disqualified_arrays.count(tname)) continue;
+        if (state.reassigned_vars.count(tname)) continue;
+        if (captured_bases.count(tname)) continue;
+        uint32_t k = nd.as.table_access.key;
+        if (k >= ctx.nodes.size()) continue;
+        NodeType kt = ctx.nodes[k].type;
+        if (kt != NodeType::Identifier && kt != NodeType::Integer && kt != NodeType::Number) continue;
+        promote_ready.insert(tname);
+    }
+    for (auto name : promote_ready) {
+        state.pure_numeric_arrays.insert(name);
+    }
+
 
     state.numeric_table_fields.clear();
     for (const auto& node : ctx.nodes) {
@@ -1837,6 +1868,128 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
         }
         if (total_arena > 0) {
             state.arena_table_sizes[fi] = total_arena;
+        }
+    }
+
+    //------------------ Detect int-returning functions and int-typed call results
+    //
+    // A function is `int_returning` when every ReturnStatement in its body
+    // (recursively through if/else/repeat/while/for/do, with for-loop int
+    // variables tracked per walk) yields an integer-typed value: an
+    // Integer literal, an Identifier in `state.native_integers`, or a
+    // for-loop int variable being returned within this walk. Locals declared
+    // as `local X = int_returning_fn(...)` are then recorded in
+    // `state.int_typed_locals` so the codegen can drop LValue boxing on the
+    // call result and emit direct int64_t indexing into `pure_numeric_arrays`
+    // tables (e.g., `letters[l_ix]` becomes a direct array read rather than
+    // `clx::table_get(L, l_letters, l_ix)`).
+    {
+        std::function<bool(uint32_t, std::set<std::string_view>&)> walk_for_int_returns =
+            [&](uint32_t bi, std::set<std::string_view>& loop_vars) -> bool {
+            if (bi == 0xFFFFFFFF || bi >= ctx.nodes.size()) return true;
+            const auto& b = ctx.nodes[bi];
+            if (b.type != NodeType::Block) return true;
+            for (uint32_t j = 0; j < b.as.block.count; ++j) {
+                uint32_t si = ctx.block_statements[b.as.block.first_statement + j];
+                if (si >= ctx.nodes.size()) continue;
+                const auto& st = ctx.nodes[si];
+                if (st.type == NodeType::ReturnStatement) {
+                    if (st.as.return_stmt.value_count != 1) return false;
+                    uint32_t vi = ctx.block_statements[st.as.return_stmt.first_value];
+                    if (vi == 0xFFFFFFFF || vi >= ctx.nodes.size()) return false;
+                    const auto& v = ctx.nodes[vi];
+                    if (v.type == NodeType::Integer) continue;
+                    if (v.type == NodeType::Identifier) {
+                        std::string_view n(v.as.ident.name, v.as.ident.length);
+                        if (state.native_integers.count(std::string(n))) continue;
+                        if (loop_vars.count(n)) continue;
+                    }
+                    return false;
+                }
+                if (st.type == NodeType::Block) {
+                    if (!walk_for_int_returns(si, loop_vars)) return false;
+                } else if (st.type == NodeType::IfStatement) {
+                    if (!walk_for_int_returns(st.as.if_stmt.then_block, loop_vars)) return false;
+                    if (st.as.if_stmt.else_block != 0xFFFFFFFF &&
+                        !walk_for_int_returns(st.as.if_stmt.else_block, loop_vars)) return false;
+                } else if (st.type == NodeType::WhileStatement) {
+                    if (!walk_for_int_returns(st.as.while_stmt.body_block, loop_vars)) return false;
+                } else if (st.type == NodeType::RepeatStatement) {
+                    if (!walk_for_int_returns(st.as.repeat_stmt.body_block, loop_vars)) return false;
+                } else if (st.type == NodeType::DoStatement) {
+                    if (!walk_for_int_returns(st.as.do_stmt.body_block, loop_vars)) return false;
+                } else if (st.type == NodeType::ForStatement) {
+                    // By Lua 5.3+ semantics, a numeric for-loop with an integer-typed
+                    // start (and implicit/explicit integer step) yields an integer
+                    // loop variable across ALL iterations, regardless of whether the
+                    // limit is an Integer literal, an intrinsic call (`#x`), or any
+                    // int-yielding expression. The previous strict check required
+                    // BOTH start AND limit to be Integer literals, which left most
+                    // real-world for-loops untracked (`for i = 1, #ps do ...`). We
+                    // now require only that `start_expr` is an Integer literal, which
+                    // is sufficient to prove the loop variable is integer-typed.
+                    std::string_view tracked_name;
+                    if (st.as.for_stmt.var_ident < ctx.nodes.size() &&
+                        st.as.for_stmt.start_expr < ctx.nodes.size() &&
+                        ctx.nodes[st.as.for_stmt.start_expr].type == NodeType::Integer &&
+                        ctx.nodes[st.as.for_stmt.var_ident].type == NodeType::Identifier) {
+                        tracked_name = std::string_view(ctx.nodes[st.as.for_stmt.var_ident].as.ident.name,
+                                                        ctx.nodes[st.as.for_stmt.var_ident].as.ident.length);
+                        if (!tracked_name.empty()) loop_vars.insert(tracked_name);
+                    }
+                    bool ok = walk_for_int_returns(st.as.for_stmt.body_block, loop_vars);
+                    if (!tracked_name.empty()) loop_vars.erase(tracked_name);
+                    if (!ok) return false;
+                } else if (st.type == NodeType::GenericForStatement) {
+                    if (!walk_for_int_returns(st.as.generic_for.body_block, loop_vars)) return false;
+                }
+            }
+            return true;
+        };
+
+        for (uint32_t i = 0; i < ctx.nodes.size(); ++i) {
+            const auto& nd = ctx.nodes[i];
+            if (nd.type != NodeType::FunctionDef) continue;
+            if (nd.as.func_def.body_block == 0xFFFFFFFF) continue;
+            std::set<std::string_view> loop_vars;
+            if (!walk_for_int_returns(nd.as.func_def.body_block, loop_vars)) continue;
+            // Locate FunctionDef's binding name (LocalDecl or Assignment value pattern).
+            for (uint32_t j = 0; j < ctx.nodes.size(); ++j) {
+                const auto& ln = ctx.nodes[j];
+                uint32_t fv = 0xFFFFFFFF, fi = 0xFFFFFFFF;
+                if (ln.type == NodeType::LocalDecl && ln.as.local_decl.value_count == 1) {
+                    fv = ctx.block_statements[ln.as.local_decl.first_value];
+                    fi = ctx.block_statements[ln.as.local_decl.first_ident];
+                } else if (ln.type == NodeType::Assignment && ln.as.assign.value_count == 1) {
+                    fv = ctx.block_statements[ln.as.assign.first_value];
+                    fi = ctx.block_statements[ln.as.assign.first_target];
+                } else continue;
+                if (fv != i || fi >= ctx.nodes.size()) continue;
+                if (ctx.nodes[fi].type != NodeType::Identifier) continue;
+                if (ctx.nodes[fi].as.ident.is_global) continue;
+                std::string_view nm(ctx.nodes[fi].as.ident.name, ctx.nodes[fi].as.ident.length);
+                state.int_returning_funcs.insert(nm);
+                break;
+            }
+        }
+
+        // Populate `int_typed_locals` from `local X = int_returning_fn(...)` patterns.
+        for (uint32_t i = 0; i < ctx.nodes.size(); ++i) {
+            const auto& nd = ctx.nodes[i];
+            if (nd.type != NodeType::LocalDecl) continue;
+            if (nd.as.local_decl.ident_count != 1 || nd.as.local_decl.value_count != 1) continue;
+            uint32_t fi = ctx.block_statements[nd.as.local_decl.first_ident];
+            uint32_t fv = ctx.block_statements[nd.as.local_decl.first_value];
+            if (fi >= ctx.nodes.size() || fv >= ctx.nodes.size()) continue;
+            if (ctx.nodes[fi].type != NodeType::Identifier) continue;
+            if (ctx.nodes[fv].type != NodeType::CallExpression) continue;
+            uint32_t tgt = ctx.nodes[fv].as.call_expr.target;
+            if (tgt >= ctx.nodes.size() || ctx.nodes[tgt].type != NodeType::Identifier) continue;
+            std::string_view fn(ctx.nodes[tgt].as.ident.name, ctx.nodes[tgt].as.ident.length);
+            if (state.int_returning_funcs.count(fn)) {
+                std::string ln(ctx.nodes[fi].as.ident.name, ctx.nodes[fi].as.ident.length);
+                state.int_typed_locals.insert(ln);
+            }
         }
     }
 }
