@@ -7,6 +7,7 @@
 
 #include "optimizer.h"
 #include "../codegen/codegen.h"
+#include "../../include/clx_runtime.h"
 #include <algorithm>
 #include <map>
 #include <set>
@@ -1796,10 +1797,8 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
             constexpr size_t VT = 1;        // sizeof(ValueType)
             constexpr size_t HENTRY = 24;   // sizeof(HashEntry)
             // Apply the same minimum preallocation as arena_create_table
-            // Must match CLX_ARENA_DEFAULT_FIELDS in clx_runtime.h
-            constexpr size_t MIN_FIELDS = 8;
-            if (arr_count < MIN_FIELDS) arr_count = MIN_FIELDS;
-            if (hash_count < MIN_FIELDS) hash_count = MIN_FIELDS;
+            if (arr_count < CLX_ARENA_DEFAULT_FIELDS) arr_count = CLX_ARENA_DEFAULT_FIELDS;
+            if (hash_count < CLX_ARENA_DEFAULT_FIELDS) hash_count = CLX_ARENA_DEFAULT_FIELDS;
             size_t aligned_arr = ((TVAL * arr_count + 7) & ~static_cast<size_t>(7));
             size_t aligned_types = ((VT * arr_count + 7) & ~static_cast<size_t>(7));
             size_t aligned_hash = ((HENTRY * hash_count + 7) & ~static_cast<size_t>(7));
