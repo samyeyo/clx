@@ -35,11 +35,6 @@ static const char* get_string(LState* L, const LValue* args, size_t count, size_
     return args[idx - 1].as_string();
 }
 
-//------------------ get_binary_string — extract binary-string arg (identical checks to get_string)
-static inline const char* get_binary_string(LState* L, const LValue* args, size_t count, size_t& len, int idx) {
-    return get_string(L, args, count, len, idx);
-}
-
 //------------------ get_integer — extract integer arg with type coercion
 static int64_t get_integer(LState* L, const LValue* args, size_t count, int idx) {
     if (idx < 1 || idx > (int)count) {
@@ -1256,7 +1251,7 @@ MultiValue str_pack(LState* L, const LValue* args, size_t count) {
             }
             case Kchar: {
                 size_t len;
-                const char* s = get_binary_string(L, args, count, len, arg);
+                const char* s = get_string(L, args, count, len, arg);
                 if (len > size) {
                     char ebuf[128];
                     std::snprintf(ebuf, sizeof(ebuf), "bad argument #%d to 'pack' (string longer than given size)", arg);
@@ -1269,7 +1264,7 @@ MultiValue str_pack(LState* L, const LValue* args, size_t count) {
             }
             case Kstring: {
                 size_t len;
-                const char* s = get_binary_string(L, args, count, len, arg);
+                const char* s = get_string(L, args, count, len, arg);
                 if (size < (int)sizeof(uint64_t) && len >= ((uint64_t)1 << (size * NB))) {
                     char ebuf[128];
                     std::snprintf(ebuf, sizeof(ebuf), "bad argument #%d to 'pack' (string length does not fit in given size)", arg);
@@ -1282,7 +1277,7 @@ MultiValue str_pack(LState* L, const LValue* args, size_t count) {
             }
             case Kzstr: {
                 size_t len;
-                const char* s = get_binary_string(L, args, count, len, arg);
+                const char* s = get_string(L, args, count, len, arg);
                 if (std::strlen(s) != len) {
                     char ebuf[128];
                     std::snprintf(ebuf, sizeof(ebuf), "bad argument #%d to 'pack' (string contains zeros)", arg);
@@ -1330,7 +1325,7 @@ MultiValue str_unpack(LState* L, const LValue* args, size_t count) {
     size_t fmt_len;
     const char* fmt = get_string(L, args, count, fmt_len, 1);
     size_t ld;
-    const char* data = get_binary_string(L, args, count, ld, 2);
+    const char* data = get_string(L, args, count, ld, 2);
     int64_t pos_i = (count >= 3 && args[2].type != Nil) ? get_integer(L, args, count, 3) : 1;
     size_t pos = posrelat(pos_i, ld) - 1;
     if (pos > ld)
