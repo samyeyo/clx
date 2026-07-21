@@ -7,7 +7,6 @@
 
 #include "clx_runtime.h"
 #include "clx.h"
-#include "../codegen/codegen.h"
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -724,6 +723,26 @@ static void dtor_free_table(LTable* t) {
     delete t;
 }
 
+//------------------ LState::invoke_gc_finalizer — call __gc metamethod on userdata
+void LState::invoke_gc_finalizer(LUserdata* ud, const char* tag) {
+    if (!ud->metatable) return;
+    LValue gc_func = ud->metatable->gettable(this->str_gc);
+    if (gc_func.type != Function) return;
+    LValue args[1] = { LValue(UserData, ud) };
+    size_t prev_shadow = this->shadow_top;
+    this->shadow_stack[this->shadow_top++] = TypedSlot(&args[0].val, &args[0].type);
+    try {
+        call_function(this, gc_func, args, 1, tag, 0);
+    } catch (const LRuntimeException& e) {
+        std::cerr << "error in __gc metamethod: " << e.what() << "\n";
+    } catch (std::exception& e) {
+        std::cerr << "error in __gc metamethod: " << e.what() << "\n";
+    } catch (...) {
+        std::cerr << "error in __gc metamethod\n";
+    }
+    this->shadow_top = prev_shadow;
+}
+
 //------------------ LState::~LState — state destructor
 LState::~LState() {
     if (gc_phase == GCPhase::Sweeping) {
@@ -734,18 +753,7 @@ LState::~LState() {
     for (LHeader* h = allocated_objects; h; h = h->next) {
         if (h->type == static_cast<uint8_t>(UserData)) {
             LUserdata* ud = static_cast<LUserdata*>(h);
-            if (ud->metatable) {
-                LValue gc_func = ud->metatable->gettable(this->str_gc);
-                if (gc_func.type != Nil && gc_func.type == Function) {
-                    LValue args[1] = { LValue(UserData, ud) };
-                    size_t prev_shadow = this->shadow_top;
-                    this->shadow_stack[this->shadow_top++]= TypedSlot(&args[0].val, &args[0].type);
-                    try {
-                        call_function(this, gc_func, args, 1, "StateClose_Finalizer", 0);
-                    } catch (...) {}
-                    this->shadow_top = prev_shadow;
-                }
-            }
+            invoke_gc_finalizer(ud, "StateClose_Finalizer");
         }
     }
 
@@ -778,18 +786,7 @@ LState::~LState() {
         LUserdata* ud = static_cast<LUserdata*>(gc_finalizable_ud);
         while (ud) {
             LUserdata* nxt = static_cast<LUserdata*>(ud->next);
-            if (ud->metatable) {
-                LValue gc_func = ud->metatable->gettable(this->str_gc);
-                if (gc_func.type != Nil && gc_func.type == Function) {
-                    LValue args[1] = { LValue(UserData, ud) };
-                    size_t prev_shadow = this->shadow_top;
-                    this->shadow_stack[this->shadow_top++]= TypedSlot(&args[0].val, &args[0].type);
-                    try {
-                        call_function(this, gc_func, args, 1, "GC_Finalizer", 0);
-                    } catch (...) {}
-                    this->shadow_top = prev_shadow;
-                }
-            }
+            invoke_gc_finalizer(ud, "GC_Finalizer");
             delete[] reinterpret_cast<char*>(ud);
             ud = nxt;
         }
@@ -954,24 +951,7 @@ bool LState::gc_step() {
         gc_finalizable = nullptr;
         for (LUserdata* ud = static_cast<LUserdata*>(gc_finalizable_ud); ud; ) {
             LUserdata* nx = static_cast<LUserdata*>(ud->next);
-            if (ud->metatable) {
-                LValue gc_func = ud->metatable->gettable(this->str_gc);
-                if (gc_func.type != Nil && gc_func.type == Function) {
-                    LValue args[1] = { LValue(UserData, ud) };
-                    size_t prev_shadow = this->shadow_top;
-                    this->shadow_stack[this->shadow_top++]= TypedSlot(&args[0].val, &args[0].type);
-                    try {
-                        call_function(this, gc_func, args, 1, "GC_Finalizer", 0);
-                    } catch (const LRuntimeException& e) {
-                        std::cerr << "error in __gc metamethod: " << e.what() << "\n";
-                    } catch (std::exception& e) {
-                        std::cerr << "error in __gc metamethod: " << e.what() << "\n";
-                    } catch (...) {
-                        std::cerr << "error in __gc metamethod\n";
-                    }
-                    this->shadow_top = prev_shadow;
-                }
-            }
+            invoke_gc_finalizer(ud, "GC_Finalizer");
             allocated_bytes -= sizeof(LUserdata) + ud->size;
             delete[] reinterpret_cast<char*>(ud);
             ud = nx;
@@ -1451,7 +1431,6 @@ LValue LState::create_table(size_t asize, size_t hsize) {
         t->array_cap   = 0;
         t->hash_size   = 0;
         t->hash_count  = 0;
-        t->hash_count    = 0;
         t->hash_tombs    = 0;
         t->hash_version  = 0;
         t->array_version = 0;
@@ -1556,10 +1535,7 @@ LValue call_bin_metamethod(LState* L, const LValue& a, const LValue& b, const ch
         }
     }
 
-    std::string prefix = "";
-    if (L->current_file && L->current_file[0] != '\0') {
-        prefix = std::string(L->current_file) + ":" + std::to_string(L->current_line) + ": ";
-    }
+    std::string prefix = file_line_prefix(L);
 
     std::string_view ev(event);
 
