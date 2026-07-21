@@ -13,10 +13,8 @@
 #include <fstream>
 #include <string_view>
 #include <vector>
-#include <functional>
 #include <set>
 #include <map>
-#include <unordered_map>
 
 namespace clx {
 
@@ -79,6 +77,7 @@ private:
     void emitTrueLiteral(const ASTNode& node, uint32_t node_idx);
     void emitFalseLiteral(const ASTNode& node, uint32_t node_idx);
     void emitNilLiteral(const ASTNode& node, uint32_t node_idx);
+    void emitTableOp(int bin_op, uint32_t lhs_tbl, uint32_t lhs_key, uint32_t const_idx);
     void emitNumber(const ASTNode& node, uint32_t node_idx);
     void emitInteger(const ASTNode& node, uint32_t node_idx);
     void emitIdentifier(const ASTNode& node, uint32_t node_idx);

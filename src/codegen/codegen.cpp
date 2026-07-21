@@ -2027,23 +2027,7 @@ out << "l_" << name << " = L->create_closure(_impl_" << name << ", static_cast<c
                                             std::string_view(ctx.nodes[lhs_key].as.ident.name, ctx.nodes[lhs_key].as.ident.length) ==
                                             std::string_view(ctx.nodes[ta.key].as.ident.name, ctx.nodes[ta.key].as.ident.length));
                                         if (tables_match && keys_match) {
-                                            if (bin_op == static_cast<int>(BinaryOp::Add)) {
-                                                out << "clx::table_increment(L, "; emit_node(lhs_tbl); out << ", "; emit_node(lhs_key); out << ", ";
-                                                emit_native(const_idx);
-                                                out << ");\n";
-                                            } else if (bin_op == static_cast<int>(BinaryOp::Sub)) {
-                                                out << "clx::table_decrement(L, "; emit_node(lhs_tbl); out << ", "; emit_node(lhs_key); out << ", ";
-                                                emit_native(const_idx);
-                                                out << ");\n";
-                                            } else if (bin_op == static_cast<int>(BinaryOp::Mul)) {
-                                                out << "clx::table_multiply(L, "; emit_node(lhs_tbl); out << ", "; emit_node(lhs_key); out << ", ";
-                                                emit_native(const_idx);
-                                                out << ");\n";
-                                            } else {
-                                                out << "clx::table_divide(L, "; emit_node(lhs_tbl); out << ", "; emit_node(lhs_key); out << ", ";
-                                                emit_native(const_idx);
-                                                out << ");\n";
-                                            }
+                                            emitTableOp(bin_op, lhs_tbl, lhs_key, const_idx);
                                             return;
                                         }
                                     }
@@ -2142,23 +2126,7 @@ out << "l_" << name << " = L->create_closure(_impl_" << name << ", static_cast<c
                                                           std::string_view(ctx.nodes[lhs_key].as.string.text, ctx.nodes[lhs_key].as.string.length) ==
                                                           std::string_view(ctx.nodes[ta.key].as.string.text, ctx.nodes[ta.key].as.string.length))));
                                                     if (tables_match && keys_match) {
-                                                        if (bin_op == static_cast<int>(BinaryOp::Add)) {
-                                                            out << "clx::table_increment(L, "; emit_node(lhs_tbl); out << ", "; emit_node(lhs_key); out << ", ";
-                                                            emit_native(const_idx);
-                                                            out << ");\n";
-                                                        } else if (bin_op == static_cast<int>(BinaryOp::Sub)) {
-                                                            out << "clx::table_decrement(L, "; emit_node(lhs_tbl); out << ", "; emit_node(lhs_key); out << ", ";
-                                                            emit_native(const_idx);
-                                                            out << ");\n";
-                                                        } else if (bin_op == static_cast<int>(BinaryOp::Mul)) {
-                                                            out << "clx::table_multiply(L, "; emit_node(lhs_tbl); out << ", "; emit_node(lhs_key); out << ", ";
-                                                            emit_native(const_idx);
-                                                            out << ");\n";
-                                                        } else {
-                                                            out << "clx::table_divide(L, "; emit_node(lhs_tbl); out << ", "; emit_node(lhs_key); out << ", ";
-                                                            emit_native(const_idx);
-                                                            out << ");\n";
-                                                        }
+                                                        emitTableOp(bin_op, lhs_tbl, lhs_key, const_idx);
                                                         return;
                                                     }
                                                 }
@@ -2701,6 +2669,15 @@ out << "clx::LValue(false)";
 //------------------ emitNilLiteral: handles NodeType::NilLiteral
 void CodeEmitter::emitNilLiteral(const ASTNode& node, uint32_t node_idx) {
 out << "clx::LValue()";
+}
+
+void CodeEmitter::emitTableOp(int bin_op, uint32_t lhs_tbl, uint32_t lhs_key, uint32_t const_idx) {
+    const char* fn = nullptr;
+    if (bin_op == static_cast<int>(BinaryOp::Add)) fn = "table_increment";
+    else if (bin_op == static_cast<int>(BinaryOp::Sub)) fn = "table_decrement";
+    else if (bin_op == static_cast<int>(BinaryOp::Mul)) fn = "table_multiply";
+    else fn = "table_divide";
+    out << "clx::" << fn << "(L, "; emit_node(lhs_tbl); out << ", "; emit_node(lhs_key); out << ", "; emit_native(const_idx); out << ");\n";
 }
 
 //------------------ emitNumber: handles NodeType::Number
