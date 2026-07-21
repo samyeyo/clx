@@ -617,6 +617,10 @@ void CodeEmitter::emit_native(uint32_t n_idx) {
                 out << "(-("; emit_native( n.as.unary_op.expr); out << "))";
                 return;
             }
+            if (n.type == NodeType::UnaryOp && n.as.unary_op.op == static_cast<int>(UnaryOp::Len)) {
+                out << "clx::len(L, "; emit_node( n.as.unary_op.expr); out << ").as_number()";
+                return;
+            }
             if (n.type == NodeType::ParenExpression) {
                 out << "("; emit_native( n.as.paren_expr.expr); out << ")";
                 return;
@@ -2040,6 +2044,55 @@ out << "l_" << name << " = L->create_closure(_impl_" << name << ", static_cast<c
                     if (ctx.nodes[t_node.as.table_access.table].type == NodeType::Identifier) {
                         t_name = std::string_view(ctx.nodes[t_node.as.table_access.table].as.ident.name, ctx.nodes[t_node.as.table_access.table].as.ident.length);
                     }
+
+                    // Detect t[k] = t[k] + N or t[k] = t[k] * N pattern and emit table_increment/table_multiply
+                    if (v_count == 1) {
+                        uint32_t v_idx = ctx.block_statements[first_v];
+                        if (v_idx < ctx.nodes.size() && ctx.nodes[v_idx].type == NodeType::BinaryOp) {
+                            auto& bin = ctx.nodes[v_idx].as.bin_op;
+                            int bin_op = bin.op;
+                            if (bin_op == static_cast<int>(BinaryOp::Add) || bin_op == static_cast<int>(BinaryOp::Mul)) {
+                                uint32_t lhs_tbl = t_node.as.table_access.table;
+                                uint32_t lhs_key = t_node.as.table_access.key;
+                                // Check if one operand is the same table access and the other is a numeric constant
+                                for (int swap = 0; swap <= 1; ++swap) {
+                                    uint32_t ta_idx = swap ? bin.right : bin.left;
+                                    uint32_t const_idx = swap ? bin.left : bin.right;
+                                    if (ta_idx < ctx.nodes.size() && ctx.nodes[ta_idx].type == NodeType::TableAccess &&
+                                        const_idx < ctx.nodes.size() &&
+                                        (ctx.nodes[const_idx].type == NodeType::Integer || ctx.nodes[const_idx].type == NodeType::Number)) {
+                                        auto& ta = ctx.nodes[ta_idx].as.table_access;
+                                        // Compare table and key by name, not by AST index
+                                        bool tables_match = false;
+                                        if (lhs_tbl < ctx.nodes.size() && ta.table < ctx.nodes.size() &&
+                                            ctx.nodes[lhs_tbl].type == NodeType::Identifier && ctx.nodes[ta.table].type == NodeType::Identifier) {
+                                            std::string_view lhs_tn(ctx.nodes[lhs_tbl].as.ident.name, ctx.nodes[lhs_tbl].as.ident.length);
+                                            std::string_view rhs_tn(ctx.nodes[ta.table].as.ident.name, ctx.nodes[ta.table].as.ident.length);
+                                            tables_match = (lhs_tn == rhs_tn);
+                                        }
+                                        bool keys_match = (lhs_key == ta.key) || (lhs_key < ctx.nodes.size() && ta.key < ctx.nodes.size() &&
+                                            ctx.nodes[lhs_key].type == NodeType::Identifier && ctx.nodes[ta.key].type == NodeType::Identifier &&
+                                            std::string_view(ctx.nodes[lhs_key].as.ident.name, ctx.nodes[lhs_key].as.ident.length) ==
+                                            std::string_view(ctx.nodes[ta.key].as.ident.name, ctx.nodes[ta.key].as.ident.length));
+                                        if (tables_match && keys_match) {
+                                            // Matched t[k] = t[k] + N or t[k] = t[k] * N
+                                            if (bin_op == static_cast<int>(BinaryOp::Add)) {
+                                                out << "clx::table_increment(L, "; emit_node(lhs_tbl); out << ", "; emit_node(lhs_key); out << ", ";
+                                                emit_native(const_idx);
+                                                out << ");\n";
+                                            } else {
+                                                out << "clx::table_multiply(L, "; emit_node(lhs_tbl); out << ", "; emit_node(lhs_key); out << ", ";
+                                                emit_native(const_idx);
+                                                out << ");\n";
+                                            }
+                                            return;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     if (!t_name.empty() && state.pure_numeric_arrays.count(t_name)) {
                         out << "{ size_t _n = static_cast<size_t>(";
                         emit_native( t_node.as.table_access.key);
@@ -2110,6 +2163,54 @@ out << "l_" << name << " = L->create_closure(_impl_" << name << ", static_cast<c
                                     out << ");\n";
                                 }
                             } else {
+                                // Detect t[k] = t[k] + N or t[k] = t[k] * N pattern for dynamic keys
+                                if (v_count == 1) {
+                                    uint32_t v_idx = ctx.block_statements[first_v];
+                                    if (v_idx < ctx.nodes.size() && ctx.nodes[v_idx].type == NodeType::BinaryOp) {
+                                        auto& bin = ctx.nodes[v_idx].as.bin_op;
+                                        int bin_op = bin.op;
+                                        if (bin_op == static_cast<int>(BinaryOp::Add) || bin_op == static_cast<int>(BinaryOp::Mul)) {
+                                            uint32_t lhs_tbl = t_node.as.table_access.table;
+                                            uint32_t lhs_key = t_node.as.table_access.key;
+                                            for (int swap = 0; swap <= 1; ++swap) {
+                                                uint32_t ta_idx = swap ? bin.right : bin.left;
+                                                uint32_t const_idx = swap ? bin.left : bin.right;
+                                                if (ta_idx < ctx.nodes.size() && ctx.nodes[ta_idx].type == NodeType::TableAccess &&
+                                                    const_idx < ctx.nodes.size() &&
+                                                    (ctx.nodes[const_idx].type == NodeType::Integer || ctx.nodes[const_idx].type == NodeType::Number)) {
+                                                    auto& ta = ctx.nodes[ta_idx].as.table_access;
+                                                    bool tables_match = false;
+                                                    if (lhs_tbl < ctx.nodes.size() && ta.table < ctx.nodes.size() &&
+                                                        ctx.nodes[lhs_tbl].type == NodeType::Identifier && ctx.nodes[ta.table].type == NodeType::Identifier) {
+                                                        std::string_view lhs_tn(ctx.nodes[lhs_tbl].as.ident.name, ctx.nodes[lhs_tbl].as.ident.length);
+                                                        std::string_view rhs_tn(ctx.nodes[ta.table].as.ident.name, ctx.nodes[ta.table].as.ident.length);
+                                                        tables_match = (lhs_tn == rhs_tn);
+                                                    }
+                                                    bool keys_match = (lhs_key == ta.key) || (lhs_key < ctx.nodes.size() && ta.key < ctx.nodes.size() &&
+                                                        ctx.nodes[lhs_key].type == ctx.nodes[ta.key].type &&
+                                                        ((ctx.nodes[lhs_key].type == NodeType::Identifier &&
+                                                          std::string_view(ctx.nodes[lhs_key].as.ident.name, ctx.nodes[lhs_key].as.ident.length) ==
+                                                          std::string_view(ctx.nodes[ta.key].as.ident.name, ctx.nodes[ta.key].as.ident.length)) ||
+                                                         (ctx.nodes[lhs_key].type == NodeType::String &&
+                                                          std::string_view(ctx.nodes[lhs_key].as.string.text, ctx.nodes[lhs_key].as.string.length) ==
+                                                          std::string_view(ctx.nodes[ta.key].as.string.text, ctx.nodes[ta.key].as.string.length))));
+                                                    if (tables_match && keys_match) {
+                                                        if (bin_op == static_cast<int>(BinaryOp::Add)) {
+                                                            out << "clx::table_increment(L, "; emit_node(lhs_tbl); out << ", "; emit_node(lhs_key); out << ", ";
+                                                            emit_native(const_idx);
+                                                            out << ");\n";
+                                                        } else {
+                                                            out << "clx::table_multiply(L, "; emit_node(lhs_tbl); out << ", "; emit_node(lhs_key); out << ", ";
+                                                            emit_native(const_idx);
+                                                            out << ");\n";
+                                                        }
+                                                        return;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                                 out << "clx::table_set(L, "; emit_node(t_node.as.table_access.table); out << ", "; emit_node(t_node.as.table_access.key); out << ", ";
                                 if (v_count > 0) emit_node(ctx.block_statements[first_v]);
                                 else out << "clx::LValue()";
@@ -2814,21 +2915,56 @@ void CodeEmitter::emitForStatement(const ASTNode& node, uint32_t node_idx) {
                     }
                 }
             } else {
-                out << "clx::LValue start_" << node_idx << " = "; emit_node(node.as.for_stmt.start_expr); out << ";\n";
-                out << "L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&start_" << node_idx << ".val, &start_" << node_idx << ".type);\n";
-                out << "clx::LValue limit_" << node_idx << " = "; emit_node(node.as.for_stmt.limit_expr); out << ";\n";
-                out << "L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&limit_" << node_idx << ".val, &limit_" << node_idx << ".type);\n";
-
-                if (node.as.for_stmt.step_expr != 0xFFFFFFFF) {
-                    out << "clx::LValue step_" << node_idx << " = "; emit_node(node.as.for_stmt.step_expr); out << ";\n";
+                // Non-native for loop: emit start/limit/step as LValues then to_number
+                // Optimization: when start is an integer literal and step is default (1),
+                // emit them directly as double without LValue wrapping
+                bool start_is_literal = (ctx.nodes[node.as.for_stmt.start_expr].type == NodeType::Integer ||
+                                         ctx.nodes[node.as.for_stmt.start_expr].type == NodeType::Number);
+                bool step_can_skip = step_is_default || (ctx.nodes[node.as.for_stmt.step_expr].type == NodeType::Integer) ||
+                                     (ctx.nodes[node.as.for_stmt.step_expr].type == NodeType::Number);
+                if (start_is_literal && step_can_skip) {
+                    // Emit start directly as double
+                    out << "double s_" << node_idx << " = ";
+                    if (ctx.nodes[node.as.for_stmt.start_expr].type == NodeType::Integer)
+                        out << "static_cast<double>(" << ctx.nodes[node.as.for_stmt.start_expr].as.integer.val << ")";
+                    else
+                        out << ctx.nodes[node.as.for_stmt.start_expr].as.number.val;
+                    out << ";\n";
+                    // Emit limit as LValue (may not be numeric)
+                    out << "clx::LValue limit_" << node_idx << " = "; emit_node(node.as.for_stmt.limit_expr); out << ";\n";
+                    out << "L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&limit_" << node_idx << ".val, &limit_" << node_idx << ".type);\n";
+                    // Emit step directly as double
+                    if (node.as.for_stmt.step_expr != 0xFFFFFFFF) {
+                        out << "double st_" << node_idx << " = ";
+                        if (ctx.nodes[node.as.for_stmt.step_expr].type == NodeType::Integer)
+                            out << "static_cast<double>(" << ctx.nodes[node.as.for_stmt.step_expr].as.integer.val << ")";
+                        else
+                            out << ctx.nodes[node.as.for_stmt.step_expr].as.number.val;
+                        out << ";\n";
+                    } else {
+                        out << "double st_" << node_idx << " = 1.0;\n";
+                    }
+                    // Only need to_number for the limit
+                    out << "double l_" << node_idx << ";\n";
+                    out << "if (!limit_" << node_idx << ".to_number(l_" << node_idx << ")) {\n";
+                    out << "std::cerr << \"Error: " << ctx.filename << ":" << node.line << ": 'for' initial values must be numeric\\n\"; std::exit(1);\n}\n";
                 } else {
-                    out << "clx::LValue step_" << node_idx << " = clx::LValue(static_cast<double>(1.0));\n";
-                }
-                out << "L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&step_" << node_idx << ".val, &step_" << node_idx << ".type);\n";
+                    out << "clx::LValue start_" << node_idx << " = "; emit_node(node.as.for_stmt.start_expr); out << ";\n";
+                    out << "L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&start_" << node_idx << ".val, &start_" << node_idx << ".type);\n";
+                    out << "clx::LValue limit_" << node_idx << " = "; emit_node(node.as.for_stmt.limit_expr); out << ";\n";
+                    out << "L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&limit_" << node_idx << ".val, &limit_" << node_idx << ".type);\n";
 
-                out << "double s_" << node_idx << ", l_" << node_idx << ", st_" << node_idx << ";\n";
-                out << "if (!start_" << node_idx << ".to_number(s_" << node_idx << ") || !limit_" << node_idx << ".to_number(l_" << node_idx << ") || !step_" << node_idx << ".to_number(st_" << node_idx << ")) {\n";
-                out << "std::cerr << \"Error: " << ctx.filename << ":" << node.line << ": 'for' initial values must be numeric\\n\"; std::exit(1);\n}\n";
+                    if (node.as.for_stmt.step_expr != 0xFFFFFFFF) {
+                        out << "clx::LValue step_" << node_idx << " = "; emit_node(node.as.for_stmt.step_expr); out << ";\n";
+                    } else {
+                        out << "clx::LValue step_" << node_idx << " = clx::LValue(static_cast<double>(1.0));\n";
+                    }
+                    out << "L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&step_" << node_idx << ".val, &step_" << node_idx << ".type);\n";
+
+                    out << "double s_" << node_idx << ", l_" << node_idx << ", st_" << node_idx << ";\n";
+                    out << "if (!start_" << node_idx << ".to_number(s_" << node_idx << ") || !limit_" << node_idx << ".to_number(l_" << node_idx << ") || !step_" << node_idx << ".to_number(st_" << node_idx << ")) {\n";
+                    out << "std::cerr << \"Error: " << ctx.filename << ":" << node.line << ": 'for' initial values must be numeric\\n\"; std::exit(1);\n}\n";
+                }
             }
 
             auto _saved_hoisted = std::move(state.hoisted_lookups);
