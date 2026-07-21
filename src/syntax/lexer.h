@@ -9,17 +9,18 @@
 #define SYNTAX_LEXER_H
 #include "nodes.h"
 #include <string_view>
+
 namespace clx {
 
 //------------------ Lexer: tokenizes Lua source text into a stream of tokens
 class Lexer {
 public:
     //------------------ Lexer: constructs lexer from source string and filename
-    explicit Lexer(std::string_view source, const char* filename);
+    explicit Lexer(std::string_view source, const char *filename);
     //------------------ advance: moves to the next token in the source
     void advance();
     //------------------ current: returns the current token without advancing
-    const Token& current() const;
+    const Token &current() const;
     //------------------ remaining_source: returns the unconsumed portion of source
     std::string_view remaining_source() const;
     //------------------ position: returns the current byte offset in source
@@ -27,7 +28,8 @@ public:
     //------------------ line: returns the current line number
     int line() const;
     //------------------ filename: returns the source filename
-    const char* filename() const;
+    const char *filename() const;
+
 private:
     //------------------ src: the full source text being lexed
     std::string_view src;

@@ -11,17 +11,19 @@
 #include "lexer.h"
 #include <vector>
 #include <string_view>
+
 namespace clx {
 //------------------ Parser: recursive-descent parser that builds the AST
 class Parser {
 public:
     //------------------ Parser: constructs parser from source, filename, and AST context
-    Parser(const char* source, const char* filename, ASTContext& context);
+    Parser(const char *source, const char *filename, ASTContext &context);
     //------------------ parse: parses the full source and returns the root block node
     uint32_t parse();
+
 private:
     Lexer lexer;
-    ASTContext& ctx;
+    ASTContext &ctx;
     Token current_token;
     std::vector<ImplicitGlobalMode> implicit_globals;
     int current_depth = 0;
@@ -30,7 +32,7 @@ private:
     //------------------ advance: consume the current token and fetch the next
     void advance();
     //------------------ add_node: allocate an AST node and return its index
-    uint32_t add_node(const ASTNode& node);
+    uint32_t add_node(const ASTNode &node);
     //------------------ parse_statement: parse one complete statement
     uint32_t parse_statement();
     //------------------ parse_expression: parse an expression (lowest precedence)
@@ -72,7 +74,7 @@ private:
     //------------------ add_symbol: register a variable in the current scope
     void add_symbol(std::string_view name, SymbolType type, uint32_t decl_idx);
     //------------------ resolve_symbol: look up a variable name in active scopes
-    SymbolType resolve_symbol(std::string_view name, int line, bool& out_is_captured, bool& out_is_global);
+    SymbolType resolve_symbol(std::string_view name, int line, bool &out_is_captured, bool &out_is_global);
     static constexpr uint32_t INVALID_NODE = 0xFFFFFFFF;
 };
 }

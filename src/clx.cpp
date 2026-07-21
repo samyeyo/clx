@@ -30,7 +30,7 @@
 namespace fs = std::filesystem;
 
 #ifndef CLX_VERSION
-    #error "CLX_VERSION not defined — rebuild with CMake"
+#error "CLX_VERSION not defined — rebuild with CMake"
 #endif
 
 std::vector<std::string> precompiled_modules;
@@ -44,15 +44,15 @@ struct Compiler {
     std::string cmd;
 };
 
-
 //------------------ CLX: execute - runs a shell command, captures stdout and exit code
-std::string execute(const std::string& cmd, int& out_code) {
+std::string execute(const std::string &cmd, int &out_code) {
     std::string result;
 #ifdef _WIN32
-    auto run_one = [&](const std::string& one_cmd) -> int {
+    auto run_one = [&](const std::string &one_cmd) -> int {
         SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
         HANDLE h_read, h_write;
-        if (!CreatePipe(&h_read, &h_write, &sa, 0)) return -1;
+        if (!CreatePipe(&h_read, &h_write, &sa, 0))
+            return -1;
         SetHandleInformation(h_read, HANDLE_FLAG_INHERIT, 0);
 
         STARTUPINFOA si = { sizeof(STARTUPINFOA) };
@@ -64,7 +64,7 @@ std::string execute(const std::string& cmd, int& out_code) {
         std::vector<char> cmd_buf(one_cmd.begin(), one_cmd.end());
         cmd_buf.push_back(0);
 
-        PROCESS_INFORMATION pi = {};
+        PROCESS_INFORMATION pi = { };
         BOOL ok = CreateProcessA(NULL, cmd_buf.data(), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
         CloseHandle(h_write);
 
@@ -94,13 +94,15 @@ std::string execute(const std::string& cmd, int& out_code) {
     std::string remaining = cmd;
     while ((pos = remaining.find(" && ")) != std::string::npos) {
         out_code = run_one(remaining.substr(0, pos));
-        if (out_code != 0) return result;
+        if (out_code != 0)
+            return result;
         remaining = remaining.substr(pos + 4);
     }
     out_code = run_one(remaining);
 #else
     auto pipe = popen(cmd.c_str(), "r");
-    if (!pipe) return "";
+    if (!pipe)
+        return "";
     std::array<char, 128> buffer;
     while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
         result += buffer.data();
@@ -110,18 +112,16 @@ std::string execute(const std::string& cmd, int& out_code) {
     return result;
 }
 
-
 //------------------ CLX: get_compiler - returns the compiler used to build clx (embedded at build time)
 Compiler get_compiler() {
 #ifndef CLX_DEFAULT_CXX
-    #error "CLX_DEFAULT_CXX not defined — rebuild with CMake"
+#error "CLX_DEFAULT_CXX not defined — rebuild with CMake"
 #endif
 #ifndef CLX_DEFAULT_CXX_NAME
-    #error "CLX_DEFAULT_CXX_NAME not defined — rebuild with CMake"
+#error "CLX_DEFAULT_CXX_NAME not defined — rebuild with CMake"
 #endif
-    return {CLX_DEFAULT_CXX_NAME, CLX_DEFAULT_CXX};
+    return { CLX_DEFAULT_CXX_NAME, CLX_DEFAULT_CXX };
 }
-
 
 //------------------ CLX: print_help - displays usage information
 void print_help() {
@@ -130,14 +130,14 @@ void print_help() {
               << "  -o, --output <name>   Specify output file name\n"
               << "  --executable          Build executable (default)\n"
               << "  --object              Compile to object file (.o/.obj)\n"
-               << "  --static              Compile to static library (.a/.lib)\n"
-               << "  --debug               Enable debug symbols\n"
-               << "  --size                Optimize for size (default)\n"
-               << "  --fast                Optimize for speed\n"
-               << "  --cpp                 Generate C++ source file and exit\n"
-               << "  --minimal             Exclude non-essential Lua modules; keeps base + package\n"
-               << "  --version             Print version and exit\n"
-               << "  --help                Display this help message\n\n"
+              << "  --static              Compile to static library (.a/.lib)\n"
+              << "  --debug               Enable debug symbols\n"
+              << "  --size                Optimize for size (default)\n"
+              << "  --fast                Optimize for speed\n"
+              << "  --cpp                 Generate C++ source file and exit\n"
+              << "  --minimal             Exclude non-essential Lua modules; keeps base + package\n"
+              << "  --version             Print version and exit\n"
+              << "  --help                Display this help message\n\n"
               << "Compiler Options:\n"
               << "  Any options starting with '-' not recognized by clx are passed to the C++ compiler.\n"
               << "  If no compiler options are provided, default optimization flags are used.\n"
@@ -145,7 +145,7 @@ void print_help() {
 }
 
 //------------------ CLX: main - entry point, parses CLI arguments, compiles Lua to C++, links output
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[]) {
     if (argc < 2) {
         print_help();
         return 1;
@@ -169,7 +169,8 @@ int main(int argc, char* argv[]) {
             std::cout << "clx " CLX_VERSION "\nMIT License - Copyright (c) 2026 Tine Samir\n";
             return 0;
         } else if (arg == "--output" || arg == "-o") {
-            if (i + 1 < argc) custom_output_name = argv[++i];
+            if (i + 1 < argc)
+                custom_output_name = argv[++i];
         } else if (arg == "--minimal") {
             minimal_active = true;
         } else if (arg == "--modules") {
@@ -209,7 +210,8 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    if (debug_mode) size_mode = false;
+    if (debug_mode)
+        size_mode = false;
 
     bool dce_mode = (mode == BuildMode::Executable && !debug_mode);
 
@@ -221,10 +223,15 @@ int main(int argc, char* argv[]) {
     std::string cc_compile_str = "";
     std::string cc_link_str = "";
     bool link_seen = false;
-    for (const auto& opt : cc_options) {
-        if (opt == "/link") { link_seen = true; continue; }
-        if (link_seen) cc_link_str += " " + opt;
-        else           cc_compile_str += " " + opt;
+    for (const auto &opt : cc_options) {
+        if (opt == "/link") {
+            link_seen = true;
+            continue;
+        }
+        if (link_seen)
+            cc_link_str += " " + opt;
+        else
+            cc_compile_str += " " + opt;
     }
     if (!link_seen) {
         cc_link_str = cc_compile_str;
@@ -263,7 +270,8 @@ int main(int argc, char* argv[]) {
         msvc_opt_flags = "/O2 /Ot /GL /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy";
     }
 
-    std::string output_name = custom_output_name.empty() ? fs::path(input_files[0]).stem().string() : custom_output_name;
+    std::string output_name
+        = custom_output_name.empty() ? fs::path(input_files[0]).stem().string() : custom_output_name;
 
     if (fs::path(output_name).extension() == ".exe") {
         output_name = fs::path(output_name).stem().string();
@@ -271,7 +279,7 @@ int main(int argc, char* argv[]) {
 
     std::vector<std::string> cpp_files;
 
-    for (const auto& input_file : input_files) {
+    for (const auto &input_file : input_files) {
         std::ifstream t(input_file);
         if (!t.is_open()) {
             std::cerr << "Error: Cannot open input file " << input_file << "\n";
@@ -287,7 +295,7 @@ int main(int argc, char* argv[]) {
         uint32_t root = 0xFFFFFFFF;
         try {
             root = parser.parse();
-        } catch (const std::exception& e) {
+        } catch (const std::exception &e) {
             std::cerr << e.what() << "\n";
             return 1;
         }
@@ -322,29 +330,34 @@ int main(int argc, char* argv[]) {
         std::string main_module = fs::path(input_files[0]).stem().string();
         std::ofstream appender(cpp_files[0], std::ios::app);
 
-        for (const auto& file : input_files) {
+        for (const auto &file : input_files) {
             std::string mod = fs::path(file).stem().string();
             appender << "\nextern clx::LValue luaopen_" << mod << "(clx::LState* L);\n";
         }
-        for (const auto& mod : precompiled_modules) {
+        for (const auto &mod : precompiled_modules) {
             appender << "\nextern clx::LValue luaopen_" << mod << "(clx::LState* L);\n";
         }
 
         appender << "int main(int argc, char* argv[]) {\n";
         appender << "    clx::LState* L = clx::open(argc, argv);\n";
-        if (!minimal_active) appender << "    clx::openlibs(L);\n";
+        if (!minimal_active)
+            appender << "    clx::openlibs(L);\n";
         appender << "    try {\n";
 
         for (size_t i = 1; i < input_files.size(); ++i) {
             std::string mod = fs::path(input_files[i]).stem().string();
             std::string lua_mod = input_files[i];
             size_t dot = lua_mod.rfind('.');
-            if (dot != std::string::npos) lua_mod = lua_mod.substr(0, dot);
-            for (auto& c : lua_mod) if (c == '/' || c == '\\') c = '.';
+            if (dot != std::string::npos)
+                lua_mod = lua_mod.substr(0, dot);
+            for (auto &c : lua_mod)
+                if (c == '/' || c == '\\')
+                    c = '.';
             appender << "        L->register_module(\"" << lua_mod << "\", luaopen_" << mod << ");\n";
-            if (lua_mod != mod) appender << "        L->register_module(\"" << mod << "\", luaopen_" << mod << ");\n";
+            if (lua_mod != mod)
+                appender << "        L->register_module(\"" << mod << "\", luaopen_" << mod << ");\n";
         }
-        for (const auto& mod : precompiled_modules) {
+        for (const auto &mod : precompiled_modules) {
             appender << "        L->register_module(\"" << mod << "\", luaopen_" << mod << ");\n";
         }
 
@@ -437,17 +450,16 @@ int main(int argc, char* argv[]) {
         std::string lib_file = size_mode ? "libclx_size.a" : "libclx.a";
         fs::path lib_path;
         std::string lib_dir;
-        if (fs::exists((lib_path = build_root / "build") / lib_file) ||
-            fs::exists((lib_path = build_root / "lib") / lib_file) ||
-            fs::exists((lib_path = build_root / "lib64") / lib_file) ||
-            fs::exists((lib_path = build_root / "lib" / "x86_64-linux-gnu") / lib_file))
+        if (fs::exists((lib_path = build_root / "build") / lib_file)
+            || fs::exists((lib_path = build_root / "lib") / lib_file)
+            || fs::exists((lib_path = build_root / "lib64") / lib_file)
+            || fs::exists((lib_path = build_root / "lib" / "x86_64-linux-gnu") / lib_file))
             lib_dir = lib_path.string();
 #ifdef __APPLE__
         lib_link = lib_dir.empty() ? (size_mode ? " -lclx_size" : " -lclx")
                                    : " -L " + lib_dir + (size_mode ? " -lclx_size" : " -lclx");
 #else
-        lib_link = lib_dir.empty() ? " -l:" + lib_file
-                                   : " -L " + lib_dir + " -l:" + lib_file;
+        lib_link = lib_dir.empty() ? " -l:" + lib_file : " -L " + lib_dir + " -l:" + lib_file;
 #endif
     }
 #endif
@@ -466,7 +478,7 @@ int main(int argc, char* argv[]) {
             mod_search_dirs.push_back(p);
     }
 #endif
-    for (const auto& opt : cc_options) {
+    for (const auto &opt : cc_options) {
         if (opt.size() > 2 && opt[0] == '-' && opt[1] == 'L') {
             std::string dir = opt.substr(2);
             if (!dir.empty() && fs::is_directory(dir))
@@ -475,23 +487,23 @@ int main(int argc, char* argv[]) {
     }
 
     std::string all_cpp_files = "";
-    for (const auto& f : cpp_files) {
+    for (const auto &f : cpp_files) {
         all_cpp_files += "\"" + f + "\" ";
     }
 
     std::string obj_files;
-    for (const auto& f : cpp_files) {
+    for (const auto &f : cpp_files) {
         obj_files += fs::path(f).stem().string() + ".o ";
     }
 
-    for (const auto& mod : precompiled_modules) {
+    for (const auto &mod : precompiled_modules) {
 #ifdef _WIN32
         std::string target_lib = mod + ".lib";
 #else
         std::string target_lib = mod + ".a";
 #endif
         bool found = false;
-        for (const auto& dir : mod_search_dirs) {
+        for (const auto &dir : mod_search_dirs) {
             fs::path full = dir / target_lib;
             if (fs::exists(full)) {
                 if (dir == fs::current_path())
@@ -517,44 +529,59 @@ int main(int argc, char* argv[]) {
         std::string out_ext;
         if (mode != BuildMode::Object && mode != BuildMode::Static) {
             out_ext = ".exe";
-            if (output_name.size() >= 4 && output_name.compare(output_name.size() - 4, 4, ".exe") == 0) out_ext = "";
+            if (output_name.size() >= 4 && output_name.compare(output_name.size() - 4, 4, ".exe") == 0)
+                out_ext = "";
         }
         std::string fe_arg = out_ext.empty() ? "" : " /Fe\"" + output_name + out_ext + "\"";
 
         std::string msvc_obj_files;
-        for (const auto& f : cpp_files) {
+        for (const auto &f : cpp_files) {
             msvc_obj_files += "\"" + tmp_dir + "\\" + fs::path(f).stem().string() + ".obj\" ";
         }
 
         if (mode == BuildMode::Object) {
-            cmd = cc.cmd + " /nologo /c " + msvc_opt_flags + msvc_dce_cl + " /std:c++20" + include_opt + " " + all_cpp_files + cc_compile_str + fo_arg;
+            cmd = cc.cmd + " /nologo /c " + msvc_opt_flags + msvc_dce_cl + " /std:c++20" + include_opt + " "
+                + all_cpp_files + cc_compile_str + fo_arg;
         } else if (mode == BuildMode::Static) {
             std::string lib_out = output_name;
             if (!(lib_out.size() >= 4 && lib_out.compare(lib_out.size() - 4, 4, ".lib") == 0))
                 lib_out += ".lib";
-            cmd = cc.cmd + " /nologo /c " + msvc_opt_flags + msvc_dce_cl + " /std:c++20" + include_opt + " " + all_cpp_files + cc_compile_str + fo_arg + " && lib /nologo /OUT:\"" + lib_out + "\" " + msvc_obj_files;
+            cmd = cc.cmd + " /nologo /c " + msvc_opt_flags + msvc_dce_cl + " /std:c++20" + include_opt + " "
+                + all_cpp_files + cc_compile_str + fo_arg + " && lib /nologo /OUT:\"" + lib_out + "\" "
+                + msvc_obj_files;
         } else {
-            cmd = cc.cmd + " /nologo " + msvc_opt_flags + msvc_dce_cl + " /std:c++20" + include_opt + cc_compile_str + " " + all_cpp_files + fo_arg + lib_link + fe_arg + " " + msvc_dce_link + cc_link_str;
+            cmd = cc.cmd + " /nologo " + msvc_opt_flags + msvc_dce_cl + " /std:c++20" + include_opt + cc_compile_str
+                + " " + all_cpp_files + fo_arg + lib_link + fe_arg + " " + msvc_dce_link + cc_link_str;
         }
     } else {
         if (mode == BuildMode::Object)
-            cmd = cc.cmd + " -c " + opt_flags + gcc_dce_cl + " -std=c++20" + include_opt + " -fPIC " + all_cpp_files + " -o \"" + (fs::temp_directory_path() / (fs::path(input_files[0]).stem().string() + "_tmp.o")).string() + "\"" + cc_options_str;
+            cmd = cc.cmd + " -c " + opt_flags + gcc_dce_cl + " -std=c++20" + include_opt + " -fPIC " + all_cpp_files
+                + " -o \""
+                + (fs::temp_directory_path() / (fs::path(input_files[0]).stem().string() + "_tmp.o")).string() + "\""
+                + cc_options_str;
         else if (mode == BuildMode::Static) {
             std::string ext = ".a";
-            if (output_name.size() >= ext.size() && output_name.compare(output_name.size() - ext.size(), ext.size(), ext) == 0)
-                cmd = cc.cmd + " -c " + opt_flags + gcc_dce_cl + " -std=c++20" + include_opt + " " + all_cpp_files + cc_options_str + " && ar rcs " + output_name + " " + obj_files;
+            if (output_name.size() >= ext.size()
+                && output_name.compare(output_name.size() - ext.size(), ext.size(), ext) == 0)
+                cmd = cc.cmd + " -c " + opt_flags + gcc_dce_cl + " -std=c++20" + include_opt + " " + all_cpp_files
+                    + cc_options_str + " && ar rcs " + output_name + " " + obj_files;
             else
-                cmd = cc.cmd + " -c " + opt_flags + gcc_dce_cl + " -std=c++20" + include_opt + " " + all_cpp_files + cc_options_str + " && ar rcs " + output_name + ".a " + obj_files;
+                cmd = cc.cmd + " -c " + opt_flags + gcc_dce_cl + " -std=c++20" + include_opt + " " + all_cpp_files
+                    + cc_options_str + " && ar rcs " + output_name + ".a " + obj_files;
         } else {
 #ifdef _WIN32
             std::string ext = ".exe";
-            if (output_name.size() >= ext.size() && output_name.compare(output_name.size() - ext.size(), ext.size(), ext) == 0)
-                cmd = cc.cmd + " " + opt_flags + gcc_dce_cl + " -std=c++20" + include_opt + " " + all_cpp_files + cc_options_str + lib_link + gcc_dce_link + gcc_strip_link + " -o " + output_name;
+            if (output_name.size() >= ext.size()
+                && output_name.compare(output_name.size() - ext.size(), ext.size(), ext) == 0)
+                cmd = cc.cmd + " " + opt_flags + gcc_dce_cl + " -std=c++20" + include_opt + " " + all_cpp_files
+                    + cc_options_str + lib_link + gcc_dce_link + gcc_strip_link + " -o " + output_name;
             else
-                cmd = cc.cmd + " " + opt_flags + gcc_dce_cl + " -std=c++20" + include_opt + " " + all_cpp_files + cc_options_str + lib_link + gcc_dce_link + gcc_strip_link + " -o " + output_name + ".exe";
+                cmd = cc.cmd + " " + opt_flags + gcc_dce_cl + " -std=c++20" + include_opt + " " + all_cpp_files
+                    + cc_options_str + lib_link + gcc_dce_link + gcc_strip_link + " -o " + output_name + ".exe";
 #else
-            cmd = cc.cmd + " " + opt_flags + gcc_dce_cl + " -std=c++20" + include_opt + " " + all_cpp_files + cc_options_str + lib_link + " -rdynamic" + gcc_dce_link + gcc_strip_link + " -o " + output_name;
-            #endif
+            cmd = cc.cmd + " " + opt_flags + gcc_dce_cl + " -std=c++20" + include_opt + " " + all_cpp_files
+                + cc_options_str + lib_link + " -rdynamic" + gcc_dce_link + gcc_strip_link + " -o " + output_name;
+#endif
         }
     }
 
@@ -566,7 +593,7 @@ int main(int argc, char* argv[]) {
 
     if (exit_code != 0) {
         std::cerr << output << std::endl;
-        for (const auto& f : cpp_files) {
+        for (const auto &f : cpp_files) {
             fs::remove(f);
             fs::path base = fs::path(f).parent_path() / fs::path(f).stem();
             fs::remove(fs::path(base.string() + ".obj"));
@@ -601,7 +628,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    for (const auto& f : cpp_files) {
+    for (const auto &f : cpp_files) {
         fs::remove(f);
         fs::path base = fs::path(f).parent_path() / fs::path(f).stem();
         fs::remove(fs::path(base.string() + ".obj"));

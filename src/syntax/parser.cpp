@@ -16,25 +16,21 @@ namespace clx {
 using enum TokenType;
 using enum NodeType;
 
-static constexpr const char* std_libs[] = {
-    "print", "require", "error", "assert", "tostring", "tonumber", "type",
-    "pairs", "ipairs", "next", "pcall", "xpcall", "setmetatable", "getmetatable",
-    "rawget", "rawset", "rawlen", "rawequal", "collectgarbage", "load", "loadfile",
-    "_G", "_VERSION", "warn", "math", "table", "string", "os", "coroutine",
-    "package", "debug", "io", "utf8"
-};
-
-
+static constexpr const char *std_libs[] = { "print", "require", "error", "assert", "tostring", "tonumber", "type",
+    "pairs", "ipairs", "next", "pcall", "xpcall", "setmetatable", "getmetatable", "rawget", "rawset", "rawlen",
+    "rawequal", "collectgarbage", "load", "loadfile", "_G", "_VERSION", "warn", "math", "table", "string", "os",
+    "coroutine", "package", "debug", "io", "utf8" };
 
 //------------------ PARSER: constructor - initializes parser with lexer and AST context, seeds std lib symbols
-Parser::Parser(const char* source, const char* filename, ASTContext& context)
-    : lexer(source, filename), ctx(context) {
+Parser::Parser(const char *source, const char *filename, ASTContext &context)
+    : lexer(source, filename)
+    , ctx(context) {
     ctx.filename = filename ? filename : "";
     current_token = lexer.current();
     implicit_globals.push_back(ImplicitGlobalMode::ReadWrite);
 
-    for (const char* lib : std_libs) {
-        active_symbols.push_back({lib, SymbolType::ExplicitGlobal, 0, 0, 0xFFFFFFFF});
+    for (const char *lib : std_libs) {
+        active_symbols.push_back({ lib, SymbolType::ExplicitGlobal, 0, 0, 0xFFFFFFFF });
     }
 }
 
@@ -45,12 +41,10 @@ void Parser::advance() {
 }
 
 //------------------ PARSER: add_node - appends an AST node and returns its index
-uint32_t Parser::add_node(const ASTNode& node) {
+uint32_t Parser::add_node(const ASTNode &node) {
     ctx.nodes.push_back(node);
     return static_cast<uint32_t>(ctx.nodes.size() - 1);
 }
-
-
 
 //------------------ PARSER: enter_scope - increments depth, pushes inherited implicit_globals
 void Parser::enter_scope() {
@@ -67,20 +61,19 @@ void Parser::leave_scope() {
     implicit_globals.pop_back();
 }
 
-
-
 //------------------ PARSER: add_symbol - registers a symbol in the active scope
 void Parser::add_symbol(std::string_view name, SymbolType type, uint32_t decl_idx) {
-    active_symbols.push_back({name, type, current_depth, current_function_depth, decl_idx});
+    active_symbols.push_back({ name, type, current_depth, current_function_depth, decl_idx });
 }
 
 //------------------ PARSER: resolve_symbol - looks up a symbol in scope chain, returns its type and flags
-SymbolType Parser::resolve_symbol(std::string_view name, int line, bool& out_is_captured, bool& out_is_global) {
+SymbolType Parser::resolve_symbol(std::string_view name, int line, bool &out_is_captured, bool &out_is_global) {
     out_is_captured = false;
     out_is_global = false;
     for (auto it = active_symbols.rbegin(); it != active_symbols.rend(); ++it) {
         if (it->name == name) {
-            if (it->function_depth > current_function_depth) continue;
+            if (it->function_depth > current_function_depth)
+                continue;
             if (it->type == SymbolType::ExplicitGlobal || it->type == SymbolType::ConstGlobal) {
                 out_is_global = true;
                 return it->type;
@@ -93,13 +86,13 @@ SymbolType Parser::resolve_symbol(std::string_view name, int line, bool& out_is_
         }
     }
     if (implicit_globals.back() == ImplicitGlobalMode::None) {
-        throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(line) + ": use of undeclared global variable '" + std::string(name) + "'");
+        throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(line)
+            + ": use of undeclared global variable '" + std::string(name) + "'");
     }
     out_is_global = true;
-    return (implicit_globals.back() == ImplicitGlobalMode::ReadOnly) ? SymbolType::ConstGlobal : SymbolType::ExplicitGlobal;
+    return (implicit_globals.back() == ImplicitGlobalMode::ReadOnly) ? SymbolType::ConstGlobal
+                                                                     : SymbolType::ExplicitGlobal;
 }
-
-
 
 //------------------ PARSER: parse_primary - parses primary expressions (literals, identifiers, table/paren/func)
 uint32_t Parser::parse_primary() {
@@ -114,7 +107,10 @@ uint32_t Parser::parse_primary() {
             if (current_token.type == TokIdent) {
                 std::string_view rest = lexer.remaining_source();
                 size_t check_pos = 0;
-                while (check_pos < rest.size() && (rest[check_pos] == ' ' || rest[check_pos] == '\t' || rest[check_pos] == '\n' || rest[check_pos] == '\r')) check_pos++;
+                while (check_pos < rest.size()
+                    && (rest[check_pos] == ' ' || rest[check_pos] == '\t' || rest[check_pos] == '\n'
+                        || rest[check_pos] == '\r'))
+                    check_pos++;
                 bool is_key_value = (check_pos < rest.size() && rest[check_pos] == '=');
                 if (is_key_value) {
                     ASTNode k;
@@ -130,23 +126,31 @@ uint32_t Parser::parse_primary() {
             } else if (current_token.type == TokLBracket) {
                 advance();
                 keys.push_back(parse_expression());
-                if (current_token.type == TokRBracket) advance();
-                if (current_token.type == TokAssign) advance();
+                if (current_token.type == TokRBracket)
+                    advance();
+                if (current_token.type == TokAssign)
+                    advance();
                 has_key = true;
             }
 
-            if (!has_key) keys.push_back(INVALID_NODE);
+            if (!has_key)
+                keys.push_back(INVALID_NODE);
 
             uint32_t val = parse_expression();
-            if (val == INVALID_NODE) throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": unexpected token in table constructor");
+            if (val == INVALID_NODE)
+                throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line)
+                    + ": unexpected token in table constructor");
             values.push_back(val);
 
-            if (current_token.type == TokComma || current_token.type == TokSemicolon) advance();
+            if (current_token.type == TokComma || current_token.type == TokSemicolon)
+                advance();
             else if (current_token.type != TokRBrace) {
-                throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": expected ',' or '}' in table");
+                throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line)
+                    + ": expected ',' or '}' in table");
             }
         }
-        if (current_token.type == TokRBrace) advance();
+        if (current_token.type == TokRBrace)
+            advance();
 
         ASTNode node;
         node.type = NodeType::TableConstructor;
@@ -171,7 +175,8 @@ uint32_t Parser::parse_primary() {
         int line = current_token.line;
         advance();
         uint32_t expr = parse_expression();
-        if (current_token.type == TokRParen) advance();
+        if (current_token.type == TokRParen)
+            advance();
 
         ASTNode node;
         node.type = NodeType::ParenExpression;
@@ -180,31 +185,42 @@ uint32_t Parser::parse_primary() {
         return add_node(node);
     }
     if (current_token.type == TokNumber) {
-        bool is_float = (current_token.text.find('.') != std::string_view::npos ||
-                         current_token.text.find('e') != std::string_view::npos ||
-                         current_token.text.find('E') != std::string_view::npos);
-        ASTNode node; node.line = current_token.line;
+        bool is_float = (current_token.text.find('.') != std::string_view::npos
+            || current_token.text.find('e') != std::string_view::npos
+            || current_token.text.find('E') != std::string_view::npos);
+        ASTNode node;
+        node.line = current_token.line;
         if (is_float) {
             node.type = NodeType::Number;
             node.as.number.val = current_token.number_value;
         } else {
             node.type = NodeType::Integer;
             int64_t ival = 0;
-            auto [p, ec] = std::from_chars(current_token.text.data(), current_token.text.data() + current_token.text.size(), ival);
+            auto [p, ec] = std::from_chars(
+                current_token.text.data(), current_token.text.data() + current_token.text.size(), ival);
             node.as.integer.val = ival;
         }
         advance();
         return add_node(node);
     }
     if (current_token.type == TokString) {
-        ASTNode node; node.type = NodeType::String; node.line = current_token.line;
-        node.as.string.text = current_token.text.data(); node.as.string.length = current_token.text.length(); advance(); return add_node(node);
+        ASTNode node;
+        node.type = NodeType::String;
+        node.line = current_token.line;
+        node.as.string.text = current_token.text.data();
+        node.as.string.length = current_token.text.length();
+        advance();
+        return add_node(node);
     }
     if (current_token.type == TokTrue || current_token.type == TokFalse || current_token.type == TokNil) {
-        ASTNode node; node.line = current_token.line;
-        if (current_token.type == TokTrue) node.type = NodeType::TrueLiteral;
-        else if (current_token.type == TokFalse) node.type = NodeType::FalseLiteral;
-        else node.type = NodeType::NilLiteral;
+        ASTNode node;
+        node.line = current_token.line;
+        if (current_token.type == TokTrue)
+            node.type = NodeType::TrueLiteral;
+        else if (current_token.type == TokFalse)
+            node.type = NodeType::FalseLiteral;
+        else
+            node.type = NodeType::NilLiteral;
         advance();
         return add_node(node);
     }
@@ -213,9 +229,13 @@ uint32_t Parser::parse_primary() {
         return parse_funcbody(false);
     }
     if (current_token.type == TokIdent) {
-        ASTNode node; node.type = NodeType::Identifier; node.line = current_token.line;
-        node.as.ident.name = current_token.text.data(); node.as.ident.length = current_token.text.length();
-        node.as.ident.is_captured = false; node.as.ident.is_global = false;
+        ASTNode node;
+        node.type = NodeType::Identifier;
+        node.line = current_token.line;
+        node.as.ident.name = current_token.text.data();
+        node.as.ident.length = current_token.text.length();
+        node.as.ident.is_captured = false;
+        node.as.ident.is_global = false;
         node.as.ident.attr = Attribute::None;
         uint32_t node_idx = add_node(node);
 
@@ -257,12 +277,14 @@ uint32_t Parser::parse_postfix_expression() {
                     args.push_back(parse_expression());
                 }
             }
-            if (current_token.type == TokRParen) advance();
+            if (current_token.type == TokRParen)
+                advance();
 
             uint32_t first_arg = ctx.block_statements.size();
-            for (uint32_t arg : args) ctx.block_statements.push_back(arg);
+            for (uint32_t arg : args)
+                ctx.block_statements.push_back(arg);
 
-            const char* intrinsic_cname = nullptr;
+            const char *intrinsic_cname = nullptr;
             if (ctx.nodes[expr].type == NodeType::TableAccess) {
                 uint32_t t_idx = ctx.nodes[expr].as.table_access.table;
                 uint32_t k_idx = ctx.nodes[expr].as.table_access.key;
@@ -270,15 +292,14 @@ uint32_t Parser::parse_postfix_expression() {
                     std::string_view tname(ctx.nodes[t_idx].as.ident.name, ctx.nodes[t_idx].as.ident.length);
                     std::string_view kname(ctx.nodes[k_idx].as.string.text, ctx.nodes[k_idx].as.string.length);
                     if (tname == "math") {
-                        static const std::unordered_map<std::string_view, const char*> _m = {
-                            {"sin", "std::sin"}, {"cos", "std::cos"}, {"floor", "std::floor"},
-                            {"ceil", "std::ceil"}, {"abs", "std::abs"}, {"sqrt", "std::sqrt"},
-                            {"fmod", "std::fmod"}, {"log", "std::log"}, {"exp", "std::exp"},
-                            {"tan", "std::tan"}, {"atan", "std::atan"}, {"asin", "std::asin"},
-                            {"acos", "std::acos"}, {"sinh", "std::sinh"}, {"cosh", "std::cosh"},
-                            {"tanh", "std::tanh"}, {"atan2", "std::atan2"}, {"pow", "std::pow"},
-                            {"deg", "__clx_deg"}, {"rad", "__clx_rad"}
-                        };
+                        static const std::unordered_map<std::string_view, const char *> _m
+                            = { { "sin", "std::sin" }, { "cos", "std::cos" }, { "floor", "std::floor" },
+                                  { "ceil", "std::ceil" }, { "abs", "std::abs" }, { "sqrt", "std::sqrt" },
+                                  { "fmod", "std::fmod" }, { "log", "std::log" }, { "exp", "std::exp" },
+                                  { "tan", "std::tan" }, { "atan", "std::atan" }, { "asin", "std::asin" },
+                                  { "acos", "std::acos" }, { "sinh", "std::sinh" }, { "cosh", "std::cosh" },
+                                  { "tanh", "std::tanh" }, { "atan2", "std::atan2" }, { "pow", "std::pow" },
+                                  { "deg", "__clx_deg" }, { "rad", "__clx_rad" } };
                         auto _mit = _m.find(kname);
                         if (_mit != _m.end())
                             intrinsic_cname = _mit->second;
@@ -307,7 +328,9 @@ uint32_t Parser::parse_postfix_expression() {
         } else if (current_token.type == TokColon) {
             int line = current_token.line;
             advance();
-            if (current_token.type != TokIdent) throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": Expected method name after ':'");
+            if (current_token.type != TokIdent)
+                throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line)
+                    + ": Expected method name after ':'");
 
             ASTNode key;
             key.type = NodeType::String;
@@ -330,7 +353,8 @@ uint32_t Parser::parse_postfix_expression() {
                 args.push_back(expr);
                 args.push_back(arg);
                 uint32_t first_arg = ctx.block_statements.size();
-                for (uint32_t a : args) ctx.block_statements.push_back(a);
+                for (uint32_t a : args)
+                    ctx.block_statements.push_back(a);
                 ASTNode node;
                 node.type = NodeType::CallExpression;
                 node.line = line;
@@ -339,7 +363,9 @@ uint32_t Parser::parse_postfix_expression() {
                 node.as.call_expr.arg_count = args.size();
                 expr = add_node(node);
             } else {
-                if (current_token.type != TokLParen) throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": Expected '(' for method call");
+                if (current_token.type != TokLParen)
+                    throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line)
+                        + ": Expected '(' for method call");
                 advance();
 
                 std::vector<uint32_t> args;
@@ -352,10 +378,12 @@ uint32_t Parser::parse_postfix_expression() {
                         args.push_back(parse_expression());
                     }
                 }
-                if (current_token.type == TokRParen) advance();
+                if (current_token.type == TokRParen)
+                    advance();
 
                 uint32_t first_arg = ctx.block_statements.size();
-                for (uint32_t arg : args) ctx.block_statements.push_back(arg);
+                for (uint32_t arg : args)
+                    ctx.block_statements.push_back(arg);
 
                 ASTNode node;
                 node.type = NodeType::CallExpression;
@@ -381,29 +409,38 @@ uint32_t Parser::parse_postfix_expression() {
         } else if (current_token.type == TokLBracket) {
             advance();
             uint32_t key_idx = parse_expression();
-            if (current_token.type == TokRBracket) advance();
+            if (current_token.type == TokRBracket)
+                advance();
             ASTNode node;
             node.type = NodeType::TableAccess;
             node.as.table_access.table = expr;
             node.as.table_access.key = key_idx;
             expr = add_node(node);
-        } else break;
+        } else
+            break;
     }
     return expr;
 }
 
 //------------------ PARSER: parse_unary - parses unary operators (-, #, ~, not)
 uint32_t Parser::parse_unary() {
-    if (current_token.type == TokMinus || current_token.type == TokLen || current_token.type == TokBitXor|| current_token.type == TokNot) {
+    if (current_token.type == TokMinus || current_token.type == TokLen || current_token.type == TokBitXor
+        || current_token.type == TokNot) {
         int op_code = static_cast<int>(UnaryOp::Len);
-        if (current_token.type == TokMinus) op_code = static_cast<int>(UnaryOp::Minus);
-        if (current_token.type == TokBitXor) op_code = static_cast<int>(UnaryOp::BNot);
-        if (current_token.type == TokNot) op_code = static_cast<int>(UnaryOp::Not);
+        if (current_token.type == TokMinus)
+            op_code = static_cast<int>(UnaryOp::Minus);
+        if (current_token.type == TokBitXor)
+            op_code = static_cast<int>(UnaryOp::BNot);
+        if (current_token.type == TokNot)
+            op_code = static_cast<int>(UnaryOp::Not);
         int line = current_token.line;
         advance();
         uint32_t expr = parse_unary();
-        ASTNode node; node.type = NodeType::UnaryOp; node.line = line;
-        node.as.unary_op.expr = expr; node.as.unary_op.op = op_code;
+        ASTNode node;
+        node.type = NodeType::UnaryOp;
+        node.line = line;
+        node.as.unary_op.expr = expr;
+        node.as.unary_op.op = op_code;
         return add_node(node);
     }
     return parse_pow();
@@ -413,10 +450,15 @@ uint32_t Parser::parse_unary() {
 uint32_t Parser::parse_pow() {
     uint32_t left = parse_postfix_expression();
     if (current_token.type == TokPow) {
-        int line = current_token.line; advance();
+        int line = current_token.line;
+        advance();
         uint32_t right = parse_unary();
-        ASTNode node; node.type = NodeType::BinaryOp; node.line = line;
-        node.as.bin_op.left = left; node.as.bin_op.right = right; node.as.bin_op.op = static_cast<int>(BinaryOp::Pow);
+        ASTNode node;
+        node.type = NodeType::BinaryOp;
+        node.line = line;
+        node.as.bin_op.left = left;
+        node.as.bin_op.right = right;
+        node.as.bin_op.op = static_cast<int>(BinaryOp::Pow);
         return add_node(node);
     }
     return left;
@@ -425,16 +467,24 @@ uint32_t Parser::parse_pow() {
 //------------------ PARSER: parse_factor - parses multiplicative operators (*, /, %, //)
 uint32_t Parser::parse_factor() {
     uint32_t left = parse_unary();
-    while (current_token.type == TokStar || current_token.type == TokSlash || current_token.type == TokMod || current_token.type == TokFloorDiv) {
+    while (current_token.type == TokStar || current_token.type == TokSlash || current_token.type == TokMod
+        || current_token.type == TokFloorDiv) {
         int line = current_token.line;
         int op_code = static_cast<int>(BinaryOp::Mul);
-        if (current_token.type == TokSlash) op_code = static_cast<int>(BinaryOp::Div);
-        else if (current_token.type == TokMod) op_code = static_cast<int>(BinaryOp::Mod);
-        else if (current_token.type == TokFloorDiv) op_code = static_cast<int>(BinaryOp::FloorDiv);
+        if (current_token.type == TokSlash)
+            op_code = static_cast<int>(BinaryOp::Div);
+        else if (current_token.type == TokMod)
+            op_code = static_cast<int>(BinaryOp::Mod);
+        else if (current_token.type == TokFloorDiv)
+            op_code = static_cast<int>(BinaryOp::FloorDiv);
         advance();
         uint32_t right = parse_unary();
-        ASTNode node; node.type = NodeType::BinaryOp; node.line = line;
-        node.as.bin_op.left = left; node.as.bin_op.right = right; node.as.bin_op.op = op_code;
+        ASTNode node;
+        node.type = NodeType::BinaryOp;
+        node.line = line;
+        node.as.bin_op.left = left;
+        node.as.bin_op.right = right;
+        node.as.bin_op.op = op_code;
         left = add_node(node);
     }
     return left;
@@ -445,7 +495,8 @@ uint32_t Parser::parse_term() {
     uint32_t left = parse_factor();
     while (current_token.type == TokPlus || current_token.type == TokMinus) {
         int line = current_token.line;
-        int op_code = (current_token.type == TokPlus) ? static_cast<int>(BinaryOp::Add) : static_cast<int>(BinaryOp::Sub);
+        int op_code
+            = (current_token.type == TokPlus) ? static_cast<int>(BinaryOp::Add) : static_cast<int>(BinaryOp::Sub);
         advance();
         uint32_t right = parse_factor();
         ASTNode node;
@@ -463,10 +514,15 @@ uint32_t Parser::parse_term() {
 uint32_t Parser::parse_bitwise_or() {
     uint32_t left = parse_bitwise_xor();
     while (current_token.type == TokBitOr) {
-        int line = current_token.line; advance();
+        int line = current_token.line;
+        advance();
         uint32_t right = parse_bitwise_xor();
-        ASTNode node; node.type = NodeType::BinaryOp; node.line = line;
-        node.as.bin_op.left = left; node.as.bin_op.right = right; node.as.bin_op.op = static_cast<int>(BinaryOp::BitOr);
+        ASTNode node;
+        node.type = NodeType::BinaryOp;
+        node.line = line;
+        node.as.bin_op.left = left;
+        node.as.bin_op.right = right;
+        node.as.bin_op.op = static_cast<int>(BinaryOp::BitOr);
         left = add_node(node);
     }
     return left;
@@ -476,10 +532,15 @@ uint32_t Parser::parse_bitwise_or() {
 uint32_t Parser::parse_bitwise_xor() {
     uint32_t left = parse_bitwise_and();
     while (current_token.type == TokBitXor) {
-        int line = current_token.line; advance();
+        int line = current_token.line;
+        advance();
         uint32_t right = parse_bitwise_and();
-        ASTNode node; node.type = NodeType::BinaryOp; node.line = line;
-        node.as.bin_op.left = left; node.as.bin_op.right = right; node.as.bin_op.op = static_cast<int>(BinaryOp::BitXor);
+        ASTNode node;
+        node.type = NodeType::BinaryOp;
+        node.line = line;
+        node.as.bin_op.left = left;
+        node.as.bin_op.right = right;
+        node.as.bin_op.op = static_cast<int>(BinaryOp::BitXor);
         left = add_node(node);
     }
     return left;
@@ -489,10 +550,15 @@ uint32_t Parser::parse_bitwise_xor() {
 uint32_t Parser::parse_bitwise_and() {
     uint32_t left = parse_shift();
     while (current_token.type == TokBitAnd) {
-        int line = current_token.line; advance();
+        int line = current_token.line;
+        advance();
         uint32_t right = parse_shift();
-        ASTNode node; node.type = NodeType::BinaryOp; node.line = line;
-        node.as.bin_op.left = left; node.as.bin_op.right = right; node.as.bin_op.op = static_cast<int>(BinaryOp::BitAnd);
+        ASTNode node;
+        node.type = NodeType::BinaryOp;
+        node.line = line;
+        node.as.bin_op.left = left;
+        node.as.bin_op.right = right;
+        node.as.bin_op.op = static_cast<int>(BinaryOp::BitAnd);
         left = add_node(node);
     }
     return left;
@@ -506,8 +572,12 @@ uint32_t Parser::parse_shift() {
         int op = (current_token.type == TokShl) ? static_cast<int>(BinaryOp::Shl) : static_cast<int>(BinaryOp::Shr);
         advance();
         uint32_t right = parse_concat();
-        ASTNode node; node.type = NodeType::BinaryOp; node.line = line;
-        node.as.bin_op.left = left; node.as.bin_op.right = right; node.as.bin_op.op = op;
+        ASTNode node;
+        node.type = NodeType::BinaryOp;
+        node.line = line;
+        node.as.bin_op.left = left;
+        node.as.bin_op.right = right;
+        node.as.bin_op.op = op;
         left = add_node(node);
     }
     return left;
@@ -520,8 +590,12 @@ uint32_t Parser::parse_concat() {
         int line = current_token.line;
         advance();
         uint32_t right = parse_concat();
-        ASTNode node; node.type = NodeType::BinaryOp; node.line = line;
-        node.as.bin_op.left = left; node.as.bin_op.right = right; node.as.bin_op.op = static_cast<int>(BinaryOp::Concat);
+        ASTNode node;
+        node.type = NodeType::BinaryOp;
+        node.line = line;
+        node.as.bin_op.left = left;
+        node.as.bin_op.right = right;
+        node.as.bin_op.op = static_cast<int>(BinaryOp::Concat);
         return add_node(node);
     }
     return left;
@@ -530,17 +604,22 @@ uint32_t Parser::parse_concat() {
 //------------------ PARSER: parse_relational - parses comparison operators (==, <, >, <=, >=, ~=)
 uint32_t Parser::parse_relational() {
     uint32_t left = parse_bitwise_or();
-    while (current_token.type == TokEqEq || current_token.type == TokNotEq ||
-           current_token.type == TokLess || current_token.type == TokGreater ||
-           current_token.type == TokLessEq || current_token.type == TokGreaterEq) {
+    while (current_token.type == TokEqEq || current_token.type == TokNotEq || current_token.type == TokLess
+        || current_token.type == TokGreater || current_token.type == TokLessEq || current_token.type == TokGreaterEq) {
         int line = current_token.line;
         int op_code = 0;
-        if (current_token.type == TokEqEq) op_code = static_cast<int>(BinaryOp::Eq);
-        else if (current_token.type == TokLess) op_code = static_cast<int>(BinaryOp::Lt);
-        else if (current_token.type == TokGreater) op_code = static_cast<int>(BinaryOp::Gt);
-        else if (current_token.type == TokLessEq) op_code = static_cast<int>(BinaryOp::Le);
-        else if (current_token.type == TokGreaterEq) op_code = static_cast<int>(BinaryOp::Ge);
-        else if (current_token.type == TokNotEq) op_code = static_cast<int>(BinaryOp::Ne);
+        if (current_token.type == TokEqEq)
+            op_code = static_cast<int>(BinaryOp::Eq);
+        else if (current_token.type == TokLess)
+            op_code = static_cast<int>(BinaryOp::Lt);
+        else if (current_token.type == TokGreater)
+            op_code = static_cast<int>(BinaryOp::Gt);
+        else if (current_token.type == TokLessEq)
+            op_code = static_cast<int>(BinaryOp::Le);
+        else if (current_token.type == TokGreaterEq)
+            op_code = static_cast<int>(BinaryOp::Ge);
+        else if (current_token.type == TokNotEq)
+            op_code = static_cast<int>(BinaryOp::Ne);
         advance();
         uint32_t right = parse_bitwise_or();
         ASTNode node;
@@ -590,8 +669,6 @@ uint32_t Parser::parse_expression() {
     return left;
 }
 
-
-
 //------------------ PARSER: parse_statement - dispatches on current token to parse a single statement
 uint32_t Parser::parse_statement() {
     //------------------ PARSE: stmt - end of file, return invalid
@@ -607,7 +684,9 @@ uint32_t Parser::parse_statement() {
         int line = current_token.line;
         advance();
 
-        if (current_token.type != TokIdent) throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": Expected label name");
+        if (current_token.type != TokIdent)
+            throw std::runtime_error(
+                "Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": Expected label name");
         ASTNode name_node;
         name_node.type = NodeType::Identifier;
         name_node.line = current_token.line;
@@ -616,7 +695,9 @@ uint32_t Parser::parse_statement() {
         uint32_t name_idx = add_node(name_node);
         advance();
 
-        if (current_token.type != TokDoubleColon) throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": Expected '::' after label name");
+        if (current_token.type != TokDoubleColon)
+            throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line)
+                + ": Expected '::' after label name");
         advance();
 
         ASTNode node;
@@ -630,7 +711,9 @@ uint32_t Parser::parse_statement() {
         int line = current_token.line;
         advance();
 
-        if (current_token.type != TokIdent) throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": Expected label name after 'goto'");
+        if (current_token.type != TokIdent)
+            throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line)
+                + ": Expected label name after 'goto'");
         ASTNode name_node;
         name_node.type = NodeType::Identifier;
         name_node.line = current_token.line;
@@ -652,7 +735,9 @@ uint32_t Parser::parse_statement() {
 
         if (current_token.type == TokFunction) {
             advance();
-            if (current_token.type != TokIdent) throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": Expected function name");
+            if (current_token.type != TokIdent)
+                throw std::runtime_error(
+                    "Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": Expected function name");
 
             ASTNode ident_node;
             ident_node.type = NodeType::Identifier;
@@ -689,15 +774,19 @@ uint32_t Parser::parse_statement() {
             if (current_token.type == TokIdent && current_token.text == "const") {
                 attr = Attribute::Const;
             } else {
-                throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": invalid attribute");
+                throw std::runtime_error(
+                    "Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": invalid attribute");
             }
             advance();
-            if (current_token.type != TokGreater) throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": expected '>'");
+            if (current_token.type != TokGreater)
+                throw std::runtime_error(
+                    "Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": expected '>'");
             advance();
         }
 
         if (current_token.type == TokStar) {
-            implicit_globals.back() = (attr == Attribute::Const) ? ImplicitGlobalMode::ReadOnly : ImplicitGlobalMode::ReadWrite;
+            implicit_globals.back()
+                = (attr == Attribute::Const) ? ImplicitGlobalMode::ReadOnly : ImplicitGlobalMode::ReadWrite;
             advance();
             ASTNode node;
             node.type = NodeType::GlobalDeclStatement;
@@ -712,63 +801,69 @@ uint32_t Parser::parse_statement() {
             auto saved_mode = implicit_globals.back();
             implicit_globals.back() = ImplicitGlobalMode::None;
 
-        std::vector<uint32_t> idents;
-        do {
-            if (current_token.type != TokIdent) throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": Identifier expected");
-
-            ASTNode ident_node;
-            ident_node.type = NodeType::Identifier;
-            ident_node.line = current_token.line;
-            ident_node.as.ident.name = current_token.text.data();
-            ident_node.as.ident.length = current_token.text.length();
-            ident_node.as.ident.is_captured = false;
-            ident_node.as.ident.is_global = true;
-            ident_node.as.ident.attr = attr;
-
-            std::string_view name = current_token.text;
-            advance();
-
-            Attribute local_attr = attr;
-            if (current_token.type == TokLess) {
-                advance();
-                if (current_token.type == TokIdent && current_token.text == "const") local_attr = Attribute::Const;
-                advance();
-                advance();
-            }
-            ident_node.as.ident.attr = local_attr;
-
-            uint32_t id_idx = add_node(ident_node);
-            idents.push_back(id_idx);
-
-            SymbolType sym_type = (local_attr == Attribute::Const) ? SymbolType::ConstGlobal : SymbolType::ExplicitGlobal;
-            add_symbol(name, sym_type, id_idx);
-
-        } while (current_token.type == TokComma && (advance(), true));
-
-        std::vector<uint32_t> values;
-        if (current_token.type == TokAssign) {
-            advance();
+            std::vector<uint32_t> idents;
             do {
-                values.push_back(parse_expression());
+                if (current_token.type != TokIdent)
+                    throw std::runtime_error(
+                        "Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": Identifier expected");
+
+                ASTNode ident_node;
+                ident_node.type = NodeType::Identifier;
+                ident_node.line = current_token.line;
+                ident_node.as.ident.name = current_token.text.data();
+                ident_node.as.ident.length = current_token.text.length();
+                ident_node.as.ident.is_captured = false;
+                ident_node.as.ident.is_global = true;
+                ident_node.as.ident.attr = attr;
+
+                std::string_view name = current_token.text;
+                advance();
+
+                Attribute local_attr = attr;
+                if (current_token.type == TokLess) {
+                    advance();
+                    if (current_token.type == TokIdent && current_token.text == "const")
+                        local_attr = Attribute::Const;
+                    advance();
+                    advance();
+                }
+                ident_node.as.ident.attr = local_attr;
+
+                uint32_t id_idx = add_node(ident_node);
+                idents.push_back(id_idx);
+
+                SymbolType sym_type
+                    = (local_attr == Attribute::Const) ? SymbolType::ConstGlobal : SymbolType::ExplicitGlobal;
+                add_symbol(name, sym_type, id_idx);
+
             } while (current_token.type == TokComma && (advance(), true));
-        }
 
-        uint32_t first_id = ctx.block_statements.size();
-        for (auto id : idents) ctx.block_statements.push_back(id);
-        uint32_t first_val = ctx.block_statements.size();
-        for (auto v : values) ctx.block_statements.push_back(v);
+            std::vector<uint32_t> values;
+            if (current_token.type == TokAssign) {
+                advance();
+                do {
+                    values.push_back(parse_expression());
+                } while (current_token.type == TokComma && (advance(), true));
+            }
 
-        implicit_globals.back() = saved_mode;
+            uint32_t first_id = ctx.block_statements.size();
+            for (auto id : idents)
+                ctx.block_statements.push_back(id);
+            uint32_t first_val = ctx.block_statements.size();
+            for (auto v : values)
+                ctx.block_statements.push_back(v);
 
-        ASTNode node;
-        node.type = NodeType::GlobalDeclStatement;
-        node.line = line;
-        node.as.global_decl.first_ident = first_id;
-        node.as.global_decl.ident_count = static_cast<uint32_t>(idents.size());
-        node.as.global_decl.first_value = first_val;
-        node.as.global_decl.value_count = static_cast<uint32_t>(values.size());
-        node.as.global_decl.is_wildcard = false;
-        return add_node(node);
+            implicit_globals.back() = saved_mode;
+
+            ASTNode node;
+            node.type = NodeType::GlobalDeclStatement;
+            node.line = line;
+            node.as.global_decl.first_ident = first_id;
+            node.as.global_decl.ident_count = static_cast<uint32_t>(idents.size());
+            node.as.global_decl.first_value = first_val;
+            node.as.global_decl.value_count = static_cast<uint32_t>(values.size());
+            node.as.global_decl.is_wildcard = false;
+            return add_node(node);
         }
     }
     //------------------ PARSE: stmt - function declaration statement (assignment to name)
@@ -778,9 +873,13 @@ uint32_t Parser::parse_statement() {
 
         uint32_t target = INVALID_NODE;
         if (current_token.type == TokIdent) {
-            ASTNode id_node; id_node.type = NodeType::Identifier; id_node.line = current_token.line;
-            id_node.as.ident.name = current_token.text.data(); id_node.as.ident.length = current_token.text.length();
-            id_node.as.ident.is_captured = false; id_node.as.ident.is_global = false;
+            ASTNode id_node;
+            id_node.type = NodeType::Identifier;
+            id_node.line = current_token.line;
+            id_node.as.ident.name = current_token.text.data();
+            id_node.as.ident.length = current_token.text.length();
+            id_node.as.ident.is_captured = false;
+            id_node.as.ident.is_global = false;
             id_node.as.ident.attr = Attribute::None;
             target = add_node(id_node);
 
@@ -793,14 +892,21 @@ uint32_t Parser::parse_statement() {
 
             while (current_token.type == TokDot) {
                 advance();
-                if (current_token.type != TokIdent) throw std::runtime_error("Expected identifier after '.'");
-                ASTNode key_node; key_node.type = NodeType::String; key_node.line = current_token.line;
-                key_node.as.string.text = current_token.text.data(); key_node.as.string.length = current_token.text.length();
+                if (current_token.type != TokIdent)
+                    throw std::runtime_error("Expected identifier after '.'");
+                ASTNode key_node;
+                key_node.type = NodeType::String;
+                key_node.line = current_token.line;
+                key_node.as.string.text = current_token.text.data();
+                key_node.as.string.length = current_token.text.length();
                 uint32_t key_idx = add_node(key_node);
                 advance();
 
-                ASTNode access_node; access_node.type = NodeType::TableAccess; access_node.line = current_token.line;
-                access_node.as.table_access.table = target; access_node.as.table_access.key = key_idx;
+                ASTNode access_node;
+                access_node.type = NodeType::TableAccess;
+                access_node.line = current_token.line;
+                access_node.as.table_access.table = target;
+                access_node.as.table_access.key = key_idx;
                 target = add_node(access_node);
             }
         } else {
@@ -811,14 +917,21 @@ uint32_t Parser::parse_statement() {
         if (current_token.type == TokColon) {
             is_method = true;
             advance();
-            if (current_token.type != TokIdent) throw std::runtime_error("Expected method name after ':'");
-            ASTNode key_node; key_node.type = NodeType::String; key_node.line = current_token.line;
-            key_node.as.string.text = current_token.text.data(); key_node.as.string.length = current_token.text.length();
+            if (current_token.type != TokIdent)
+                throw std::runtime_error("Expected method name after ':'");
+            ASTNode key_node;
+            key_node.type = NodeType::String;
+            key_node.line = current_token.line;
+            key_node.as.string.text = current_token.text.data();
+            key_node.as.string.length = current_token.text.length();
             uint32_t key_idx = add_node(key_node);
             advance();
 
-            ASTNode access_node; access_node.type = NodeType::TableAccess; access_node.line = current_token.line;
-            access_node.as.table_access.table = target; access_node.as.table_access.key = key_idx;
+            ASTNode access_node;
+            access_node.type = NodeType::TableAccess;
+            access_node.line = current_token.line;
+            access_node.as.table_access.table = target;
+            access_node.as.table_access.key = key_idx;
             target = add_node(access_node);
         }
 
@@ -842,16 +955,16 @@ uint32_t Parser::parse_statement() {
         advance();
         std::vector<uint32_t> values;
 
-        if (current_token.type != TokEnd && current_token.type != TokElseIf &&
-            current_token.type != TokElse && current_token.type != TokUntil &&
-            current_token.type != TokEof && current_token.type != TokSemicolon) {
+        if (current_token.type != TokEnd && current_token.type != TokElseIf && current_token.type != TokElse
+            && current_token.type != TokUntil && current_token.type != TokEof && current_token.type != TokSemicolon) {
             do {
                 values.push_back(parse_expression());
             } while (current_token.type == TokComma && (advance(), true));
         }
 
         uint32_t first_val = ctx.block_statements.size();
-        for (auto v : values) ctx.block_statements.push_back(v);
+        for (auto v : values)
+            ctx.block_statements.push_back(v);
 
         ASTNode node;
         node.type = NodeType::ReturnStatement;
@@ -874,7 +987,8 @@ uint32_t Parser::parse_statement() {
         int line = current_token.line;
         advance();
         uint32_t body_block = parse_block(false);
-        if (current_token.type == TokEnd) advance();
+        if (current_token.type == TokEnd)
+            advance();
         ASTNode node;
         node.type = NodeType::DoStatement;
         node.line = line;
@@ -886,9 +1000,11 @@ uint32_t Parser::parse_statement() {
         int line = current_token.line;
         advance();
         uint32_t condition = parse_expression();
-        if (current_token.type == TokDo) advance();
+        if (current_token.type == TokDo)
+            advance();
         uint32_t body_block = parse_block(false);
-        if (current_token.type == TokEnd) advance();
+        if (current_token.type == TokEnd)
+            advance();
         ASTNode node;
         node.type = NodeType::WhileStatement;
         node.line = line;
@@ -919,7 +1035,9 @@ uint32_t Parser::parse_statement() {
         advance();
 
         std::vector<uint32_t> vars;
-        if (current_token.type != TokIdent) throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": Expected identifier");
+        if (current_token.type != TokIdent)
+            throw std::runtime_error(
+                "Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": Expected identifier");
 
         do {
             ASTNode ident_node;
@@ -937,10 +1055,12 @@ uint32_t Parser::parse_statement() {
         } while (current_token.type == TokComma && (advance(), true));
 
         if (current_token.type == TokAssign) {
-            if (vars.size() > 1) throw std::runtime_error("Error: numeric for only accepts one variable");
+            if (vars.size() > 1)
+                throw std::runtime_error("Error: numeric for only accepts one variable");
             advance();
             uint32_t start_expr = parse_expression();
-            if (current_token.type != TokComma) throw std::runtime_error("Error: expected ',' in for loop");
+            if (current_token.type != TokComma)
+                throw std::runtime_error("Error: expected ',' in for loop");
             advance();
             uint32_t limit_expr = parse_expression();
             uint32_t step_expr = 0xFFFFFFFF;
@@ -948,9 +1068,11 @@ uint32_t Parser::parse_statement() {
                 advance();
                 step_expr = parse_expression();
             }
-            if (current_token.type == TokDo) advance();
+            if (current_token.type == TokDo)
+                advance();
             uint32_t body_block = parse_block(false);
-            if (current_token.type == TokEnd) advance();
+            if (current_token.type == TokEnd)
+                advance();
 
             ASTNode node;
             node.type = NodeType::ForStatement;
@@ -967,14 +1089,18 @@ uint32_t Parser::parse_statement() {
             do {
                 iter_exprs.push_back(parse_expression());
             } while (current_token.type == TokComma && (advance(), true));
-            if (current_token.type == TokDo) advance();
+            if (current_token.type == TokDo)
+                advance();
             uint32_t body_block = parse_block(false);
-            if (current_token.type == TokEnd) advance();
+            if (current_token.type == TokEnd)
+                advance();
 
             uint32_t first_var = ctx.block_statements.size();
-            for (auto v : vars) ctx.block_statements.push_back(v);
+            for (auto v : vars)
+                ctx.block_statements.push_back(v);
             uint32_t first_iter = ctx.block_statements.size();
-            for (auto e : iter_exprs) ctx.block_statements.push_back(e);
+            for (auto e : iter_exprs)
+                ctx.block_statements.push_back(e);
 
             ASTNode node;
             node.type = NodeType::GenericForStatement;
@@ -986,7 +1112,8 @@ uint32_t Parser::parse_statement() {
             node.as.generic_for.body_block = body_block;
             return add_node(node);
         } else {
-            throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": Expected '=' or 'in' for loop");
+            throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line)
+                + ": Expected '=' or 'in' for loop");
         }
     }
     //------------------ PARSE: stmt - if-then-elseif-else conditional statement
@@ -994,7 +1121,8 @@ uint32_t Parser::parse_statement() {
         int line = current_token.line;
         advance();
         uint32_t condition = parse_expression();
-        if (current_token.type == TokThen) advance();
+        if (current_token.type == TokThen)
+            advance();
         uint32_t then_block = parse_block(false);
         uint32_t else_block = INVALID_NODE;
         if (current_token.type == TokElseIf) {
@@ -1003,7 +1131,8 @@ uint32_t Parser::parse_statement() {
         } else if (current_token.type == TokElse) {
             advance();
             else_block = parse_block(false);
-            if (current_token.type == TokEnd) advance();
+            if (current_token.type == TokEnd)
+                advance();
         } else if (current_token.type == TokEnd) {
             advance();
         }
@@ -1031,11 +1160,13 @@ uint32_t Parser::parse_statement() {
                 decl_attr = Attribute::Close;
                 decl_sym_type = SymbolType::Close;
             } else {
-                throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": unknown attribute");
+                throw std::runtime_error(
+                    "Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": unknown attribute");
             }
             advance();
             if (current_token.type != TokGreater) {
-                throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": expected '>' after attribute");
+                throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line)
+                    + ": expected '>' after attribute");
             }
             advance();
         }
@@ -1043,7 +1174,8 @@ uint32_t Parser::parse_statement() {
         if (current_token.type == TokFunction) {
             advance();
             if (current_token.type != TokIdent) {
-                throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": Expected function name");
+                throw std::runtime_error(
+                    "Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": Expected function name");
             }
 
             ASTNode ident_node;
@@ -1077,7 +1209,8 @@ uint32_t Parser::parse_statement() {
         std::vector<uint32_t> idents;
         do {
             if (current_token.type != TokIdent) {
-                throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": Identifier expected");
+                throw std::runtime_error(
+                    "Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": Identifier expected");
             }
             ASTNode ident_node;
             ident_node.type = NodeType::Identifier;
@@ -1102,12 +1235,14 @@ uint32_t Parser::parse_statement() {
                     attr = Attribute::Close;
                     sym_type = SymbolType::Close;
                 } else {
-                    throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": unknown attribute '" + std::string(current_token.text) + "'");
+                    throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line)
+                        + ": unknown attribute '" + std::string(current_token.text) + "'");
                 }
                 advance();
 
                 if (current_token.type != TokGreater) {
-                    throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": expected '>' after attribute");
+                    throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line)
+                        + ": expected '>' after attribute");
                 }
                 advance();
             }
@@ -1128,9 +1263,11 @@ uint32_t Parser::parse_statement() {
         }
 
         uint32_t first_id = ctx.block_statements.size();
-        for (auto id : idents) ctx.block_statements.push_back(id);
+        for (auto id : idents)
+            ctx.block_statements.push_back(id);
         uint32_t first_val = ctx.block_statements.size();
-        for (auto v : values) ctx.block_statements.push_back(v);
+        for (auto v : values)
+            ctx.block_statements.push_back(v);
 
         ASTNode node;
         node.type = NodeType::LocalDecl;
@@ -1163,15 +1300,18 @@ uint32_t Parser::parse_statement() {
                     bool dummy_cap, dummy_glob;
                     SymbolType sym = resolve_symbol(name, line, dummy_cap, dummy_glob);
                     if (sym == SymbolType::Const || sym == SymbolType::ConstGlobal) {
-                        throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(line) + ": assignment to const variable '" + std::string(name) + "'");
+                        throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(line)
+                            + ": assignment to const variable '" + std::string(name) + "'");
                     }
                 }
             }
 
             uint32_t first_target = ctx.block_statements.size();
-            for (auto t : targets) ctx.block_statements.push_back(t);
+            for (auto t : targets)
+                ctx.block_statements.push_back(t);
             uint32_t first_val = ctx.block_statements.size();
-            for (auto v : values) ctx.block_statements.push_back(v);
+            for (auto v : values)
+                ctx.block_statements.push_back(v);
 
             ASTNode node;
             node.type = NodeType::Assignment;
@@ -1183,7 +1323,8 @@ uint32_t Parser::parse_statement() {
             return add_node(node);
         }
         if (targets.size() > 1) {
-            throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(line) + ": syntax error, unexpected ','");
+            throw std::runtime_error(
+                "Error: " + ctx.filename + ":" + std::to_string(line) + ": syntax error, unexpected ','");
         }
         return targets[0];
     }
@@ -1191,29 +1332,33 @@ uint32_t Parser::parse_statement() {
     //------------------ PARSE: stmt - fallthrough: treat standalone expression as statement
     uint32_t res = parse_expression();
     if (res == INVALID_NODE && current_token.type != TokEof) {
-        throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": unexpected token '" + std::string(current_token.text) + "'");
+        throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line)
+            + ": unexpected token '" + std::string(current_token.text) + "'");
     }
     return res;
 }
-
-
 
 //------------------ PARSER: parse_block - parses a sequence of statements, manages scope entry/exit
 uint32_t Parser::parse_block(bool is_main) {
     int line = current_token.line;
     std::vector<uint32_t> statements;
 
-    if (!is_main) enter_scope();
+    if (!is_main)
+        enter_scope();
 
     while (current_token.type != TokEof) {
-        if (!is_main && (current_token.type == TokElseIf || current_token.type == TokElse || current_token.type == TokEnd || current_token.type == TokUntil)) {
+        if (!is_main
+            && (current_token.type == TokElseIf || current_token.type == TokElse || current_token.type == TokEnd
+                || current_token.type == TokUntil)) {
             break;
         }
         uint32_t stmt = parse_statement();
-        if (stmt != INVALID_NODE) statements.push_back(stmt);
+        if (stmt != INVALID_NODE)
+            statements.push_back(stmt);
     }
 
-    if (!is_main) leave_scope();
+    if (!is_main)
+        leave_scope();
 
     ASTNode node;
     node.type = NodeType::Block;
@@ -1232,7 +1377,8 @@ uint32_t Parser::parse_block(bool is_main) {
 //------------------ PARSER: parse_funcbody - parses function parameters and body block
 uint32_t Parser::parse_funcbody(bool is_method) {
     int line = current_token.line;
-    if (current_token.type != TokLParen) throw std::runtime_error("Expected '(' for function parameters");
+    if (current_token.type != TokLParen)
+        throw std::runtime_error("Expected '(' for function parameters");
     advance();
 
     current_function_depth++;
@@ -1294,19 +1440,22 @@ uint32_t Parser::parse_funcbody(bool is_method) {
         } while (current_token.type == TokComma && (advance(), true));
     }
 
-    if (current_token.type != TokRParen) throw std::runtime_error("Expected ')' after parameters");
+    if (current_token.type != TokRParen)
+        throw std::runtime_error("Expected ')' after parameters");
     advance();
 
     std::vector<uint32_t> statements;
     while (current_token.type != TokEof && current_token.type != TokEnd) {
         uint32_t stmt = parse_statement();
-        if (stmt != INVALID_NODE) statements.push_back(stmt);
+        if (stmt != INVALID_NODE)
+            statements.push_back(stmt);
     }
 
     leave_scope();
     current_function_depth--;
 
-    if (current_token.type != TokEnd) throw std::runtime_error("Expected 'end' to close function");
+    if (current_token.type != TokEnd)
+        throw std::runtime_error("Expected 'end' to close function");
     advance();
 
     ASTNode body_node;
@@ -1314,12 +1463,14 @@ uint32_t Parser::parse_funcbody(bool is_method) {
     body_node.line = line;
     body_node.as.block.count = statements.size();
     uint32_t first_stmt_idx = ctx.block_statements.size();
-    for (uint32_t stmt : statements) ctx.block_statements.push_back(stmt);
+    for (uint32_t stmt : statements)
+        ctx.block_statements.push_back(stmt);
     body_node.as.block.first_statement = first_stmt_idx;
     uint32_t body = add_node(body_node);
 
     uint32_t first_param = ctx.block_statements.size();
-    for (auto p : params) ctx.block_statements.push_back(p);
+    for (auto p : params)
+        ctx.block_statements.push_back(p);
 
     ASTNode fnode;
     fnode.type = NodeType::FunctionDef;

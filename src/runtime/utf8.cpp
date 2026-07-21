@@ -8,18 +8,20 @@
 #include "clx.h"
 #include <cstring>
 #include <cstdio>
+
 namespace clx {
 //------------------ CodesUd: userdata struct for utf8.codes iterator state
 struct CodesUd {
     size_t pos;
     size_t len;
-    const char* s;
+    const char *s;
 };
+
 //------------------ utf8_charpattern: pattern string matching any single UTF-8 byte sequence
 static const char utf8_charpattern[] = "[%z\x01-\x7F\xC2-\xF4\x80-\xBF*]";
 
 //------------------ get_string: extracts a string argument from Lua args by index
-static const char* get_string(LState* L, const LValue* args, size_t count, size_t& len, int idx) {
+static const char *get_string(LState *L, const LValue *args, size_t count, size_t &len, int idx) {
     if (idx < 1 || idx > (int)count) {
         char buf[128];
         std::snprintf(buf, sizeof(buf), "bad argument #%d to a string function (string expected, got no value)", idx);
@@ -36,28 +38,32 @@ static const char* get_string(LState* L, const LValue* args, size_t count, size_
 }
 
 //------------------ utf8_decode: decodes one UTF-8 codepoint at position, returns byte length
-static int utf8_decode(const char* s, size_t len, size_t pos, uint32_t& codepoint) {
-    if (pos >= len) return 0;
+static int utf8_decode(const char *s, size_t len, size_t pos, uint32_t &codepoint) {
+    if (pos >= len)
+        return 0;
     unsigned char c = static_cast<unsigned char>(s[pos]);
     if (c <= 0x7F) {
         codepoint = c;
         return 1;
     } else if (c >= 0xC2 && c <= 0xDF && pos + 1 < len) {
         unsigned char c2 = static_cast<unsigned char>(s[pos + 1]);
-        if ((c2 & 0xC0) != 0x80) return -1;
+        if ((c2 & 0xC0) != 0x80)
+            return -1;
         codepoint = ((c & 0x1F) << 6) | (c2 & 0x3F);
         return 2;
     } else if (c >= 0xE0 && c <= 0xEF && pos + 2 < len) {
         unsigned char c2 = static_cast<unsigned char>(s[pos + 1]);
         unsigned char c3 = static_cast<unsigned char>(s[pos + 2]);
-        if ((c2 & 0xC0) != 0x80 || (c3 & 0xC0) != 0x80) return -1;
+        if ((c2 & 0xC0) != 0x80 || (c3 & 0xC0) != 0x80)
+            return -1;
         codepoint = ((c & 0x0F) << 12) | ((c2 & 0x3F) << 6) | (c3 & 0x3F);
         return 3;
     } else if (c >= 0xF0 && c <= 0xF4 && pos + 3 < len) {
         unsigned char c2 = static_cast<unsigned char>(s[pos + 1]);
         unsigned char c3 = static_cast<unsigned char>(s[pos + 2]);
         unsigned char c4 = static_cast<unsigned char>(s[pos + 3]);
-        if ((c2 & 0xC0) != 0x80 || (c3 & 0xC0) != 0x80 || (c4 & 0xC0) != 0x80) return -1;
+        if ((c2 & 0xC0) != 0x80 || (c3 & 0xC0) != 0x80 || (c4 & 0xC0) != 0x80)
+            return -1;
         codepoint = ((c & 0x07) << 18) | ((c2 & 0x3F) << 12) | ((c3 & 0x3F) << 6) | (c4 & 0x3F);
         return 4;
     }
@@ -65,7 +71,7 @@ static int utf8_decode(const char* s, size_t len, size_t pos, uint32_t& codepoin
 }
 
 //------------------ utf8_encode: encodes a codepoint as UTF-8 into buf, returns byte length
-static int utf8_encode(uint32_t codepoint, char* buf) {
+static int utf8_encode(uint32_t codepoint, char *buf) {
     if (codepoint <= 0x7F) {
         buf[0] = static_cast<char>(codepoint);
         return 1;
@@ -89,8 +95,9 @@ static int utf8_encode(uint32_t codepoint, char* buf) {
 }
 
 //------------------ utf8_char: creates a UTF-8 string from codepoint values
-static MultiValue utf8_char(LState* L, const LValue* args, size_t count) {
-    if (count == 0) return MultiValue(LValue(L->intern_string("", 0)));
+static MultiValue utf8_char(LState *L, const LValue *args, size_t count) {
+    if (count == 0)
+        return MultiValue(LValue(L->intern_string("", 0)));
     StringBuilder sb;
     for (size_t i = 0; i < count; ++i) {
         uint32_t cp = static_cast<uint32_t>(check_integer(L, args[i]));
@@ -104,54 +111,59 @@ static MultiValue utf8_char(LState* L, const LValue* args, size_t count) {
 }
 
 //------------------ codes_iter: iterator function for utf8.codes
-static MultiValue codes_iter(LState* L, const LValue* a, size_t c) {
-    if (c < 2) return MultiValue();
-    LUserdata* u = static_cast<LUserdata*>(a[0].as_pointer());
-    CodesUd* ud = static_cast<CodesUd*>(u->data());
-    if (ud->pos >= ud->len) return MultiValue();
+static MultiValue codes_iter(LState *L, const LValue *a, size_t c) {
+    if (c < 2)
+        return MultiValue();
+    LUserdata *u = static_cast<LUserdata *>(a[0].as_pointer());
+    CodesUd *ud = static_cast<CodesUd *>(u->data());
+    if (ud->pos >= ud->len)
+        return MultiValue();
     uint32_t cp;
     int n = utf8_decode(ud->s, ud->len, ud->pos, cp);
     if (n <= 0)
         throw_runtime_error("bad argument #1 to 'codes' (invalid UTF-8 code)");
     size_t cur = ud->pos + 1;
     ud->pos += n;
-    return MultiValue({clx::integer(static_cast<int64_t>(cur)), clx::integer(static_cast<int64_t>(cp))});
+    return MultiValue({ clx::integer(static_cast<int64_t>(cur)), clx::integer(static_cast<int64_t>(cp)) });
 }
 
 //------------------ utf8_codes: returns an iterator over UTF-8 codepoints in a string
-static MultiValue utf8_codes(LState* L, const LValue* args, size_t count) {
+static MultiValue utf8_codes(LState *L, const LValue *args, size_t count) {
     if (count == 0)
         throw_runtime_error("bad argument #1 to 'codes' (string expected, got no value)");
     size_t len;
-    const char* raw = get_string(L, args, count, len, 1);
-    const char* s = L->intern_string(raw, len);
+    const char *raw = get_string(L, args, count, len, 1);
+    const char *s = L->intern_string(raw, len);
     LValue u_lv = newuserdata(L, sizeof(CodesUd));
-    L->shadow_stack[L->shadow_top++] = {&u_lv.val, &u_lv.type};
-    LUserdata* u = static_cast<LUserdata*>(u_lv.as_pointer());
-    CodesUd* ud = static_cast<CodesUd*>(u->data());
+    L->shadow_stack[L->shadow_top++] = { &u_lv.val, &u_lv.type };
+    LUserdata *u = static_cast<LUserdata *>(u_lv.as_pointer());
+    CodesUd *ud = static_cast<CodesUd *>(u->data());
     ud->pos = 0;
     ud->len = len;
     ud->s = s;
     LValue func = L->create_closure(CFunctionType(codes_iter));
     L->shadow_top--;
-    return MultiValue({func, u_lv, clx::nil()});
+    return MultiValue({ func, u_lv, clx::nil() });
 }
 
 //------------------ utf8_codepoint: returns codepoints from a range in a UTF-8 string
-static MultiValue utf8_codepoint(LState* L, const LValue* args, size_t count) {
+static MultiValue utf8_codepoint(LState *L, const LValue *args, size_t count) {
     if (count == 0)
         throw_runtime_error("bad argument #1 to 'codepoint' (string expected, got no value)");
     size_t len;
-    const char* s = get_string(L, args, count, len, 1);
+    const char *s = get_string(L, args, count, len, 1);
     size_t i = 1;
     if (count >= 2 && args[1].type != Nil)
         i = static_cast<size_t>(check_integer(L, args[1]));
     size_t j = i;
     if (count >= 3 && args[2].type != Nil)
         j = static_cast<size_t>(check_integer(L, args[2]));
-    if (i < 1) i = 1;
-    if (j > len) j = len;
-    if (i > j) return MultiValue();
+    if (i < 1)
+        i = 1;
+    if (j > len)
+        j = len;
+    if (i > j)
+        return MultiValue();
     if (i == j) {
         uint32_t cp;
         int n = utf8_decode(s, len, i - 1, cp);
@@ -160,7 +172,7 @@ static MultiValue utf8_codepoint(LState* L, const LValue* args, size_t count) {
         return MultiValue(clx::integer(static_cast<int64_t>(cp)));
     }
     size_t nv = j - i + 1;
-    LValue* vals = new LValue[nv];
+    LValue *vals = new LValue[nv];
     size_t out = 0;
     size_t pos = i - 1;
     while (pos < j && pos < len) {
@@ -179,20 +191,23 @@ static MultiValue utf8_codepoint(LState* L, const LValue* args, size_t count) {
 }
 
 //------------------ utf8_len: returns the number of UTF-8 codepoints in a range
-static MultiValue utf8_len(LState* L, const LValue* args, size_t count) {
+static MultiValue utf8_len(LState *L, const LValue *args, size_t count) {
     if (count == 0)
         throw_runtime_error("bad argument #1 to 'len' (string expected, got no value)");
     size_t len;
-    const char* s = get_string(L, args, count, len, 1);
+    const char *s = get_string(L, args, count, len, 1);
     size_t i = 1;
     if (count >= 2 && args[1].type != Nil)
         i = static_cast<size_t>(check_integer(L, args[1]));
     size_t j = len;
     if (count >= 3 && args[2].type != Nil)
         j = static_cast<size_t>(check_integer(L, args[2]));
-    if (i < 1) i = 1;
-    if (j > len) j = len;
-    if (i > j) return MultiValue(clx::integer(0));
+    if (i < 1)
+        i = 1;
+    if (j > len)
+        j = len;
+    if (i > j)
+        return MultiValue(clx::integer(0));
     size_t pos = i - 1;
     size_t codepoint_count = 0;
     while (pos < j && pos < len) {
@@ -200,8 +215,7 @@ static MultiValue utf8_len(LState* L, const LValue* args, size_t count) {
         int n = utf8_decode(s, len, pos, cp);
         if (n <= 0) {
             char buf[128];
-            std::snprintf(buf, sizeof(buf),
-                "bad argument #1 to 'len' (invalid UTF-8 code at position %zu)", pos + 1);
+            std::snprintf(buf, sizeof(buf), "bad argument #1 to 'len' (invalid UTF-8 code at position %zu)", pos + 1);
             throw_runtime_error(buf);
         }
         pos += n;
@@ -211,11 +225,11 @@ static MultiValue utf8_len(LState* L, const LValue* args, size_t count) {
 }
 
 //------------------ utf8_offset: returns byte offset of a codepoint position in a UTF-8 string
-static MultiValue utf8_offset(LState* L, const LValue* args, size_t count) {
+static MultiValue utf8_offset(LState *L, const LValue *args, size_t count) {
     if (count == 0)
         throw_runtime_error("bad argument #1 to 'offset' (string expected, got no value)");
     size_t len;
-    const char* s = get_string(L, args, count, len, 1);
+    const char *s = get_string(L, args, count, len, 1);
     int64_t n = check_integer(L, count >= 2 ? args[1] : LValue());
     size_t i = 1;
     if (count >= 3 && args[2].type != Nil)
@@ -254,19 +268,14 @@ static MultiValue utf8_offset(LState* L, const LValue* args, size_t count) {
 }
 
 //------------------ luastd_utf8: registers the utf8 library into the global state
-void luastd_utf8(LState* L) {
+void luastd_utf8(LState *L) {
     LValue t = L->create_table();
-    LTable* tbl = static_cast<LTable*>(t.as_pointer());
-    static constexpr clx::LazyReg utf8_funcs[] = {
-        {"char", utf8_char},
-        {"codes", utf8_codes},
-        {"codepoint", utf8_codepoint},
-        {"len", utf8_len},
-        {"offset", utf8_offset}
-    };
+    LTable *tbl = static_cast<LTable *>(t.as_pointer());
+    static constexpr clx::LazyReg utf8_funcs[] = { { "char", utf8_char }, { "codes", utf8_codes },
+        { "codepoint", utf8_codepoint }, { "len", utf8_len }, { "offset", utf8_offset } };
     clx::set_lazy_funcs(L, t, utf8_funcs, std::size(utf8_funcs));
     tbl->settable(LValue(L->intern_string("charpattern")),
-                  LValue(L->intern_string(utf8_charpattern, sizeof(utf8_charpattern) - 1)));
+        LValue(L->intern_string(utf8_charpattern, sizeof(utf8_charpattern) - 1)));
     set_global(L, "utf8", t);
 }
 }
