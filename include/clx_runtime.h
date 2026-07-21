@@ -1618,6 +1618,16 @@ CLX_INLINE_HOT LValue make_string(LState* L, const std::string& s) {
     return make_string(L, s.data(), s.size());
 }
 
+//------------------ Creates a string LValue, trying pool lookup before heap allocation
+// This is faster than make_string for strings > 6 bytes that may already be pooled
+CLX_INLINE LValue make_string_pooled(LState* L, const char* s, size_t len) {
+    if (len <= 6) return LValue::istr(s, len);
+    uint64_t h = len <= 8 ? swar_hash_8(s, len) : wyhash_str(s, len);
+    if (const char* hit = L->string_pool.lookup(s, len, h))
+        return LValue(hit);
+    return LValue(L->intern_string(s, len));
+}
+
 //------------------ Table read with __index fallback
 CLX_INLINE_HOT LValue table_get(LState* L, const LValue& obj, const LValue& key) {
     LTable* mt = nullptr;
@@ -1884,6 +1894,48 @@ CLX_INLINE_HOT void table_set_direct_cs(LState* L, const LValue& obj, const LVal
         cs->hash_version = t->hash_version;
         cs->cached       = val;
     }
+}
+
+//------------------ Direct table increment: t[k] = t[k] + amount (avoids LValue wrapping for constant)
+CLX_INLINE_HOT void table_increment(LState* L, const LValue& obj, const LValue& key, double amount) {
+    if (obj.type == ValueType::Table) {
+        LTable* t = static_cast<LTable*>(obj.val.payload.ptr);
+        LValue val = t->gettable(key);
+        if (val.type == ValueType::Nil) {
+            t->settable(key, LValue(amount));
+            return;
+        }
+        if (val.type == ValueType::Double) {
+            t->settable(key, LValue(val.val.payload.f64 + amount));
+            return;
+        }
+        if (val.type == ValueType::Int64) {
+            t->settable(key, LValue(static_cast<double>(val.val.payload.i64) + amount));
+            return;
+        }
+    }
+    table_set(L, obj, key, add(L, table_get(L, obj, key), LValue(amount)));
+}
+
+//------------------ Direct table multiply: t[k] = t[k] * amount
+CLX_INLINE_HOT void table_multiply(LState* L, const LValue& obj, const LValue& key, double amount) {
+    if (obj.type == ValueType::Table) {
+        LTable* t = static_cast<LTable*>(obj.val.payload.ptr);
+        LValue val = t->gettable(key);
+        if (val.type == ValueType::Nil) {
+            t->settable(key, LValue(0.0));
+            return;
+        }
+        if (val.type == ValueType::Double) {
+            t->settable(key, LValue(val.val.payload.f64 * amount));
+            return;
+        }
+        if (val.type == ValueType::Int64) {
+            t->settable(key, LValue(static_cast<double>(val.val.payload.i64) * amount));
+            return;
+        }
+    }
+    table_set(L, obj, key, mul(L, table_get(L, obj, key), LValue(amount)));
 }
 
 MultiValue str_len(LState*, const LValue*, size_t);
