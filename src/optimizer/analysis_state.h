@@ -84,11 +84,8 @@ struct AnalysisState {
     bool expect_multivalue = false;
     std::string_view current_fast_func;
     std::string ref_capture;
-    int cs_index = 0;
     uint32_t current_func_body = 0xFFFFFFFF;
     uint32_t current_arena_func = 0xFFFFFFFF;  // node index of current function if it has an arena
-
-    static constexpr int cs_max = 4;
 };
 
 //------------------ is_purely_integer_expr: returns true if a node always evaluates to an integer.

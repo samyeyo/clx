@@ -1828,50 +1828,6 @@ CLX_INLINE_HOT void table_set_int(LState* L, const LValue& obj, size_t idx, cons
     }
 }
 
-//------------------ Cached table access slot
-struct CacheSlot {
-    TValue   table_val;
-    TValue   key_val;
-    uint32_t hash_version = 0;
-    LValue   cached;
-    bool     valid        = false;
-};
-
-//------------------ Cached slot table read
-CLX_INLINE_HOT LValue table_get_cs(LState* L, const LValue& obj, const LValue& key, CacheSlot* cs) {
-    if (obj.type == ValueType::Table) {
-        if (key.type == ValueType::Int64)
-            return table_get(L, obj, key);
-        LTable* t = static_cast<LTable*>(obj.val.payload.ptr);
-        if (cs->valid &&
-            cs->table_val.payload.u64 == obj.val.payload.u64 &&
-            cs->key_val.payload.u64 == key.val.payload.u64 &&
-            cs->hash_version == t->hash_version)
-            return cs->cached;
-        LValue result = table_get(L, obj, key);
-        cs->valid        = true;
-        cs->table_val    = obj.val;
-        cs->key_val      = key.val;
-        cs->hash_version = t->hash_version;
-        cs->cached       = result;
-        return result;
-    }
-    return table_get(L, obj, key);
-}
-
-//------------------ Cached slot table write
-CLX_INLINE_HOT void table_set_cs(LState* L, const LValue& obj, const LValue& key, const LValue& val, CacheSlot* cs) {
-    table_set(L, obj, key, val);
-    if (obj.type == ValueType::Table && key.type != ValueType::Int64) {
-        LTable* t        = static_cast<LTable*>(obj.val.payload.ptr);
-        cs->valid        = true;
-        cs->table_val    = obj.val;
-        cs->key_val      = key.val;
-        cs->hash_version = t->hash_version;
-        cs->cached       = val;
-    }
-}
-
 //------------------ Direct table write (skips existence check / metatable)
 // Use when the field is known to exist and the table has no __newindex metamethod.
 CLX_INLINE_HOT void table_set_direct(LState* L, const LValue& obj, const LValue& key, const LValue& val) {
@@ -1881,19 +1837,6 @@ CLX_INLINE_HOT void table_set_direct(LState* L, const LValue& obj, const LValue&
         return;
     }
     table_set(L, obj, key, val);
-}
-
-//------------------ Direct table write with cache slot
-CLX_INLINE_HOT void table_set_direct_cs(LState* L, const LValue& obj, const LValue& key, const LValue& val, CacheSlot* cs) {
-    table_set_direct(L, obj, key, val);
-    if (obj.type == ValueType::Table && key.type != ValueType::Int64) {
-        LTable* t        = static_cast<LTable*>(obj.val.payload.ptr);
-        cs->valid        = true;
-        cs->table_val    = obj.val;
-        cs->key_val      = key.val;
-        cs->hash_version = t->hash_version;
-        cs->cached       = val;
-    }
 }
 
 //------------------ Direct table increment: t[k] = t[k] + amount

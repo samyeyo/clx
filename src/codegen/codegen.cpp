@@ -425,8 +425,6 @@ void CodeEmitter::emit(uint32_t root_node, std::string_view module_name) {      
 
     out << "CLX_API clx::LValue luaopen_" << module_name << "(clx::LState* L) {\n";
     out << "    clx::LValue _ENV(clx::ValueType::Table, L->_G);\n";
-    out << "    clx::CacheSlot __cs[" << cs_max << "]{};\n";
-    state.cs_index = 0;
 
 
     for (const auto& sb_name : state.global_string_builders) {
@@ -646,14 +644,8 @@ void CodeEmitter::emit_native(uint32_t n_idx) {
                             if (it->second.count(fn)) {
                                 size_t idx = std::distance(state.string_pool.begin(),
                                     std::find(state.string_pool.begin(), state.string_pool.end(), fn));
-                                int _cs_i = state.cs_index < cs_max ? state.cs_index++ : (state.cs_index++ % cs_max);
-                                if (_cs_i >= 0) {
-                                    out << "clx::table_get_cs(L, "; emit_node(n.as.table_access.table);
-                                    out << ", cstr_[" << idx << "], &__cs[" << _cs_i << "]).as_number()";
-                                } else {
-                                    out << "clx::table_get(L, "; emit_node(n.as.table_access.table);
-                                    out << ", cstr_[" << idx << "]).as_number()";
-                                }
+                                out << "clx::table_get(L, "; emit_node(n.as.table_access.table);
+                                out << ", cstr_[" << idx << "]).as_number()";
                                 return;
                             }
                         }
@@ -869,12 +861,7 @@ void CodeEmitter::emitCallExpression(const ASTNode& node, uint32_t node_idx) {
                 if (key_is_native) {
                     out << "    _m_func = ([&](){ clx::LTable* _t = static_cast<clx::LTable*>(_m_self.as_pointer()); size_t _k = static_cast<size_t>("; emit_native( k_idx); out << "); return (_k - 1 < _t->array_size) ? clx::LValue(_t->array[_k - 1], _t->array_types[_k - 1]) : clx::table_get_int(L, clx::LValue(clx::ValueType::Table, _t), _k); }());\n";
                 } else {
-                    int _cs_i = state.cs_index < cs_max ? state.cs_index++ : (state.cs_index++ % cs_max);
-                    if (_cs_i >= 0) {
-                        out << "    _m_func = clx::table_get_cs(L, _m_self, "; emit_node(k_idx); out << ", &__cs[" << _cs_i << "]);\n";
-                    } else {
-                        out << "    _m_func = clx::table_get(L, _m_self, "; emit_node(k_idx); out << ");\n";
-                    }
+                    out << "    _m_func = clx::table_get(L, _m_self, "; emit_node(k_idx); out << ");\n";
                 }
                 out << "    L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&_m_func.val, &_m_func.type);\n";
             }
@@ -1259,7 +1246,6 @@ void CodeEmitter::emitFunctionDef(const ASTNode& node, uint32_t node_idx) {
             out << "(clx::LState* L, const clx::LValue* args, size_t arg_count) mutable -> clx::MultiValue {\n";
             out << "clx::ScopeGuard _sg_func(L);\n";
             out << "clx::LValue _ENV = (L->current_func && L->current_func->env) ? clx::LValue(clx::ValueType::Table, L->current_func->env) : clx::LValue(clx::ValueType::Table, L->_G);\n";
-            out << "clx::CacheSlot __cs[" << cs_max << "]{};\n";
             uint32_t saved_arena_func = state.current_arena_func;
             if (state.arena_table_sizes.count(node_idx)) {
                 state.current_arena_func = node_idx;
@@ -1268,8 +1254,6 @@ void CodeEmitter::emitFunctionDef(const ASTNode& node, uint32_t node_idx) {
             } else {
                 state.current_arena_func = 0xFFFFFFFF;
             }
-            int prev_cs_index = state.cs_index;
-            state.cs_index = 0;
             out << "size_t _va_count = (arg_count > " << node.as.func_def.param_count << ") ? (arg_count - " << node.as.func_def.param_count << ") : 0;\n";
             out << "const clx::LValue* _va_args = _va_count > 0 ? (args + " << node.as.func_def.param_count << ") : nullptr;\n";
 
@@ -1338,7 +1322,6 @@ void CodeEmitter::emitFunctionDef(const ASTNode& node, uint32_t node_idx) {
             state.current_func_body = saved_func_body;
             state.direct_callables = std::move(saved_direct_callables);
             state.fast_callables = std::move(saved_fast_callables);
-            state.cs_index = prev_cs_index;
             if (state.arena_table_sizes.count(node_idx)) out << "clx::arena_reset(&_arena);\n";
             state.current_arena_func = saved_arena_func;
             out << "return clx::MultiValue();\n";
@@ -2146,25 +2129,13 @@ out << "l_" << name << " = L->create_closure(_impl_" << name << ", static_cast<c
                                     if (_it != state.numeric_table_fields.end() && _it->second.count(_kn))
                                         is_known_field = true;
                                 }
-                                int _cs_i = tbl_is_stable ? (state.cs_index < cs_max ? state.cs_index++ : (state.cs_index++ % cs_max)) : -1;
+                                int _cs_i = -1;
                                 size_t _cstr_idx = std::distance(state.string_pool.begin(), std::find(state.string_pool.begin(), state.string_pool.end(), std::string_view(ctx.nodes[kt].as.string.text, ctx.nodes[kt].as.string.length)));
                                 if (is_known_field) {
-                                    if (_cs_i >= 0) {
-                                        out << "clx::table_set_direct_cs(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << _cstr_idx << "], ";
-                                        if (v_count > 0) emit_node(ctx.block_statements[first_v]);
-                                        else out << "clx::LValue()";
-                                        out << ", &__cs[" << _cs_i << "]);\n";
-                                    } else {
-                                        out << "clx::table_set_direct(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << _cstr_idx << "], ";
-                                        if (v_count > 0) emit_node(ctx.block_statements[first_v]);
-                                        else out << "clx::LValue()";
-                                        out << ");\n";
-                                    }
-                                } else if (_cs_i >= 0) {
-                                    out << "clx::table_set_cs(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << _cstr_idx << "], ";
+                                    out << "clx::table_set_direct(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << _cstr_idx << "], ";
                                     if (v_count > 0) emit_node(ctx.block_statements[first_v]);
                                     else out << "clx::LValue()";
-                                    out << ", &__cs[" << _cs_i << "]);\n";
+                                    out << ");\n";
                                 } else {
                                     out << "clx::table_set(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << _cstr_idx << "], ";
                                     if (v_count > 0) emit_node(ctx.block_statements[first_v]);
@@ -2531,16 +2502,9 @@ out << "l_" << name << " = L->create_closure(_impl_" << name << ", static_cast<c
                                     if (_it != state.numeric_table_fields.end() && _it->second.count(_kn))
                                         is_known_field = true;
                                 }
-                                int _cs_i = tbl_is_stable ? (state.cs_index < cs_max ? state.cs_index++ : (state.cs_index++ % cs_max)) : -1;
                                 size_t _cstr_idx = std::distance(state.string_pool.begin(), std::find(state.string_pool.begin(), state.string_pool.end(), std::string_view(ctx.nodes[kt2].as.string.text, ctx.nodes[kt2].as.string.length)));
                                 if (is_known_field) {
-                                    if (_cs_i >= 0) {
-                                        out << "clx::table_set_direct_cs(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << _cstr_idx << "], " << val_str << ", &__cs[" << _cs_i << "]);\n";
-                                    } else {
-                                        out << "clx::table_set_direct(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << _cstr_idx << "], " << val_str << ");\n";
-                                    }
-                                } else if (_cs_i >= 0) {
-                                    out << "clx::table_set_cs(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << _cstr_idx << "], " << val_str << ", &__cs[" << _cs_i << "]);\n";
+                                    out << "clx::table_set_direct(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << _cstr_idx << "], " << val_str << ");\n";
                                 } else {
                                     out << "clx::table_set(L, "; emit_node(t_node.as.table_access.table); out << ", cstr_[" << _cstr_idx << "], " << val_str << ");\n";
                                 }
@@ -3063,18 +3027,10 @@ void CodeEmitter::emitForStatement(const ASTNode& node, uint32_t node_idx) {
             _invariant_lookups.erase(std::unique(_invariant_lookups.begin(), _invariant_lookups.end()), _invariant_lookups.end());
             for (uint32_t _h_node : _invariant_lookups) {
                 std::string _h_name = "_hoist_" + std::to_string(_h_node);
-                int _cs_i = state.cs_index < cs_max ? state.cs_index++ : (state.cs_index++ % cs_max);
-                if (_cs_i >= 0) {
-                    out << "clx::LValue " << _h_name << " = clx::table_get_cs(L, ";
-                    emit_node(ctx.nodes[_h_node].as.table_access.table);
-                    out << ", "; emit_node(ctx.nodes[_h_node].as.table_access.key);
-                    out << ", &__cs[" << _cs_i << "]);\n";
-                } else {
-                    out << "clx::LValue " << _h_name << " = clx::table_get(L, ";
-                    emit_node(ctx.nodes[_h_node].as.table_access.table);
-                    out << ", "; emit_node(ctx.nodes[_h_node].as.table_access.key);
-                    out << ");\n";
-                }
+                out << "clx::LValue " << _h_name << " = clx::table_get(L, ";
+                emit_node(ctx.nodes[_h_node].as.table_access.table);
+                out << ", "; emit_node(ctx.nodes[_h_node].as.table_access.key);
+                out << ");\n";
                 out << "L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&" << _h_name << ".val, &" << _h_name << ".type);\n";
                 state.hoisted_lookups[_h_node] = _h_name;
                 uint32_t _ht = ctx.nodes[_h_node].as.table_access.table;
@@ -3423,15 +3379,7 @@ void CodeEmitter::emitTableAccess(const ASTNode& node, uint32_t node_idx) {
                 } else {
                     uint32_t kt = node.as.table_access.key;
                     if (kt < ctx.nodes.size() && ctx.nodes[kt].type == NodeType::String) {
-                        uint32_t tbl_idx = node.as.table_access.table;
-                        bool tbl_is_stable = tbl_idx < ctx.nodes.size() &&
-                                             ctx.nodes[tbl_idx].type == NodeType::Identifier;
-                        int _cs_i = tbl_is_stable ? (state.cs_index < cs_max ? state.cs_index++ : (state.cs_index++ % cs_max)) : -1;
-                        if (_cs_i >= 0) {
-                            out << "clx::table_get_cs(L, "; emit_node(node.as.table_access.table); out << ", cstr_[" << (std::distance(state.string_pool.begin(), std::find(state.string_pool.begin(), state.string_pool.end(), std::string_view(ctx.nodes[kt].as.string.text, ctx.nodes[kt].as.string.length)))) << "], &__cs[" << _cs_i << "])";
-                        } else {
-                            out << "clx::table_get(L, "; emit_node(node.as.table_access.table); out << ", cstr_[" << (std::distance(state.string_pool.begin(), std::find(state.string_pool.begin(), state.string_pool.end(), std::string_view(ctx.nodes[kt].as.string.text, ctx.nodes[kt].as.string.length)))) << "])";
-                        }
+                        out << "clx::table_get(L, "; emit_node(node.as.table_access.table); out << ", cstr_[" << (std::distance(state.string_pool.begin(), std::find(state.string_pool.begin(), state.string_pool.end(), std::string_view(ctx.nodes[kt].as.string.text, ctx.nodes[kt].as.string.length)))) << "])";
                     } else {
                         out << "clx::table_get(L, "; emit_node(node.as.table_access.table); out << ", "; emit_node(node.as.table_access.key); out << ")";
                     }

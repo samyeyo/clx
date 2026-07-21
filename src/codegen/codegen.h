@@ -47,8 +47,6 @@ private:
     std::vector<LocalVar> locals;
     AnalysisState& state;
 
-    static constexpr int cs_max = AnalysisState::cs_max;
-
     //------------------ is_local: checks if name is a local and sets out_is_boxed
     bool is_local(std::string_view name, bool& out_is_boxed);
 
