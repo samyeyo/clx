@@ -25,10 +25,7 @@ clx::MultiValue lua_error(clx::LState* L, const clx::LValue* args, size_t count)
     }
 
     if (err_val.type == clx::String && level > 0) {
-        std::string prefix = "";
-        if (L->current_file && L->current_file[0] != '\0') {
-            prefix = std::string(L->current_file) + ":" + std::to_string(L->current_line) + ": ";
-        }
+        std::string prefix = clx::file_line_prefix(L);
         std::string full_msg = prefix + err_val.as_string();
         throw clx::LRuntimeException(clx::string(L, full_msg.c_str()));
     }
