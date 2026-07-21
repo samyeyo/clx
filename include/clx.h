@@ -635,10 +635,13 @@ CLX_INLINE table_iterator iterate(LState* L, const LValue& table) {
 }
 
 //------------------ Throws a type error
-[[noreturn]] CLX_INLINE_COLD void type_error(LState* L, int argnum, const char* expected) {
+[[noreturn]] CLX_INLINE_COLD void type_error(LState* L, int argnum, const char* expected, const LValue* args, size_t count) {
     char buf[128];
+    const char* got = (argnum >= 1 && static_cast<size_t>(argnum - 1) < count)
+        ? VALUE_TYPE_NAMES[static_cast<size_t>(args[argnum - 1].type)]
+        : "no value";
     std::snprintf(buf, sizeof(buf), "bad argument #%d (%s expected, got %s)",
-        argnum, expected, VALUE_TYPE_NAMES[static_cast<size_t>(ValueType::Nil)]);
+        argnum, expected, got);
     throw LRuntimeException(LValue(L->intern_string(buf)));
 }
 
