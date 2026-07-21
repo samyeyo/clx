@@ -1896,7 +1896,7 @@ CLX_INLINE_HOT void table_set_direct_cs(LState* L, const LValue& obj, const LVal
     }
 }
 
-//------------------ Direct table increment: t[k] = t[k] + amount (avoids LValue wrapping for constant)
+//------------------ Direct table increment: t[k] = t[k] + amount
 CLX_INLINE_HOT void table_increment(LState* L, const LValue& obj, const LValue& key, double amount) {
     if (obj.type == ValueType::Table) {
         LTable* t = static_cast<LTable*>(obj.val.payload.ptr);
@@ -1915,6 +1915,27 @@ CLX_INLINE_HOT void table_increment(LState* L, const LValue& obj, const LValue& 
         }
     }
     table_set(L, obj, key, add(L, table_get(L, obj, key), LValue(amount)));
+}
+
+//------------------ Direct table decrement: t[k] = t[k] - amount
+CLX_INLINE_HOT void table_decrement(LState* L, const LValue& obj, const LValue& key, double amount) {
+    if (obj.type == ValueType::Table) {
+        LTable* t = static_cast<LTable*>(obj.val.payload.ptr);
+        LValue val = t->gettable(key);
+        if (val.type == ValueType::Nil) {
+            t->settable(key, LValue(-amount));
+            return;
+        }
+        if (val.type == ValueType::Double) {
+            t->settable(key, LValue(val.val.payload.f64 - amount));
+            return;
+        }
+        if (val.type == ValueType::Int64) {
+            t->settable(key, LValue(static_cast<double>(val.val.payload.i64) - amount));
+            return;
+        }
+    }
+    table_set(L, obj, key, sub(L, table_get(L, obj, key), LValue(amount)));
 }
 
 //------------------ Direct table multiply: t[k] = t[k] * amount
@@ -1936,6 +1957,27 @@ CLX_INLINE_HOT void table_multiply(LState* L, const LValue& obj, const LValue& k
         }
     }
     table_set(L, obj, key, mul(L, table_get(L, obj, key), LValue(amount)));
+}
+
+//------------------ Direct table divide: t[k] = t[k] / amount
+CLX_INLINE_HOT void table_divide(LState* L, const LValue& obj, const LValue& key, double amount) {
+    if (obj.type == ValueType::Table) {
+        LTable* t = static_cast<LTable*>(obj.val.payload.ptr);
+        LValue val = t->gettable(key);
+        if (val.type == ValueType::Nil) {
+            t->settable(key, LValue(0.0 / amount));
+            return;
+        }
+        if (val.type == ValueType::Double) {
+            t->settable(key, LValue(val.val.payload.f64 / amount));
+            return;
+        }
+        if (val.type == ValueType::Int64) {
+            t->settable(key, LValue(static_cast<double>(val.val.payload.i64) / amount));
+            return;
+        }
+    }
+    table_set(L, obj, key, div(L, table_get(L, obj, key), LValue(amount)));
 }
 
 MultiValue str_len(LState*, const LValue*, size_t);
