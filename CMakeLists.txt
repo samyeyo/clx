@@ -89,7 +89,6 @@ set(SOURCES
     src/clx.cpp
     src/syntax/lexer.cpp
     src/syntax/parser.cpp
-    src/syntax/visitor.cpp
     src/optimizer/optimizer.cpp
     src/codegen/codegen.cpp
 )
