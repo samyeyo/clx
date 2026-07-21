@@ -9,7 +9,6 @@
 #define OPTIMIZER_H
 
 #include "../syntax/nodes.h"
-#include "../syntax/parser.h"
 #include "../codegen/codegen.h"
 #include "analysis_state.h"
 #include <set>
