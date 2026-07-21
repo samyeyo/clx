@@ -487,6 +487,16 @@ struct LTable : public LHeader {
     LTable*    metatable;
     bool       is_arena;   // true if allocated in a FuncArena — falls back to heap on growth
 
+    // Per-table inline cache: 4 entries indexed by shift-xor hash
+    // Kept small (64 bytes) to avoid cache-line bloat on allocation-heavy workloads
+    static constexpr int IC_SIZE = 4;
+    struct InlineCache {
+        uint64_t key_payload  = 0;
+        uint32_t entry_idx    = 0;
+        uint32_t table_ver    = 0;  // snapshot of hash_version at populate time
+    };
+    InlineCache ic[IC_SIZE] = {};
+
     LTable();
     ~LTable();
 
@@ -1648,25 +1658,7 @@ CLX_INLINE_HOT LValue table_get(LState* L, const LValue& obj, const LValue& key)
             }
         }
         if (direct.type == ValueType::Nil) {
-            if (t->hash_size > 0) {
-                uint32_t _mask = static_cast<uint32_t>(t->hash_size - 1);
-                uint32_t _h = lvalue_hash(key) & _mask;
-                for (;;) {
-                    HashEntry& _e = t->entries[_h];
-                    if (_e.ktype == ValueType::Nil) {
-                        if (_e.key.payload.u64 == HASH_EMPTY) break;
-                    } else {
-                        LValue _ek(_e.key, _e.ktype);
-                        if (lvalue_eq_fast(_ek, key)) {
-                            direct = LValue(_e.val, _e.vtype);
-                            break;
-                        }
-                    }
-                    _h = (_h + 1) & _mask;
-                }
-            }
-            if (direct.type == ValueType::Nil)
-                direct = t->get_value(L, key);
+            direct = t->get_value(L, key);
         }
         if (direct.type != ValueType::Nil) return direct;
         mt = t->metatable;

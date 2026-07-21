@@ -417,14 +417,30 @@ LValue LTable::gettable(const LValue& key) {
             return LValue(array[idx - 1], array_types[idx - 1]);
     }
     if (hash_size == 0) return LValue();
+
+    // Inline cache: fast path for repeated access to same key on same table
+    // Uses hash_version (structural changes only) not per-entry version (every write)
+    uint32_t ic_idx = static_cast<uint32_t>(key.val.payload.u64 ^ (key.val.payload.u64 >> 17) ^ (key.val.payload.u64 >> 33)) % IC_SIZE;
+    auto& _ic = ic[ic_idx];
+    if (_ic.key_payload == key.val.payload.u64 && _ic.table_ver == hash_version && _ic.entry_idx < hash_size) {
+        HashEntry& _e = entries[_ic.entry_idx];
+        if (_e.ktype != Nil)
+            return LValue(_e.val, _e.vtype);
+    }
+
     uint32_t mask = static_cast<uint32_t>(hash_size - 1);
     uint64_t h    = lvalue_hash(key) & mask;
     for (;;) {
         HashEntry& e = entries[h];
         if (e.ktype == Nil) {
             if (e.key.payload.u64 == HASH_EMPTY) return LValue();
-        } else if (lvalue_eq_fast(LValue(e.key, e.ktype), key))
+        } else if (lvalue_eq_fast(LValue(e.key, e.ktype), key)) {
+            // Update inline cache
+            _ic.key_payload = key.val.payload.u64;
+            _ic.entry_idx = static_cast<uint32_t>(h);
+            _ic.table_ver = hash_version;
             return LValue(e.val, e.vtype);
+        }
         h = (h + 1) & mask;
     }
 }
