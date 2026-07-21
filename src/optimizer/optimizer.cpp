@@ -1853,11 +1853,11 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
             if (state.table_presize.count(node_idx)) {
                 arr_count = 16; // conservatively estimate loop-bounded tables
             }
-            // Use hardcoded sizes matching runtime types (optimizer doesn't include clx_runtime.h)
-            constexpr size_t HDR = 112;     // sizeof(LTable) padded
-            constexpr size_t TVAL = 8;      // sizeof(TValue)
-            constexpr size_t VT = 1;        // sizeof(ValueType)
-            constexpr size_t HENTRY = 24;   // sizeof(HashEntry)
+            // Use actual sizeof from runtime types
+            constexpr size_t HDR = sizeof(clx::LTable);
+            constexpr size_t TVAL = sizeof(clx::TValue);
+            constexpr size_t VT = sizeof(clx::ValueType);
+            constexpr size_t HENTRY = sizeof(clx::HashEntry);
             // Apply the same minimum preallocation as arena_create_table
             if (arr_count < CLX_ARENA_DEFAULT_FIELDS) arr_count = CLX_ARENA_DEFAULT_FIELDS;
             if (hash_count < CLX_ARENA_DEFAULT_FIELDS) hash_count = CLX_ARENA_DEFAULT_FIELDS;
