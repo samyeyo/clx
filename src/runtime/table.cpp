@@ -23,10 +23,8 @@ static size_t get_array_len(LState* L, LTable* t) {
             return 0;
         }
     }
-    // SIMD: find first nil gap in the array part
     size_t n = clx_find_first_nil(reinterpret_cast<const uint8_t*>(t->array_types), t->array_size);
     if (n < t->array_size) return n;
-    // No nil found in array part — fall back to hash-probing binary search
     int64_t lo = static_cast<int64_t>(t->array_size);
     int64_t hi = static_cast<int64_t>(t->array_size) + 1;
     while (true) {
@@ -76,7 +74,6 @@ MultiValue table_concat(LState* L, const LValue* args, size_t count) {
 
     if (i > j) return MultiValue(LValue(L->intern_string("", 0)));
 
-    // SIMD: validate that all elements in [i..j] are String/Double/Int64
     {
         if (!clx_validate_types_range(reinterpret_cast<const uint8_t*>(list->array_types), i - 1, j - i + 1, 2, 4))
             throw_runtime_error("bad argument #1 to 'concat' (table contains non-string/number value)");
@@ -170,7 +167,6 @@ MultiValue table_sort(LState* L, const LValue* args, size_t count) {
     size_t len = get_array_len(L, list);
     if (len == 0) return MultiValue();
 
-    // Fast path: no comparator, all elements numeric, all within array part — sort doubles directly
     if ((count < 2 || args[1].type == Nil) && len <= list->array_size) {
         if (clx_validate_types_range(reinterpret_cast<const uint8_t*>(list->array_types), 0, len, 2, 4)) {
             std::vector<double> nums(len);
@@ -282,7 +278,6 @@ MultiValue table_move(LState* L, const LValue* args, size_t count) {
     if (count >= 5 && args[4].type != Nil)
         dst = check_table(L, args[4]);
 
-    // Fast path: same table, both ranges within array part — use memmove
     if (src == dst && f >= 1 && e >= f && t >= 1
         && static_cast<size_t>(e) <= src->array_size
         && static_cast<size_t>(t + (e - f)) <= src->array_size) {

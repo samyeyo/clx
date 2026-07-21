@@ -189,7 +189,6 @@ static MultiValue type(LState* L, const LValue* args, size_t count) {
     if (count == 0) {
         clx::error(L, "bad argument #1 to 'type' (value expected)");
     }
-    // Lua 5.5 type() returns "number" for both Int64 and Double
     const char* name = VALUE_TYPE_NAMES[static_cast<uint8_t>(args[0].type)];
     if (args[0].type == ValueType::Int64) name = "number";
     return MultiValue(clx::string(L, name));

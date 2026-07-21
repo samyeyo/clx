@@ -24,9 +24,6 @@
 #if defined(_WIN32)
 #include <windows.h>
 #elif defined(__APPLE__) && defined(__aarch64__)
-
-// ARM64 callee-saved register save area for coroutine context switching.
-// Layout matches the offsets used in src/runtime/coro_switch_aarch64.s.
 struct CoroutineContext {
     uint64_t x19, x20, x21, x22, x23, x24, x25, x26, x27, x28;
     uint64_t fp;
@@ -479,21 +476,19 @@ struct LTable : public LHeader {
     size_t     hash_size;
     size_t     hash_count;
     size_t     hash_tombs;
-    uint64_t*  hash_bitmap;   // 1 bit per hash slot: 1 = occupied (ktype != Nil)
+    uint64_t*  hash_bitmap;
 
     uint32_t   hash_version;
     uint32_t   array_version;
 
     LTable*    metatable;
-    bool       is_arena;   // true if allocated in a FuncArena — falls back to heap on growth
+    bool       is_arena;
 
-    // Per-table inline cache: 4 entries indexed by shift-xor hash
-    // Kept small (64 bytes) to avoid cache-line bloat on allocation-heavy workloads
     static constexpr int IC_SIZE = 4;
     struct InlineCache {
         uint64_t key_payload  = 0;
         uint32_t entry_idx    = 0;
-        uint32_t table_ver    = 0;  // snapshot of hash_version at populate time
+        uint32_t table_ver    = 0;
     };
     InlineCache ic[IC_SIZE] = {};
 
@@ -649,11 +644,7 @@ struct StringArena {
     StringArena(const StringArena&) = delete;
     StringArena& operator=(const StringArena&) = delete;
 
-    // Bump-allocate `size` bytes. Returns pointer to allocated region.
-    // Header (16 bytes) is included in size — caller writes the baked
-    // hash/len into the first 16 bytes and returns ptr + 16 as `baked`.
     CLX_INLINE char* allocate(size_t size) {
-        // 16-byte align the allocation
         size = (size + 15) & ~size_t(15);
         if (!current || current->used + size > current->capacity) {
             Block* b = new Block(std::max(block_size, size));
@@ -685,7 +676,6 @@ struct StringPool {
 
     StringPool() : arena(65536) { guard = 0xDEADBEEFCAFEBABEULL; rehash(INIT_CAP); }
     ~StringPool() {
-        // Arena frees all string memory in bulk. Just free the slot table.
         delete[] slots;
     }
     StringPool(const StringPool&) = delete;
@@ -716,7 +706,6 @@ struct StringPool {
         for (;;) {
             Slot& s = slots[idx];
             if (s.empty()) {
-                // Copy preallocated data into arena, free the heap buffer
                 s = make_slot(prealloc, len, h);
                 delete[] (prealloc - 16);
                 count++;
@@ -749,7 +738,6 @@ struct StringPool {
         if (n > capacity) rehash(n);
     }
 
-    // Pre-computed entry for bulk fill — slot positions computed at codegen time
     struct PrecomputedEntry {
         const char* s;
         uint32_t    len;
@@ -757,20 +745,16 @@ struct StringPool {
         uint32_t    slot;
     };
 
-    // Fill hash table directly at pre-computed slot positions — zero probing
     void bulk_fill_precomputed(const PrecomputedEntry* entries, size_t n) {
-        // Compute total arena bytes needed for all strings
         size_t total_arena = 0;
         for (size_t i = 0; i < n; ++i) {
             size_t entry_size = 16 + entries[i].len + 1;
             total_arena += (entry_size + 15) & ~size_t(15);
         }
 
-        // Single arena allocation for all string data
         char* arena_base = arena.allocate(total_arena);
         char* arena_ptr = arena_base;
 
-        // Fill slots directly at pre-computed indices
         for (size_t i = 0; i < n; ++i) {
             uint32_t len32 = entries[i].len;
             uint32_t h_low = static_cast<uint32_t>(entries[i].hash);
@@ -792,7 +776,6 @@ struct StringPool {
 
 private:
     Slot make_slot(const char* str, size_t len, uint64_t h) {
-        // Allocate 16 (header) + len + 1 (null) from arena, aligned to 16
         size_t total = 16 + len + 1;
         total = (total + 15) & ~size_t(15);
         char* mem = arena.allocate(total);
@@ -805,8 +788,6 @@ private:
         return Slot{mem + 16, h, len32};
     }
 
-    // Rehash: only moves Slot entries. String data lives in the arena
-    // and never moves.
     void rehash(size_t new_cap) {
         Slot* old    = slots;
         size_t old_cap = capacity;
@@ -959,11 +940,6 @@ class StringBuilder {
     size_t       total_len;
     mutable const char*  cached;
 
-    // Owned scratch storage for fragments that don't outlive the call on
-    // their own (e.g. formatted into a stack buffer). append_owned() copies
-    // into here once; append() itself never copies. Blocks are freed when
-    // the builder is destroyed, which happens after to_string()/to_lvalue()
-    // have already materialized the final string.
     std::vector<std::unique_ptr<char[]>> arena_blocks;
     char* arena_cur = nullptr;
     char* arena_end = nullptr;
@@ -1049,16 +1025,10 @@ public:
         cached = nullptr;
         count = 0;
         total_len = 0;
-        // Arena blocks are intentionally kept (not freed) so a builder reused
-        // in a loop doesn't repay allocation cost every time; they're only
-        // released when the builder itself is destroyed.
         arena_cur = nullptr;
         arena_end = nullptr;
     }
 
-    // Reserve room for `n` fragments up front to avoid repeated grow()
-    // reallocation when the caller has a rough upper bound in advance
-    // (e.g. format-string length as a proxy for spec count).
     void reserve(size_t n) {
         if (n <= cap) return;
         auto* np = new const char*[n];
@@ -1075,11 +1045,6 @@ public:
         return *this;
     }
 
-    // Like append(), but copies `s` into builder-owned scratch memory first.
-    // Use this whenever `s` points at a buffer that will be overwritten or
-    // go out of scope before to_string()/to_lvalue() runs (e.g. a stack
-    // buffer used to format a number). Cheaper than interning: no global
-    // pool hash/lookup, and the copy is a bump-pointer allocation.
     CLX_INLINE StringBuilder& append_owned(const char* s, uint32_t len) {
         char* p = arena_alloc(len);
         clx_memcpy(p, s, len);
@@ -1174,8 +1139,6 @@ struct ScopeGuard {
 };
 
 //------------------ Per-function bump-pointer arena
-// CLX_ARENA_DEFAULT_FIELDS: minimum number of fields preallocated for arena tables.
-// Increase for table-heavy workloads to avoid growth fallback. Set to 0 to disable.
 #ifndef CLX_ARENA_DEFAULT_FIELDS
 #define CLX_ARENA_DEFAULT_FIELDS 8
 #endif
@@ -1629,7 +1592,6 @@ CLX_INLINE_HOT LValue make_string(LState* L, const std::string& s) {
 }
 
 //------------------ Creates a string LValue, trying pool lookup before heap allocation
-// This is faster than make_string for strings > 6 bytes that may already be pooled
 CLX_INLINE LValue make_string_pooled(LState* L, const char* s, size_t len) {
     if (len <= 6) return LValue::istr(s, len);
     uint64_t h = len <= 8 ? swar_hash_8(s, len) : wyhash_str(s, len);
@@ -1821,7 +1783,6 @@ CLX_INLINE_HOT void table_set_int(LState* L, const LValue& obj, size_t idx, cons
 }
 
 //------------------ Direct table write (skips existence check / metatable)
-// Use when the field is known to exist and the table has no __newindex metamethod.
 CLX_INLINE_HOT void table_set_direct(LState* L, const LValue& obj, const LValue& key, const LValue& val) {
     if (obj.type == ValueType::Table) {
         LTable* t = static_cast<LTable*>(obj.as_pointer());

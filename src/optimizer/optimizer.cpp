@@ -361,7 +361,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
             std::string_view name(ctx.nodes[node.as.for_stmt.var_ident].as.ident.name, ctx.nodes[node.as.for_stmt.var_ident].as.ident.length);
             known_numbers.insert(name);
 
-            // For-loop limit is always numeric — mark it too
             uint32_t limit_expr = node.as.for_stmt.limit_expr;
             if (limit_expr < ctx.nodes.size() && ctx.nodes[limit_expr].type == NodeType::Identifier) {
                 std::string_view lim_name(ctx.nodes[limit_expr].as.ident.name, ctx.nodes[limit_expr].as.ident.length);
@@ -782,7 +781,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                 if (ctx.nodes[t_idx].type == NodeType::Identifier && ctx.nodes[v_idx].type == NodeType::TableConstructor) {
                     std::string_view name(ctx.nodes[t_idx].as.ident.name, ctx.nodes[t_idx].as.ident.length);
                     const auto& tc = ctx.nodes[v_idx].as.table_cons;
-                    // Record known length for tables with fixed constructors
                     if (tc.count > 0 && state.known_table_lengths.find(name) == state.known_table_lengths.end()) {
                         state.known_table_lengths[name] = tc.count;
                     }
@@ -824,7 +822,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                     disqualified_arrays.insert(name);
                 }
             }
-            // Detect x = x ± literal (while-loop counter pattern)
             if (n.as.assign.target_count == 1) {
                 uint32_t t_idx = ctx.block_statements[n.as.assign.first_target];
                 uint32_t v_idx = ctx.block_statements[n.as.assign.first_value];
@@ -907,9 +904,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                                 disqualified_arrays.insert(tname);
                             }
                         } else {
-                            // Key is numeric — but only simple identifiers and literals
-                            // qualify for the vector path. Expressions like i*1000 or i+1
-                            // produce sparse keys that would blow up the vector.
                             {
                                 NodeType ktype = ctx.nodes[k_idx].type;
                                 if (ktype != NodeType::Identifier && ktype != NodeType::Number && ktype != NodeType::Integer) {
@@ -926,8 +920,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                 }
             }
         } else if (n.type == NodeType::CallExpression) {
-            // Detect setmetatable(t, mt) / table.insert(t, ...) / table.remove(t, ...)
-            // — mark first arg as having dynamic length
             uint32_t _call_target = n.as.call_expr.target;
             if (_call_target < ctx.nodes.size() && n.as.call_expr.arg_count >= 1) {
                 uint32_t _arg0 = ctx.block_statements[n.as.call_expr.first_arg];
@@ -1468,7 +1460,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
         }
     }
 
-    // Build node→function owner map: for each FunctionDef, mark all nodes within its body
     state.node_func_owner.clear();
     for (uint32_t fi = 0; fi < ctx.nodes.size(); ++fi) {
         const auto& fn = ctx.nodes[fi];
@@ -1500,10 +1491,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
         }
     }
 
-    // Pass 4: Detect function parameters used as pure numeric arrays (integer-keyed)
-    // e.g., function MultiplyAv(N, v, out) where v[j] is used in arithmetic
     {
-        // Collect all loop variable names (for j = 1, N do → j is always numeric)
         std::set<std::string_view> loop_vars;
         for (const auto& nd : ctx.nodes) {
             if (nd.type == NodeType::ForStatement) {
@@ -1514,7 +1502,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
             }
         }
 
-        // Collect all function definitions (both top-level and local)
         std::vector<const ASTNode*> func_defs;
         for (const auto& nd : ctx.nodes) {
             if (nd.type == NodeType::FunctionDef) {
@@ -1530,7 +1517,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
         }
         for (const auto* fnd : func_defs) {
             const auto& nd = *fnd;
-            // Collect function parameter names
             std::set<std::string_view> func_params;
             for (size_t p = 0; p < nd.as.func_def.param_count; ++p) {
                 uint32_t pi = ctx.block_statements[nd.as.func_def.first_param + p];
@@ -1539,7 +1525,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
             }
             if (func_params.empty()) continue;
 
-            // Check if any parameter is reassigned — if so, skip it
             for (const auto& scan : ctx.nodes) {
                 if (scan.type == NodeType::Assignment) {
                     for (uint32_t ii = 0; ii < scan.as.assign.target_count; ++ii) {
@@ -1553,7 +1538,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
             }
             if (func_params.empty()) continue;
 
-            // Find parameters accessed with integer keys in arithmetic
             for (const auto& bn : ctx.nodes) {
                 if (bn.type != NodeType::BinaryOp) continue;
                 int bop = bn.as.bin_op.op;
@@ -1607,18 +1591,15 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
     state.arena_safe_table_nodes.clear();
     state.arena_table_sizes.clear();
 
-    // For each function, find local tables and check if they escape
     for (uint32_t fi = 0; fi < ctx.nodes.size(); ++fi) {
         const auto& fn = ctx.nodes[fi];
         if (fn.type != NodeType::FunctionDef) continue;
         uint32_t body = fn.as.func_def.body_block;
         if (body == 0xFFFFFFFF || body >= ctx.nodes.size()) continue;
 
-        // Collect local table declarations in this function
         struct LocalTable { std::string_view name; uint32_t decl_node; uint32_t ctor_node; };
         std::vector<LocalTable> local_tables;
 
-        // Walk function body to find local decls with table constructors
         std::function<void(uint32_t)> walk_body = [&](uint32_t block_idx) {
             if (block_idx == 0xFFFFFFFF || block_idx >= ctx.nodes.size()) return;
             const auto& blk = ctx.nodes[block_idx];
@@ -1631,7 +1612,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                     for (uint32_t li = 0; li < sn.as.local_decl.ident_count; ++li) {
                         uint32_t id_idx = ctx.block_statements[sn.as.local_decl.first_ident + li];
                         if (id_idx >= ctx.nodes.size() || ctx.nodes[id_idx].type != NodeType::Identifier) continue;
-                        // Only consider non-captured, non-global locals
                         if (ctx.nodes[id_idx].as.ident.is_captured || ctx.nodes[id_idx].as.ident.is_global) continue;
                         std::string_view name(ctx.nodes[id_idx].as.ident.name, ctx.nodes[id_idx].as.ident.length);
                         if (li < sn.as.local_decl.value_count) {
@@ -1655,18 +1635,9 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
 
         if (local_tables.empty()) continue;
 
-        // For each local table, walk the full function body to detect escapes
         for (auto& lt : local_tables) {
             bool escapes = false;
 
-            // Escape conditions:
-            // 1. is_captured on any use
-            // 2. returned from function
-            // 3. stored in global
-            // 4. passed as function argument
-            // 5. used as method target
-            // 6. stored in another table that escapes
-            // 7. reassigned to an escaping var
 
             std::function<void(uint32_t)> check_escape = [&](uint32_t block_idx) {
                 if (escapes || block_idx == 0xFFFFFFFF || block_idx >= ctx.nodes.size()) return;
@@ -1678,7 +1649,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                     if (stmt >= ctx.nodes.size()) continue;
                     const auto& sn = ctx.nodes[stmt];
 
-                    // Check if this statement references our table variable in an escaping context
                     std::function<bool(uint32_t)> refs_var = [&](uint32_t n_idx) -> bool {
                         if (n_idx >= ctx.nodes.size()) return false;
                         const auto& n = ctx.nodes[n_idx];
@@ -1689,7 +1659,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                         return false;
                     };
 
-                    // Return statement: if var is returned, it escapes
                     if (sn.type == NodeType::ReturnStatement) {
                         for (uint32_t ri = 0; ri < sn.as.return_stmt.value_count; ++ri) {
                             uint32_t v_idx = ctx.block_statements[sn.as.return_stmt.first_value + ri];
@@ -1697,14 +1666,12 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                         }
                     }
 
-                    // Assignment to global
                     if (sn.type == NodeType::Assignment || sn.type == NodeType::GlobalDeclStatement) {
                         uint32_t t_count = (sn.type == NodeType::GlobalDeclStatement) ? sn.as.global_decl.ident_count : sn.as.assign.target_count;
                         uint32_t first_t = (sn.type == NodeType::GlobalDeclStatement) ? sn.as.global_decl.first_ident : sn.as.assign.first_target;
                         for (uint32_t ti = 0; ti < t_count; ++ti) {
                             uint32_t tgt = ctx.block_statements[first_t + ti];
                             if (tgt < ctx.nodes.size() && ctx.nodes[tgt].type == NodeType::Identifier && ctx.nodes[tgt].as.ident.is_global) {
-                                // Check if the corresponding value references our table
                                 uint32_t v_count = (sn.type == NodeType::GlobalDeclStatement) ? sn.as.global_decl.value_count : sn.as.assign.value_count;
                                 uint32_t first_v = (sn.type == NodeType::GlobalDeclStatement) ? sn.as.global_decl.first_value : sn.as.assign.first_value;
                                 if (ti < v_count) {
@@ -1715,7 +1682,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                         }
                     }
 
-                    // Local assignment: if assigned to another local that later escapes, track transitively
                     if (sn.type == NodeType::LocalDecl) {
                         for (uint32_t li = 0; li < sn.as.local_decl.ident_count; ++li) {
                             uint32_t id_idx = ctx.block_statements[sn.as.local_decl.first_ident + li];
@@ -1741,7 +1707,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                         }
                     }
 
-                    // Function call: if var is passed as argument, it escapes
                     if (sn.type == NodeType::LocalDecl || sn.type == NodeType::Assignment) {
                         uint32_t v_count = (sn.type == NodeType::LocalDecl) ? sn.as.local_decl.value_count : sn.as.assign.value_count;
                         uint32_t first_v = (sn.type == NodeType::LocalDecl) ? sn.as.local_decl.first_value : sn.as.assign.first_value;
@@ -1759,7 +1724,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                         }
                     }
 
-                    // Direct call expression statement
                     if (sn.type == NodeType::Block) { check_escape(stmt); continue; }
                     if (sn.type == NodeType::IfStatement) { check_escape(sn.as.if_stmt.then_block); check_escape(sn.as.if_stmt.else_block); continue; }
                     if (sn.type == NodeType::WhileStatement) { check_escape(sn.as.while_stmt.body_block); continue; }
@@ -1767,12 +1731,11 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                     if (sn.type == NodeType::ForStatement) { check_escape(sn.as.for_stmt.body_block); continue; }
                     if (sn.type == NodeType::GenericForStatement) { check_escape(sn.as.generic_for.body_block); continue; }
                     if (sn.type == NodeType::DoStatement) { check_escape(sn.as.do_stmt.body_block); continue; }
-                    if (sn.type == NodeType::FunctionDef) { continue; } // don't recurse into nested funcs
+                    if (sn.type == NodeType::FunctionDef) { continue; }
                 }
             };
             check_escape(body);
 
-            // Also check: is_captured flag on the declaration itself
             if (!escapes) {
                 for (uint32_t ni = 0; ni < ctx.nodes.size(); ++ni) {
                     const auto& n = ctx.nodes[ni];
@@ -1785,7 +1748,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
             }
 
             if (!escapes) {
-                // Also check if the table might grow (assigned via t[i]=v or t.key=v after creation)
                 bool might_grow = false;
                 std::function<void(uint32_t)> check_growth = [&](uint32_t block_idx) {
                     if (might_grow || block_idx == 0xFFFFFFFF || block_idx >= ctx.nodes.size()) return;
@@ -1796,7 +1758,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                         uint32_t stmt = ctx.block_statements[blk.as.block.first_statement + si];
                         if (stmt >= ctx.nodes.size()) continue;
                         const auto& sn = ctx.nodes[stmt];
-                        // Check assignments where our variable is the table target: t[i] = v or t.key = v
                         auto check_target = [&](uint32_t tgt_idx) {
                             if (tgt_idx >= ctx.nodes.size()) return;
                             const auto& tn = ctx.nodes[tgt_idx];
@@ -1813,7 +1774,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                             for (uint32_t ti = 0; ti < sn.as.assign.target_count; ++ti)
                                 check_target(ctx.block_statements[sn.as.assign.first_target + ti]);
                         }
-                        // Recurse into blocks
                         if (sn.type == NodeType::Block) check_growth(stmt);
                         else if (sn.type == NodeType::IfStatement) { check_growth(sn.as.if_stmt.then_block); check_growth(sn.as.if_stmt.else_block); }
                         else if (sn.type == NodeType::WhileStatement) check_growth(sn.as.while_stmt.body_block);
@@ -1836,12 +1796,10 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
             }
         }
 
-        // Compute arena size for this function
         uint32_t total_arena = 0;
         for (uint32_t node_idx : state.arena_safe_table_nodes) {
             const auto& tc = ctx.nodes[node_idx];
             if (tc.type != NodeType::TableConstructor) continue;
-            // Estimate array size from element count, accounting for table_presize
             size_t arr_count = 0;
             size_t hash_count = 0;
             for (uint32_t ei = 0; ei < tc.as.table_cons.count; ++ei) {
@@ -1849,16 +1807,13 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                 if (k_idx == 0xFFFFFFFF) { arr_count++; }
                 else { hash_count++; }
             }
-            // If table_presize exists, use it as the array size (it's the loop limit)
             if (state.table_presize.count(node_idx)) {
-                arr_count = 16; // conservatively estimate loop-bounded tables
+                arr_count = 16;
             }
-            // Use actual sizeof from runtime types
             constexpr size_t HDR = sizeof(clx::LTable);
             constexpr size_t TVAL = sizeof(clx::TValue);
             constexpr size_t VT = sizeof(clx::ValueType);
             constexpr size_t HENTRY = sizeof(clx::HashEntry);
-            // Apply the same minimum preallocation as arena_create_table
             if (arr_count < CLX_ARENA_DEFAULT_FIELDS) arr_count = CLX_ARENA_DEFAULT_FIELDS;
             if (hash_count < CLX_ARENA_DEFAULT_FIELDS) hash_count = CLX_ARENA_DEFAULT_FIELDS;
             size_t aligned_arr = ((TVAL * arr_count + 7) & ~static_cast<size_t>(7));
@@ -1872,17 +1827,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
     }
 
     //------------------ Detect int-returning functions and int-typed call results
-    //
-    // A function is `int_returning` when every ReturnStatement in its body
-    // (recursively through if/else/repeat/while/for/do, with for-loop int
-    // variables tracked per walk) yields an integer-typed value: an
-    // Integer literal, an Identifier in `state.native_integers`, or a
-    // for-loop int variable being returned within this walk. Locals declared
-    // as `local X = int_returning_fn(...)` are then recorded in
-    // `state.int_typed_locals` so the codegen can drop LValue boxing on the
-    // call result and emit direct int64_t indexing into `pure_numeric_arrays`
-    // tables (e.g., `letters[l_ix]` becomes a direct array read rather than
-    // `clx::table_get(L, l_letters, l_ix)`).
     {
         std::function<bool(uint32_t, std::set<std::string_view>&)> walk_for_int_returns =
             [&](uint32_t bi, std::set<std::string_view>& loop_vars) -> bool {
@@ -1919,15 +1863,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
                 } else if (st.type == NodeType::DoStatement) {
                     if (!walk_for_int_returns(st.as.do_stmt.body_block, loop_vars)) return false;
                 } else if (st.type == NodeType::ForStatement) {
-                    // By Lua 5.3+ semantics, a numeric for-loop with an integer-typed
-                    // start (and implicit/explicit integer step) yields an integer
-                    // loop variable across ALL iterations, regardless of whether the
-                    // limit is an Integer literal, an intrinsic call (`#x`), or any
-                    // int-yielding expression. The previous strict check required
-                    // BOTH start AND limit to be Integer literals, which left most
-                    // real-world for-loops untracked (`for i = 1, #ps do ...`). We
-                    // now require only that `start_expr` is an Integer literal, which
-                    // is sufficient to prove the loop variable is integer-typed.
                     std::string_view tracked_name;
                     if (st.as.for_stmt.var_ident < ctx.nodes.size() &&
                         st.as.for_stmt.start_expr < ctx.nodes.size() &&
@@ -1953,7 +1888,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
             if (nd.as.func_def.body_block == 0xFFFFFFFF) continue;
             std::set<std::string_view> loop_vars;
             if (!walk_for_int_returns(nd.as.func_def.body_block, loop_vars)) continue;
-            // Locate FunctionDef's binding name (LocalDecl or Assignment value pattern).
             for (uint32_t j = 0; j < ctx.nodes.size(); ++j) {
                 const auto& ln = ctx.nodes[j];
                 uint32_t fv = 0xFFFFFFFF, fi = 0xFFFFFFFF;
@@ -1973,7 +1907,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node) {
             }
         }
 
-        // Populate `int_typed_locals` from `local X = int_returning_fn(...)` patterns.
         for (uint32_t i = 0; i < ctx.nodes.size(); ++i) {
             const auto& nd = ctx.nodes[i];
             if (nd.type != NodeType::LocalDecl) continue;

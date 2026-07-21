@@ -50,10 +50,6 @@ const char* lookup_builtin(std::string_view module, std::string_view func) {
 
 
 //------------------ collect_string_builder_refs: walk an argument subtree and
-// collect names from `state.string_builders` that appear as Identifier nodes
-// in the expression. Used to limit StringBuilder pre-declarations inside
-// CallExpression lambdas to only those actually referenced (otherwise
-// every call site would unconditionally declare every StringBuilder).
 void collect_string_builder_refs(const ASTContext& ctx, uint32_t n_idx,
                                  const std::set<std::string_view>& sb_set,
                                  std::set<std::string_view>& out) {
@@ -77,12 +73,6 @@ void collect_string_builder_refs(const ASTContext& ctx, uint32_t n_idx,
         collect_string_builder_refs(ctx, nd.as.paren_expr.expr, sb_set, out);
         return;
     }
-    // Note: there is no `IfExpression` AST node in this codebase — Lua's
-    // conditional expression `a and b or c` is represented as BinaryOp, and
-    // the codegen's `(sb_X.empty() ? l_X : clx::LValue(sb_X.to_string(L)))`
-    // pattern is a SYNTHETIC compile-time idiom emitted when an Identifier
-    // whose name is in `state.string_builders` is referenced — not an AST
-    // traversal case. So Identifier-via-string-builder detection suffices.
     if (nd.type == NodeType::TableAccess) {
         collect_string_builder_refs(ctx, nd.as.table_access.table, sb_set, out);
         collect_string_builder_refs(ctx, nd.as.table_access.key, sb_set, out);
@@ -95,8 +85,6 @@ void collect_string_builder_refs(const ASTContext& ctx, uint32_t n_idx,
         }
         return;
     }
-    // Literals / intrinsics / other leaf-like nodes can't contain an Identifier
-    // referencing sb_<name> — skip recursion.
 }
 
 //------------------ var_reassigned_non_int: checks if a variable receives any non-integer value in a block tree
@@ -436,11 +424,9 @@ void CodeEmitter::emit(uint32_t root_node, std::string_view module_name) {      
 
 
     if (!state.string_pool.empty()) {
-        // Split strings: ≤6 bytes use istr() (zero alloc), >6 bytes go through pool
         size_t n = state.string_pool.size();
         size_t long_count = 0;
 
-        // Count long strings for pool reservation
         for (size_t i = 0; i < n; ++i) {
             std::string decoded = lua_decode_string(state.string_pool[i]);
             if (decoded.length() > 6) long_count++;
@@ -452,7 +438,6 @@ void CodeEmitter::emit(uint32_t root_node, std::string_view module_name) {      
             out << "    L->string_pool.reserve(" << cap << ");\n";
         }
 
-        // Short strings (≤6 bytes): inline, zero allocation
         for (size_t i = 0; i < n; ++i) {
             auto& s = state.string_pool[i];
             std::string decoded = lua_decode_string(s);
@@ -461,9 +446,7 @@ void CodeEmitter::emit(uint32_t root_node, std::string_view module_name) {      
             }
         }
 
-        // Long strings (>6 bytes): pool-interned with pre-computed slot positions
         if (long_count > 0) {
-            // Simulate hash table insertion to find final slot index for each string
             size_t cap = 64;
             while (cap < long_count * 2) cap *= 2;
             std::vector<uint8_t> occupied(cap, 0);
@@ -499,7 +482,6 @@ void CodeEmitter::emit(uint32_t root_node, std::string_view module_name) {      
             out << "    };\n";
             out << "    L->string_pool.bulk_fill_precomputed(_cstr_long, " << long_count << ");\n";
 
-            // Set cstr_[] for long strings from the pool
             li = 0;
             for (size_t i = 0; i < n; ++i) {
                 auto& s = state.string_pool[i];
@@ -560,9 +542,6 @@ void CodeEmitter::emit_native(uint32_t n_idx) {
             if (n.type == NodeType::Identifier) {
                 std::string_view name(n.as.ident.name, n.as.ident.length);
                 if (state.global_constants.count(name)) { out << state.global_constants[name]; return; }
-                // Locals that received an int-typed result from a call to a
-                // known int-returning function can be unwrapped inline so
-                // `letters[l_ix]` becomes a direct array read.
                 if (state.int_typed_locals.count(name)) {
                     out << "static_cast<size_t>(l_" << name << ".as_integer())";
                     return;
@@ -584,9 +563,6 @@ void CodeEmitter::emit_native(uint32_t n_idx) {
                     return;
                 }
                 if (op >= static_cast<int>(BinaryOp::Add) && op <= static_cast<int>(BinaryOp::Div)) {
-                    // For Div specifically, cast both operands to double before the divide
-                    // so that e.g. Lua's `1/0` (float division -> inf) never reaches
-                    // `int64_t(1) / int64_t(0)` which is undefined behaviour in C++.
                     if (op == static_cast<int>(BinaryOp::Div)) {
                         out << "(static_cast<double>("; emit_native(n.as.bin_op.left);
                         out << ") / static_cast<double>(";
@@ -918,12 +894,6 @@ void CodeEmitter::emitCallExpression(const ASTNode& node, uint32_t node_idx) {
                 if (want_multi) out << "    return _main_ret;\n";
                 else out << "    return (_main_ret.count > 0) ? _main_ret[0] : clx::LValue();\n";
             } else {
-                // Pre-declare only the StringBuilders actually referenced by this
-                // call's argument expressions (the empty()/to_string() pattern).
-                // Pre-declaring all string_builders unconditionally per call
-                // emitted ~75K spurious StringBuilder arena inits for fasta's hot
-                // path. Use the helper to walk each arg subtree and collect
-                // names; gate the decls on the resulting set.
                 std::set<std::string_view> used_sb;
                 for (uint32_t i = 0; i < node.as.call_expr.arg_count; ++i) {
                     uint32_t av = ctx.block_statements[node.as.call_expr.first_arg + i];
@@ -2028,7 +1998,6 @@ out << "l_" << name << " = L->create_closure(_impl_" << name << ", static_cast<c
                         t_name = std::string_view(ctx.nodes[t_node.as.table_access.table].as.ident.name, ctx.nodes[t_node.as.table_access.table].as.ident.length);
                     }
 
-                    // Detect t[k] = t[k] + N or t[k] = t[k] * N pattern and emit table_increment/table_multiply
                     if (v_count == 1) {
                         uint32_t v_idx = ctx.block_statements[first_v];
                         if (v_idx < ctx.nodes.size() && ctx.nodes[v_idx].type == NodeType::BinaryOp) {
@@ -2038,7 +2007,6 @@ out << "l_" << name << " = L->create_closure(_impl_" << name << ", static_cast<c
                                 bin_op == static_cast<int>(BinaryOp::Sub) || bin_op == static_cast<int>(BinaryOp::Div)) {
                                 uint32_t lhs_tbl = t_node.as.table_access.table;
                                 uint32_t lhs_key = t_node.as.table_access.key;
-                                // For Add/Mul: check both orderings. For Sub/Div: only left table access.
                                 int swap_limit = (bin_op == static_cast<int>(BinaryOp::Sub) || bin_op == static_cast<int>(BinaryOp::Div)) ? 1 : 2;
                                 for (int swap = 0; swap < swap_limit; ++swap) {
                                     uint32_t ta_idx = swap ? bin.right : bin.left;
@@ -2047,7 +2015,6 @@ out << "l_" << name << " = L->create_closure(_impl_" << name << ", static_cast<c
                                         const_idx < ctx.nodes.size() &&
                                         (ctx.nodes[const_idx].type == NodeType::Integer || ctx.nodes[const_idx].type == NodeType::Number)) {
                                         auto& ta = ctx.nodes[ta_idx].as.table_access;
-                                        // Compare table and key by name, not by AST index
                                         bool tables_match = false;
                                         if (lhs_tbl < ctx.nodes.size() && ta.table < ctx.nodes.size() &&
                                             ctx.nodes[lhs_tbl].type == NodeType::Identifier && ctx.nodes[ta.table].type == NodeType::Identifier) {
@@ -2120,7 +2087,6 @@ out << "l_" << name << " = L->create_closure(_impl_" << name << ", static_cast<c
                                 uint32_t tbl_idx = t_node.as.table_access.table;
                                 bool tbl_is_stable = tbl_idx < ctx.nodes.size() &&
                                                      ctx.nodes[tbl_idx].type == NodeType::Identifier;
-                                // Check if this is a known record field (skip existence check)
                                 bool is_known_field = false;
                                 if (tbl_is_stable) {
                                     std::string_view _tn(ctx.nodes[tbl_idx].as.ident.name, ctx.nodes[tbl_idx].as.ident.length);
@@ -2143,7 +2109,6 @@ out << "l_" << name << " = L->create_closure(_impl_" << name << ", static_cast<c
                                     out << ");\n";
                                 }
                             } else {
-                                // Detect t[k] = t[k] ±/÷/× N pattern for dynamic keys
                                 if (v_count == 1) {
                                     uint32_t v_idx = ctx.block_statements[first_v];
                                     if (v_idx < ctx.nodes.size() && ctx.nodes[v_idx].type == NodeType::BinaryOp) {
@@ -2153,7 +2118,6 @@ out << "l_" << name << " = L->create_closure(_impl_" << name << ", static_cast<c
                                             bin_op == static_cast<int>(BinaryOp::Sub) || bin_op == static_cast<int>(BinaryOp::Div)) {
                                             uint32_t lhs_tbl = t_node.as.table_access.table;
                                             uint32_t lhs_key = t_node.as.table_access.key;
-                                            // For Add/Mul: check both orderings. For Sub/Div: only left table access.
                                             int swap_limit = (bin_op == static_cast<int>(BinaryOp::Sub) || bin_op == static_cast<int>(BinaryOp::Div)) ? 1 : 2;
                                             for (int swap = 0; swap < swap_limit; ++swap) {
                                                 uint32_t ta_idx = swap ? bin.right : bin.left;
@@ -2899,25 +2863,19 @@ void CodeEmitter::emitForStatement(const ASTNode& node, uint32_t node_idx) {
                     }
                 }
             } else {
-                // Non-native for loop: emit start/limit/step as LValues then to_number
-                // Optimization: when start is an integer literal and step is default (1),
-                // emit them directly as double without LValue wrapping
                 bool start_is_literal = (ctx.nodes[node.as.for_stmt.start_expr].type == NodeType::Integer ||
                                          ctx.nodes[node.as.for_stmt.start_expr].type == NodeType::Number);
                 bool step_can_skip = step_is_default || (ctx.nodes[node.as.for_stmt.step_expr].type == NodeType::Integer) ||
                                      (ctx.nodes[node.as.for_stmt.step_expr].type == NodeType::Number);
                 if (start_is_literal && step_can_skip) {
-                    // Emit start directly as double
                     out << "double s_" << node_idx << " = ";
                     if (ctx.nodes[node.as.for_stmt.start_expr].type == NodeType::Integer)
                         out << "static_cast<double>(" << ctx.nodes[node.as.for_stmt.start_expr].as.integer.val << ")";
                     else
                         out << ctx.nodes[node.as.for_stmt.start_expr].as.number.val;
                     out << ";\n";
-                    // Emit limit as LValue (may not be numeric)
                     out << "clx::LValue limit_" << node_idx << " = "; emit_node(node.as.for_stmt.limit_expr); out << ";\n";
                     out << "L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&limit_" << node_idx << ".val, &limit_" << node_idx << ".type);\n";
-                    // Emit step directly as double
                     if (node.as.for_stmt.step_expr != 0xFFFFFFFF) {
                         out << "double st_" << node_idx << " = ";
                         if (ctx.nodes[node.as.for_stmt.step_expr].type == NodeType::Integer)
@@ -2928,7 +2886,6 @@ void CodeEmitter::emitForStatement(const ASTNode& node, uint32_t node_idx) {
                     } else {
                         out << "double st_" << node_idx << " = 1.0;\n";
                     }
-                    // Only need to_number for the limit
                     out << "double l_" << node_idx << ";\n";
                     out << "if (!limit_" << node_idx << ".to_number(l_" << node_idx << ")) {\n";
                     out << "std::cerr << \"Error: " << ctx.filename << ":" << node.line << ": 'for' initial values must be numeric\\n\"; std::exit(1);\n}\n";
@@ -3286,7 +3243,6 @@ void CodeEmitter::emitTableConstructor(const ASTNode& node, uint32_t node_idx) {
             }
             if (_is_arena) {
                 out << ", 0);\n";
-                // Arena tables don't need shadow_stack — they're invisible to GC
             } else {
                 out << ");\nL->shadow_stack[L->shadow_top++] = clx::TypedSlot(&_t.val, &_t.type);\n";
             }

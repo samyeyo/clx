@@ -418,8 +418,6 @@ LValue LTable::gettable(const LValue& key) {
     }
     if (hash_size == 0) return LValue();
 
-    // Inline cache: fast path for repeated access to same key on same table
-    // Uses hash_version (structural changes only) not per-entry version (every write)
     uint32_t ic_idx = static_cast<uint32_t>(key.val.payload.u64 ^ (key.val.payload.u64 >> 17) ^ (key.val.payload.u64 >> 33)) % IC_SIZE;
     auto& _ic = ic[ic_idx];
     if (_ic.key_payload == key.val.payload.u64 && _ic.table_ver == hash_version && _ic.entry_idx < hash_size) {
@@ -435,7 +433,6 @@ LValue LTable::gettable(const LValue& key) {
         if (e.ktype == Nil) {
             if (e.key.payload.u64 == HASH_EMPTY) return LValue();
         } else if (lvalue_eq_fast(LValue(e.key, e.ktype), key)) {
-            // Update inline cache
             _ic.key_payload = key.val.payload.u64;
             _ic.entry_idx = static_cast<uint32_t>(h);
             _ic.table_ver = hash_version;
@@ -1018,7 +1015,6 @@ void LState::collect_garbage() {
 
         if (curr->type == static_cast<uint8_t>(Table)) {
             LTable* t = static_cast<LTable*>(curr);
-            // SIMD: scan type array in 32/16-byte chunks, only process non-nil entries
             {
                 const uint8_t* types_raw = reinterpret_cast<const uint8_t*>(t->array_types);
                 size_t i = 0;
@@ -1034,7 +1030,6 @@ void LState::collect_garbage() {
                         mask &= mask - 1;
                     }
                 }
-                // Remainder as 16-byte SSE2
                 for (; i + 16 <= t->array_size; i += 16) {
                     __m128i types = _mm_loadu_si128(reinterpret_cast<const __m128i*>(types_raw + i));
                     __m128i cmp = _mm_cmpeq_epi8(types, _mm_setzero_si128());
@@ -1121,7 +1116,6 @@ void LState::collect_garbage() {
         LHeader* curr = protect_wl.back(); protect_wl.pop_back();
         if (curr->type == static_cast<uint8_t>(Table)) {
             LTable* tt = static_cast<LTable*>(curr);
-            // SIMD: scan array type tags, skip nil entries
             {
                 const uint8_t* types_raw = reinterpret_cast<const uint8_t*>(tt->array_types);
                 size_t i = 0;

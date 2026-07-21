@@ -281,7 +281,7 @@ MultiValue str_format(LState* L, const LValue* args, size_t count) {
     int arg = 2;
 
     StringBuilder result;
-    if (sfl > 32) result.reserve(sfl / 4 + 8);  // rough upper bound on (literal + spec) fragments
+    if (sfl > 32) result.reserve(sfl / 4 + 8);
     while (strfrmt < end) {
         if (*strfrmt != '%') {
 
@@ -923,8 +923,6 @@ MultiValue str_gsub(LState* L, const LValue* args, size_t count) {
                         }
                         i++;
                     } else {
-                        // Batch a run of plain literal bytes into a single raw append
-                        // instead of interning (and discarding) one character at a time.
                         size_t start = i;
                         while (i < l && news[i] != L_ESC) i++;
                         repl.append(&news[start], static_cast<uint32_t>(i - start));

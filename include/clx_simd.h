@@ -152,7 +152,6 @@ CLX_INLINE_HOT size_t clx_find_first_nonnil(const uint8_t* types, size_t size, s
 }
 
 //------------------ clx_type_mask_nonnil : returns a bitmask where bit k is 1 if types[offset + k] != 0, used for GC batch scanning.
-//  32-byte AVX2 path returns 32-bit mask; 16-byte SSE2/NEON path returns 16-bit mask.
 CLX_INLINE_HOT uint32_t clx_type_mask_nonnil(const uint8_t* types, size_t offset, size_t count) {
     (void)count;
     //------------------ 32-byte AVX2 path
@@ -186,7 +185,6 @@ CLX_INLINE_HOT uint32_t clx_type_mask_nonnil(const uint8_t* types, size_t offset
 }
 
 //------------------ clx_type_mask32_nonnil : returns a 32-bit bitmask for 32 bytes at offset.
-//  Used by GC mark loop for AVX2-accelerated scanning.
 #if defined(CLX_HAS_AVX2)
 CLX_INLINE_HOT uint32_t clx_type_mask32_nonnil(const uint8_t* types, size_t offset) {
     const __m256i zero256 = _mm256_setzero_si256();
@@ -197,7 +195,6 @@ CLX_INLINE_HOT uint32_t clx_type_mask32_nonnil(const uint8_t* types, size_t offs
 #endif
 
 //------------------ clx_validate_types_range : validates that all types in [start..start+count) are in [lo, hi] using SIMD.
-//  Returns true if all valid, false if any invalid. For table_concat validation.
 CLX_INLINE_HOT bool clx_validate_types_range(const uint8_t* types, size_t start, size_t count, uint8_t lo, uint8_t hi) {
     size_t k = start;
     size_t end = start + count;

@@ -95,7 +95,6 @@ inline bool yields_number(const ASTContext& ctx, const AnalysisState& state, uin
                 goto done;
             }
 
-            // Function parameters tracked as pure numeric arrays (integer-keyed)
             auto fpit = state.pure_numeric_func_params.find(tn);
             if (fpit != state.pure_numeric_func_params.end()) {
                 auto foi = state.node_func_owner.find(node_idx);
