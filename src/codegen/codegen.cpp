@@ -2051,11 +2051,13 @@ out << "l_" << name << " = L->create_closure(_impl_" << name << ", static_cast<c
                         if (v_idx < ctx.nodes.size() && ctx.nodes[v_idx].type == NodeType::BinaryOp) {
                             auto& bin = ctx.nodes[v_idx].as.bin_op;
                             int bin_op = bin.op;
-                            if (bin_op == static_cast<int>(BinaryOp::Add) || bin_op == static_cast<int>(BinaryOp::Mul)) {
+                            if (bin_op == static_cast<int>(BinaryOp::Add) || bin_op == static_cast<int>(BinaryOp::Mul) ||
+                                bin_op == static_cast<int>(BinaryOp::Sub) || bin_op == static_cast<int>(BinaryOp::Div)) {
                                 uint32_t lhs_tbl = t_node.as.table_access.table;
                                 uint32_t lhs_key = t_node.as.table_access.key;
-                                // Check if one operand is the same table access and the other is a numeric constant
-                                for (int swap = 0; swap <= 1; ++swap) {
+                                // For Add/Mul: check both orderings. For Sub/Div: only left table access.
+                                int swap_limit = (bin_op == static_cast<int>(BinaryOp::Sub) || bin_op == static_cast<int>(BinaryOp::Div)) ? 1 : 2;
+                                for (int swap = 0; swap < swap_limit; ++swap) {
                                     uint32_t ta_idx = swap ? bin.right : bin.left;
                                     uint32_t const_idx = swap ? bin.left : bin.right;
                                     if (ta_idx < ctx.nodes.size() && ctx.nodes[ta_idx].type == NodeType::TableAccess &&
@@ -2075,13 +2077,20 @@ out << "l_" << name << " = L->create_closure(_impl_" << name << ", static_cast<c
                                             std::string_view(ctx.nodes[lhs_key].as.ident.name, ctx.nodes[lhs_key].as.ident.length) ==
                                             std::string_view(ctx.nodes[ta.key].as.ident.name, ctx.nodes[ta.key].as.ident.length));
                                         if (tables_match && keys_match) {
-                                            // Matched t[k] = t[k] + N or t[k] = t[k] * N
                                             if (bin_op == static_cast<int>(BinaryOp::Add)) {
                                                 out << "clx::table_increment(L, "; emit_node(lhs_tbl); out << ", "; emit_node(lhs_key); out << ", ";
                                                 emit_native(const_idx);
                                                 out << ");\n";
-                                            } else {
+                                            } else if (bin_op == static_cast<int>(BinaryOp::Sub)) {
+                                                out << "clx::table_decrement(L, "; emit_node(lhs_tbl); out << ", "; emit_node(lhs_key); out << ", ";
+                                                emit_native(const_idx);
+                                                out << ");\n";
+                                            } else if (bin_op == static_cast<int>(BinaryOp::Mul)) {
                                                 out << "clx::table_multiply(L, "; emit_node(lhs_tbl); out << ", "; emit_node(lhs_key); out << ", ";
+                                                emit_native(const_idx);
+                                                out << ");\n";
+                                            } else {
+                                                out << "clx::table_divide(L, "; emit_node(lhs_tbl); out << ", "; emit_node(lhs_key); out << ", ";
                                                 emit_native(const_idx);
                                                 out << ");\n";
                                             }
@@ -2163,16 +2172,19 @@ out << "l_" << name << " = L->create_closure(_impl_" << name << ", static_cast<c
                                     out << ");\n";
                                 }
                             } else {
-                                // Detect t[k] = t[k] + N or t[k] = t[k] * N pattern for dynamic keys
+                                // Detect t[k] = t[k] ±/÷/× N pattern for dynamic keys
                                 if (v_count == 1) {
                                     uint32_t v_idx = ctx.block_statements[first_v];
                                     if (v_idx < ctx.nodes.size() && ctx.nodes[v_idx].type == NodeType::BinaryOp) {
                                         auto& bin = ctx.nodes[v_idx].as.bin_op;
                                         int bin_op = bin.op;
-                                        if (bin_op == static_cast<int>(BinaryOp::Add) || bin_op == static_cast<int>(BinaryOp::Mul)) {
+                                        if (bin_op == static_cast<int>(BinaryOp::Add) || bin_op == static_cast<int>(BinaryOp::Mul) ||
+                                            bin_op == static_cast<int>(BinaryOp::Sub) || bin_op == static_cast<int>(BinaryOp::Div)) {
                                             uint32_t lhs_tbl = t_node.as.table_access.table;
                                             uint32_t lhs_key = t_node.as.table_access.key;
-                                            for (int swap = 0; swap <= 1; ++swap) {
+                                            // For Add/Mul: check both orderings. For Sub/Div: only left table access.
+                                            int swap_limit = (bin_op == static_cast<int>(BinaryOp::Sub) || bin_op == static_cast<int>(BinaryOp::Div)) ? 1 : 2;
+                                            for (int swap = 0; swap < swap_limit; ++swap) {
                                                 uint32_t ta_idx = swap ? bin.right : bin.left;
                                                 uint32_t const_idx = swap ? bin.left : bin.right;
                                                 if (ta_idx < ctx.nodes.size() && ctx.nodes[ta_idx].type == NodeType::TableAccess &&
@@ -2199,8 +2211,16 @@ out << "l_" << name << " = L->create_closure(_impl_" << name << ", static_cast<c
                                                             out << "clx::table_increment(L, "; emit_node(lhs_tbl); out << ", "; emit_node(lhs_key); out << ", ";
                                                             emit_native(const_idx);
                                                             out << ");\n";
-                                                        } else {
+                                                        } else if (bin_op == static_cast<int>(BinaryOp::Sub)) {
+                                                            out << "clx::table_decrement(L, "; emit_node(lhs_tbl); out << ", "; emit_node(lhs_key); out << ", ";
+                                                            emit_native(const_idx);
+                                                            out << ");\n";
+                                                        } else if (bin_op == static_cast<int>(BinaryOp::Mul)) {
                                                             out << "clx::table_multiply(L, "; emit_node(lhs_tbl); out << ", "; emit_node(lhs_key); out << ", ";
+                                                            emit_native(const_idx);
+                                                            out << ");\n";
+                                                        } else {
+                                                            out << "clx::table_divide(L, "; emit_node(lhs_tbl); out << ", "; emit_node(lhs_key); out << ", ";
                                                             emit_native(const_idx);
                                                             out << ");\n";
                                                         }
