@@ -15,7 +15,6 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 * Simplified MultiValue to be trivially destructible: `inline_vals[3]` (was 8), `LState*` bump allocator for overflow (was `new[]/delete[]`), added 2-arg and 3-arg constructors, size reduced from 144 to 72 bytes
 * Enabled `[[clang::musttail]]` for Clang alongside existing GCC `[[gnu::musttail]]`
 * Removed ScopeGuard from generated function bodies — caller-side shadow_top save/restore instead; block/for-loop ScopeGuards kept for GC correctness
-* Coroutine resume/yield now use inline `LValue[3]` buffers instead of MultiValue for args — eliminates heap allocation on every context switch (~3x faster coro benchmark)
 * Replaced `wyhash64` with `key ^ (key >> 17) ^ (key >> 33)` for inline cache indexing — cheaper hash function
 * Removed `version` field from `HashEntry` — per-entry versioning replaced by table-level `hash_version`
 * Code formatting applied with WebKit style via clang-format

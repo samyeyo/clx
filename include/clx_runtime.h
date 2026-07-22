@@ -915,10 +915,8 @@ struct LThread : public LHeader {
     LValue function;
     int status;
     LThread *caller;
-    LValue yield_args_buf[3];
-    size_t yield_args_count = 0;
-    LValue resume_args_buf[3];
-    size_t resume_args_count = 0;
+    MultiValue yield_args;
+    MultiValue resume_args;
     bool is_main;
     bool has_error;
     bool close_requested;
