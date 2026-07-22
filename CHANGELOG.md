@@ -10,6 +10,15 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 
 ### Changed
 
+* Removed old per-function CacheSlot mechanism (114 lines net deletion) — replaced by per-LTable inline cache
+* Per-LTable inline cache: 4 entries indexed by `key ^ (key >> 17) ^ (key >> 33) % 4`, stores `(key_payload, entry_idx, table_ver)`. Uses `hash_version` (structural changes only) not per-entry version (every write), so read-then-write patterns hit — 64 bytes overhead per LTable
+* Simplified MultiValue to be trivially destructible: `inline_vals[3]` (was 8), `LState*` bump allocator for overflow (was `new[]/delete[]`), added 2-arg and 3-arg constructors, size reduced from 144 to 72 bytes
+* Enabled `[[clang::musttail]]` for Clang alongside existing GCC `[[gnu::musttail]]`
+* Removed ScopeGuard from generated function bodies — caller-side shadow_top save/restore instead; block/for-loop ScopeGuards kept for GC correctness
+* Coroutine resume/yield now use inline `LValue[3]` buffers instead of MultiValue for args — eliminates heap allocation on every context switch (~3x faster coro benchmark)
+* Replaced `wyhash64` with `key ^ (key >> 17) ^ (key >> 33)` for inline cache indexing — cheaper hash function
+* Removed `version` field from `HashEntry` — per-entry versioning replaced by table-level `hash_version`
+* Code formatting applied with WebKit style via clang-format
 * Introduce AnalysisState as a shared data structure between Optimizer and CodeEmitter (7190cd0)
 * Updated CodeEmitter constructor to accept an AnalysisState reference (7190cd0)
 * Updated Optimizer constructor to accept an AnalysisState reference (19cf523)
@@ -29,6 +38,9 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 
 ### Added
 
+* Added `LState::alloc_overflow()` bump allocator for MultiValue overflow — no individual frees, reset at GC cycle
+* Added `MultiValue(a, b)` and `MultiValue(a, b, c)` constructors for common 2/3-value returns without array allocation
+* Added `file_line_prefix(L)` helper for consistent file:line error prefixes
 * Added native int64_t generation support in CodeEmitter (7190cd0)
 * Added new dedicated emit methods for each AST node type in CodeEmitter (7190cd0)
 * Added analysis_state.h to centralize all optimizer analysis data (19cf523)
@@ -65,6 +77,10 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 
 ### Fixed
 
+* Fixed `type_error` to extract actual type name from the argument at the given position (was hardcoded to "nil")
+* Fixed duplicate `hash_count = 0` assignment in `create_table`
+* Fixed redundant `!= Nil && == Function` checks in GC finalizer invocation (3 sites)
+* Fixed `CLX_MUSTTAIL` was empty on Clang — now enabled via `[[clang::musttail]]`
 * Fixed missing file/line in "attempt to call a nil value" error (7459b98)
 * Fixed issues #17 and #18 with MSVC compiler (e6640c7)
 * Fixed #16 by splitting `get_string`/`intern_string` to prevent uninitialized len in `utf8.codes()` (168ac0c)
@@ -75,6 +91,14 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 
 ### Refactored
 
+* Extracted `LState::invoke_gc_finalizer()` helper — replaces 3 copy-pasted __gc finalizer invocation patterns
+* Extracted `file_read_args()`, `file_write_args()`, `make_lines_iter()` in io.cpp — replaces duplicated lambdas between `make_file` and `get_std_file`
+* Removed dead code: `get_binary_string` (pass-through to `get_string`), `visitor.cpp`/`visitor.h` (unused traverse module)
+* Removed all non-header, non-section-divider single-line comments from `src/` and `include/` files
+* Removed unused includes: `#include "../codegen/codegen.h"` from runtime.cpp, `#include "../syntax/parser.h"` from optimizer.h, `#include <functional>` and `#include <unordered_map>` from codegen.h
+* Added `call_table_op` template in codegen for table_increment/decrement/multiply/divide — eliminates 4 structural clone functions
+* Extracted shared `emit_table_op` helper in codegen — eliminates duplicated table-op optimization in last_is_call vs generic paths
+* Added `file_line_prefix(L)` inline helper in clx_runtime.h — eliminates duplicate string construction in base.cpp and runtime.cpp
 * Refactored CodeEmitter for better readability and code organization (7190cd0)
 * Refactored Optimizer code to improve readability (19cf523)
 * Improved pure integers detection in the optimizer (19cf523)
@@ -82,10 +106,10 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 * Replaced optimizer's incomplete `is_int_expr` lambda with the shared function, enabling detection of Mod, And, Or, FloorDiv, ParenExpression, UnaryOp(Minus) as integer-producing (ad72242)
 * Marked several functions as `CLX_INLINE_HOT` for performance improvements (6c84a86, fa67b2f)
 * Replaced hardcoded minimum fields with `CLX_ARENA_DEFAULT_FIELDS` constant for consistency (247d16b)
-* Refactored `get_binary_string` to use `get_string` for consistency and simplified code (7867dda)
 * Enhanced for-loop and while-loop detection in optimizer (62fdd9a)
 * Enhanced vector path qualification by disqualifying non-simple keys in array optimizations (37c49e7)
-* Reduced cs_max from 20 to 4 in AnalysisState (14750ed)
+* Reverted fib.lua to tree-recursive (O(2^n)) for benchmarking — tail-recursive version is O(n) and too trivial to show CLX speedup
+* Rewrote coro.lua benchmark to 5M resume/yield cycles for meaningful comparison
 
 ### Documentation
 
