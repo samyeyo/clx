@@ -44,8 +44,8 @@ void clx_coro_init(CoroutineContext *ctx, void *stack_top, void *entry);
 #include <ucontext.h>
 #endif
 
-#if defined(_MSC_VER)
-#define CLX_MUSTTAIL
+#if defined(__clang__) && __has_builtin(__builtin_musttail)
+#define CLX_MUSTTAIL [[clang::musttail]]
 #elif defined(__GNUC__) && !defined(__clang__) && defined(__has_cpp_attribute)
 #if __has_cpp_attribute(gnu::musttail)
 #define CLX_MUSTTAIL [[gnu::musttail]]
@@ -369,9 +369,11 @@ static_assert(sizeof(LValue) == 16, "LValue must be 16 bytes");
 
 //------------------ Multi-value return container
 struct MultiValue {
+    static constexpr size_t INLINE_CAP = 3;
     size_t count = 0;
     clx::LValue *overflow = nullptr;
-    clx::LValue inline_vals[8];
+    LState *alloc_L = nullptr;
+    clx::LValue inline_vals[INLINE_CAP];
 
     MultiValue() = default;
 
@@ -380,90 +382,91 @@ struct MultiValue {
         inline_vals[0] = single;
     }
 
-    MultiValue(const clx::LValue *arr, size_t c)
-        : count(c) {
-        if (c <= 8) {
+    MultiValue(const clx::LValue &a, const clx::LValue &b)
+        : count(2) {
+        inline_vals[0] = a;
+        inline_vals[1] = b;
+    }
+
+    MultiValue(const clx::LValue &a, const clx::LValue &b, const clx::LValue &c)
+        : count(3) {
+        inline_vals[0] = a;
+        inline_vals[1] = b;
+        inline_vals[2] = c;
+    }
+
+    MultiValue(const clx::LValue *arr, size_t c, LState *L = nullptr)
+        : count(c), alloc_L(L) {
+        if (c <= INLINE_CAP) {
             for (size_t i = 0; i < c; ++i)
                 inline_vals[i] = arr[i];
         } else {
-            for (size_t i = 0; i < 8; ++i)
+            for (size_t i = 0; i < INLINE_CAP; ++i)
                 inline_vals[i] = arr[i];
-            overflow = new clx::LValue[c - 8];
-            for (size_t i = 8; i < c; ++i)
-                overflow[i - 8] = arr[i];
+            overflow_init(arr, c);
         }
     }
 
-    MultiValue(std::initializer_list<clx::LValue> init)
-        : MultiValue(init.begin(), init.size()) { }
+    MultiValue(std::initializer_list<clx::LValue> init, LState *L = nullptr)
+        : MultiValue(init.begin(), init.size(), L) { }
 
-    MultiValue(const std::vector<clx::LValue> &vec)
-        : MultiValue(vec.data(), vec.size()) { }
+    MultiValue(const std::vector<clx::LValue> &vec, LState *L = nullptr)
+        : MultiValue(vec.data(), vec.size(), L) { }
 
     MultiValue(const MultiValue &other)
-        : count(other.count) {
-        size_t inline_c = (count < 8) ? count : 8;
+        : count(other.count), alloc_L(other.alloc_L) {
+        size_t inline_c = (count < INLINE_CAP) ? count : INLINE_CAP;
         for (size_t i = 0; i < inline_c; ++i)
             inline_vals[i] = other.inline_vals[i];
-        if (other.overflow) {
-            overflow = new clx::LValue[count - 8];
-            for (size_t i = 0; i < count - 8; ++i)
-                overflow[i] = other.overflow[i];
-        }
+        overflow = other.overflow;
     }
 
     MultiValue(MultiValue &&other) noexcept
         : count(other.count)
-        , overflow(other.overflow) {
-        size_t inline_c = (count < 8) ? count : 8;
+        , overflow(other.overflow)
+        , alloc_L(other.alloc_L) {
+        size_t inline_c = (count < INLINE_CAP) ? count : INLINE_CAP;
         for (size_t i = 0; i < inline_c; ++i)
             inline_vals[i] = other.inline_vals[i];
         other.overflow = nullptr;
         other.count = 0;
+        other.alloc_L = nullptr;
     }
 
     MultiValue &operator=(MultiValue &&other) noexcept {
         if (this != &other) {
-            if (overflow)
-                delete[] overflow;
             count = other.count;
             overflow = other.overflow;
-            size_t inline_c = (count < 8) ? count : 8;
+            alloc_L = other.alloc_L;
+            size_t inline_c = (count < INLINE_CAP) ? count : INLINE_CAP;
             for (size_t i = 0; i < inline_c; ++i)
                 inline_vals[i] = other.inline_vals[i];
             other.overflow = nullptr;
             other.count = 0;
+            other.alloc_L = nullptr;
         }
         return *this;
     }
 
     MultiValue &operator=(const MultiValue &other) {
         if (this != &other) {
-            if (overflow) {
-                delete[] overflow;
-                overflow = nullptr;
-            }
             count = other.count;
-            size_t inline_c = (count < 8) ? count : 8;
+            alloc_L = other.alloc_L;
+            size_t inline_c = (count < INLINE_CAP) ? count : INLINE_CAP;
             for (size_t i = 0; i < inline_c; ++i)
                 inline_vals[i] = other.inline_vals[i];
-            if (other.overflow) {
-                overflow = new clx::LValue[count - 8];
-                for (size_t i = 0; i < count - 8; ++i)
-                    overflow[i] = other.overflow[i];
-            }
+            overflow = other.overflow;
         }
         return *this;
     }
 
-    ~MultiValue() {
-        if (overflow)
-            delete[] overflow;
-    }
+    ~MultiValue() = default;
 
-    clx::LValue &operator[](size_t i) { return (i < 8) ? inline_vals[i] : overflow[i - 8]; }
+    clx::LValue &operator[](size_t i) { return (i < INLINE_CAP) ? inline_vals[i] : overflow[i - INLINE_CAP]; }
 
-    const clx::LValue &operator[](size_t i) const { return (i < 8) ? inline_vals[i] : overflow[i - 8]; }
+    const clx::LValue &operator[](size_t i) const { return (i < INLINE_CAP) ? inline_vals[i] : overflow[i - INLINE_CAP]; }
+
+    void overflow_init(const clx::LValue *arr, size_t c);
 };
 
 struct LState;
@@ -912,8 +915,10 @@ struct LThread : public LHeader {
     LValue function;
     int status;
     LThread *caller;
-    MultiValue yield_args;
-    MultiValue resume_args;
+    LValue yield_args_buf[3];
+    size_t yield_args_count = 0;
+    LValue resume_args_buf[3];
+    size_t resume_args_count = 0;
     bool is_main;
     bool has_error;
     bool close_requested;
@@ -1014,6 +1019,21 @@ struct LState {
     bool gc_step();
     void invoke_gc_finalizer(LUserdata *ud, const char *tag);
 
+    LValue *overflow_heap = nullptr;
+    size_t overflow_heap_cap = 0;
+    size_t overflow_heap_used = 0;
+    CLX_INLINE_HOT LValue *alloc_overflow(size_t n) {
+        if (overflow_heap_used + n > overflow_heap_cap) {
+            size_t new_cap = overflow_heap_cap ? overflow_heap_cap * 2 : 64;
+            while (new_cap < overflow_heap_used + n) new_cap *= 2;
+            overflow_heap = static_cast<LValue *>(std::realloc(overflow_heap, new_cap * sizeof(LValue)));
+            overflow_heap_cap = new_cap;
+        }
+        LValue *result = overflow_heap + overflow_heap_used;
+        overflow_heap_used += n;
+        return result;
+    }
+
     void register_module(const std::string &name, LValue (*func)(LState *));
 };
 
@@ -1021,6 +1041,12 @@ inline std::string file_line_prefix(LState *L) {
     if (L->current_file && L->current_file[0] != '\0')
         return std::string(L->current_file) + ":" + std::to_string(L->current_line) + ": ";
     return "";
+}
+
+inline void MultiValue::overflow_init(const clx::LValue *arr, size_t c) {
+    overflow = alloc_L->alloc_overflow(c - INLINE_CAP);
+    for (size_t i = INLINE_CAP; i < c; ++i)
+        overflow[i - INLINE_CAP] = arr[i];
 }
 
 //------------------ String builder (part list)
