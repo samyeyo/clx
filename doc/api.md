@@ -161,8 +161,17 @@ void argexpected(L, cond, argnum, v, wanted_type, extramsg = nullptr);  // asser
 ```cpp
 void error(L, msg);          // throw LRuntimeException(string)
 void arg_error(L, n, expected);   // "bad argument #N (expected expected)"
-void type_error(L, n, expected);  // "bad argument #N (expected expected, got ...)"
+void type_error(L, n, expected, args, count);  // "bad argument #N (expected expected, got type)"
 ```
+
+## File:Line Prefix
+
+```cpp
+std::string file_line_prefix(L);  // e.g. "main.lua:12: " or "" if no file context
+```
+
+Returns a `"<file>:<line>: "` string from the current thread's file/line state, or an empty
+string if no file context is set. Useful for building error messages with source locations.
 
 ## Globals
 
@@ -366,11 +375,22 @@ LValue::istr(s, len);        // static — inline string (≤6 bytes, no interni
 
 ### `MultiValue`
 
+`MultiValue` is trivially destructible and stores up to `INLINE_CAP = 3` values inline.
+Larger returns use bump-allocator overflow via `LState::alloc_overflow()`.
+
 ```cpp
 struct MultiValue {
-    size_t count;
+    static constexpr size_t INLINE_CAP = 3;
+    size_t count = 0;
     LValue  operator[](size_t i) const;  // access by index
-    // construct from initializer list, single LValue, or array+size
+    LValue &operator[](size_t i);        // mutable access
+
+    MultiValue();                         // empty
+    MultiValue(const LValue &single);     // single value
+    MultiValue(const LValue &a, const LValue &b);              // 2 values
+    MultiValue(const LValue &a, const LValue &b, const LValue &c); // 3 values (inline)
+    MultiValue(const LValue *arr, size_t c, LState *L = nullptr);  // array+size (overflow for c > 3)
+    MultiValue(std::initializer_list<LValue> init, LState *L = nullptr);
 };
 ```
 

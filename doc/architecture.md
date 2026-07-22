@@ -65,8 +65,7 @@ clx/
 │   ├── syntax/
 │   │   ├── lexer.h/cpp          # Tokenizer/scanner
 │   │   ├── parser.h/cpp         # Recursive descent parser
-│   │   ├── nodes.h              # AST node definitions
-│   │   └── visitor.h/cpp        # AST visitor pattern
+│   │   └── nodes.h              # AST node definitions
 │   ├── optimizer/
 │   │   ├── optimizer.h           # Optimization passes
 │   │   └── optimizer.cpp         # Optimization implementation
@@ -108,9 +107,9 @@ clx/
 ### 1. CLI (src/clx.cpp)
 
 The command-line interface handles:
-- Argument parsing (`--executable`, `--object`, `--static`, `--debug`, `--cpp`, `--output`)
+- Argument parsing (`--executable`, `--object`, `--static`, `--debug`, `--size`, `--fast`, `--cpp`, `--modules`, `--output`)
 - File I/O and multiple lua files compilation
-- Invoking the C++ compiler (fixed at build time via CMake; gcc preferred for TCO support)
+- Invoking the C++ compiler (fixed at build time via CMake)
 - Output file management and temp file cleanup
 - Dead code elimination by default via `-ffunction-sections -Wl,--gc-sections` (gcc/clang) or `/Gy /link /OPT:REF /OPT:ICF` (MSVC)
 - Default optimization flags if none provided : `-O3 -flto=auto -fno-rtti -fvisibility=hidden` (gcc/clang) or `/O2 /Ot /GL /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy` (MSVC)
@@ -151,7 +150,7 @@ Optimization passes analyze the AST and annotate nodes with optimization hints:
 - Variable scope resolution
 - Table access purity analysis
 - Constant folding preparation
-- Shape version tracking for inline cache invalidation
+- Table version tracking (`hash_version`/`array_version`) for inline cache invalidation
 - `yields_number` analysis for numeric for loops
 - Non-fast function parameter numeric detection (marks params used in arithmetic as native doubles)
 - Function parameter numeric-record array inference (traces `local bi = bodies[i]` + field accesses to prove numeric fields)
@@ -163,7 +162,7 @@ The code generator produces C++ code:
 - Slow-path code for dynamic operations
 - Loop transformation (numeric for, generic for with direct `LCFunction` pointer calls)
 - Expression emission with `[[likely]]` branch prediction hints
-- Per-call-site `CacheSlot` inline caching for string-keyed table access
+- Per-LTable `InlineCache` (4 entries) for string-keyed table access, checked inside `LTable::gettable()`/`LTable::settable()`
 - StringBuilder-based string concatenation
 - Wyhash-based string hashing
 
@@ -202,13 +201,15 @@ For strings ≤8 bytes, `swar_hash_8()` replaces `wyhash_str` — loads all byte
 with a single `memcpy` and mixes via `wyhash64`. Used consistently for both TAG_ISTR inline
 strings and short interned strings so cross-type hash compatibility is maintained.
 
-#### CacheSlot Inline Caching
+#### Per-LTable Inline Cache
 
-Per-call-site cache slots for string-keyed table access. Each access site in the source gets
-one `CacheSlot` that caches the last table pointer and value. Uses `shape_version` to detect
-stale cached values after table writes. Only caches non-GC values to avoid dangling pointers
-after collection. States: valid/invalid based on table pointer and shape version match.
-Works for any `NodeType::Identifier` table (globals, locals, and function parameters).
+Each `LTable` embeds a small fixed-size cache (`InlineCache ic[4]`) that accelerates repeated
+string-keyed reads. Each entry caches the key payload, entry index, and the table's
+`hash_version` at the time of the last successful probe. On the next read, the cache is checked
+first — if key and version match, the cached entry index is used directly, skipping the full
+hash-probe path. Cache invalidation is structural: `hash_version` increments only on inserts,
+deletes, or rehashes, not on value updates, so read-then-write patterns still hit the cache.
+Only non-GC value types are cached to avoid dangling pointers after collection.
 
 #### StringBuilder
 
@@ -216,10 +217,12 @@ O(n) string concatenation that avoids the O(n²) quadratic blow-up of repeated `
 patterns. Uses inline storage for up to 8 parts, grows to heap allocation when needed. Produces
 a single interned string with baked hash on `to_string()`.
 
-#### Shape Version Tracking
+#### Table Version Tracking
 
-Tables track a `shape_version` that increments on every write. CacheSlots check the version
-to detect stale cached values, preventing incorrect reads after table mutations.
+Tables track `hash_version` and `array_version` that increment on structural changes (inserts,
+deletes, rehashes, array resizing). The per-LTable inline cache checks `hash_version` to detect
+stale entries after table mutations. Value updates do not bump the version, allowing efficient
+read-then-write patterns.
 
 ## Data Flow
 

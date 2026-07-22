@@ -20,14 +20,6 @@ Cross-platform ahead-of-time Lua compiler
 **clx** is a cross-platform ahead-of-time Lua compiler and runtime that generates standalone native executables through modern C++ toolchains.
 **clx** is not trying to be the fastest Lua implementation in every workload.
 
-Its goal is to provide:
-- ahead-of-time native compilation,
-- deployable standalone executables,
-- predictable runtime performance,
-- fast startup times,
-- integration with existing C++ toolchains,
-- and strong optimization opportunities through modern native compilers.
-
 ## Quick Start
 
 ```bash
@@ -76,8 +68,8 @@ The compiler is already capable of compiling non-trivial Lua applications, but c
 
 ## Requirements
 
-- **Linux**: `g++` (recommended for TCO) or `clang++`
-- **macOS**: `clang++` (Xcode) or `g++` via Homebrew (for TCO)
+- **Linux**: `g++` or `clang++`
+- **macOS**: `clang++` (Xcode) or `g++` via Homebrew
 - **Windows**: `g++` (LLVM) or MSVC
 - **CMake 3.15+** for building
 
@@ -124,7 +116,7 @@ Once compiled, you will find :
 ./build/clx --object file.lua                # Object file (.o/.obj)
 ./build/clx --static file.lua                # Static clx module (.a/.lib)
 ./build/clx --cpp file.lua                   # Generate C++ source, don't compile
-./build/clx file.lua -O2                     # Forward unknown clx flags to the backend compiler
+./build/clx file.lua -O2                     # Forward unknown clx flags to the backend compiler (here MSVC)
 ./build/clx file.lua --output f.exe          # Custom output name
 ./build/clx file.lua --debug                 # No optimizations, debug symbols
 ./build/clx file.lua --minimal               # base + package modules only

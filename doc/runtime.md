@@ -229,26 +229,31 @@ O(n) string concatenation avoiding quadratic blow-up:
 - Produces single interned string with baked hash
 - Used internally by codegen for multi-part string expressions
 
-### 13. CacheSlot Inline Caching (include/clx.h)
+### 13. Per-Table Inline Cache (include/clx_runtime.h)
 
-Per-call-site cache for string-keyed table access:
+Per-LTable inline cache for string-keyed hash access (64 bytes per LTable):
 
 ```cpp
-struct CacheSlot {
-    uint64_t table_val;     // Cached table pointer
-    uint32_t shape_version; // Table version for staleness detection
-    LValue    cached;       // Cached value (non-GC only)
-    bool      valid;        // Cache validity flag
+struct LTable {
+    static constexpr int IC_SIZE = 4;
+
+    struct InlineCache {
+        uint64_t key_payload = 0;  // Key's raw payload for fast comparison
+        uint32_t entry_idx = 0;    // Hash entry index
+        uint32_t table_ver = 0;    // Snapshot of hash_version at insertion
+    };
+
+    InlineCache ic[IC_SIZE];       // 4 entries × 16 bytes = 64 bytes
 };
 ```
 
-Caches are only valid when:
-1. The table pointer matches
-2. The `shape_version` hasn't changed (table hasn't been mutated)
-3. The cached value is not a GC object (to avoid dangling pointers)
+On `gettable()`, the IC is indexed by the key's payload bits. A hit requires:
+1. `key_payload` matches the key's raw 64-bit payload
+2. `table_ver` matches the table's current `hash_version` (no mutation since cache fill)
+3. The entry at `entry_idx` is not nil (tombstone/empty check)
 
-Works for any `NodeType::Identifier` table — globals, locals, and function parameters.
-Up to 8 CacheSlots per call site (`g_cs_max`).
+On miss, a linear-probe hash search runs and populates the IC slot.
+Works for any hash key — no restriction to specific table types or identifiers.
 
 ## Metamethods
 
@@ -273,7 +278,12 @@ clx supports all standard Lua metamethods:
 | `__call` | table() |
 | `__tostring` | tostring() |
 | `__gc` | garbage collection |
+| `__close` | to-be-closed variable (`<close>`) |
 | `__metatable` | getmetatable() |
+
+### To-be-closed Variables (`<close>`)
+
+CLX supports Lua 5.4+ `<close>` attribute via `CloseGuard` (`clx_runtime.h`). When a variable is declared `local x <close> = ...`, the codegen emits a `CloseGuard` that calls the `__close` metamethod when the variable goes out of scope. `CloseGuard` manages its own shadow stack entries independently of `ScopeGuard`.
 
 ## Memory Layout
 
@@ -281,26 +291,33 @@ clx supports all standard Lua metamethods:
 
 ```
 ┌───────────────────────────────────────────────────────┐
-│ LHeader (metadata)                                    │
+│ LHeader (16 bytes)                                    │
 │   - type, marked, next                               │
 ├───────────────────────────────────────────────────────┤
-│ Cache line 0 (64 bytes - all gettable touches here)  │
+│ Array fields (32 bytes)                               │
 │   - array pointer (8)                                │
-│   - array_size, array_cap (16)                      │
-│   - bucket, hash_size (24)                          │
-│   - metatable, hash_count (40)                      │
-│   - padding to 56 bytes                             │
+│   - array_types pointer (8)                          │
+│   - array_size, array_cap (16)                       │
 ├───────────────────────────────────────────────────────┤
-│ Parallel arrays (cache-line optimized)               │
-│   - keys (hash_size * 8 bytes)                      │
-│   - vals (hash_size * 8 bytes)                      │
-│   - nexts (hash_size * 2 bytes)                    │
-│   - shape_version (4 bytes)                        │
-│   - free_head (2 bytes)                             │
+│ Hash fields (40 bytes)                                │
+│   - entries pointer (8)                              │
+│   - hash_size, hash_count, hash_tombs (24)           │
+│   - hash_bitmap pointer (8)                          │
+├───────────────────────────────────────────────────────┤
+│ Version & metadata (16 bytes)                         │
+│   - hash_version, array_version (8)                  │
+│   - metatable pointer (8)                            │
+│   - is_arena (1 + 7 padding)                         │
+├───────────────────────────────────────────────────────┤
+│ Inline cache (64 bytes)                               │
+│   - ic[0..3] (4 × 16 bytes)                         │
+│     - key_payload (8), entry_idx (4), table_ver (4)  │
 └───────────────────────────────────────────────────────┘
 ```
 
-Shape version is incremented on every table write to enable CacheSlot invalidation.
+Hash entries are stored in a contiguous `HashEntry` array (24 bytes each: key TValue, val TValue, ktype, vtype) allocated after the LTable struct in the same memory block. A `hash_bitmap` (separately allocated) tracks occupied slots for fast iteration.
+
+`hash_version` is incremented on every hash mutation to enable InlineCache invalidation.
 
 ### String Layout
 
@@ -318,7 +335,7 @@ Length is at `ptr[-4..ptr[-1]` and hash is at `ptr[-8..ptr[-5]]`.
 | Operation | Complexity |
 |-----------|------------|
 | Table access (key known) | O(1) average |
-| Table access (CacheSlot hit) | O(1) with single pointer check |
+| Table access (InlineCache hit) | O(1) with single key payload check |
 | Table iteration | O(n) |
 | String concatenation | O(n) per operation |
 | Numeric for loop | O(n) with SIMD |

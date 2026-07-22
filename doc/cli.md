@@ -155,7 +155,7 @@ clx respects these environment variables:
 ### Linux/macOS
 
 - Compiler is fixed at build time via CMake (the same compiler that built `clx` is used for Lua script compilation).
-- **Note:** GCC is recommended over Clang because GCC supports tail call optimization (TCO) for clx, which Clang does not. TCO is critical for recursive Lua functions like `fib()`.
+- Both GCC and Clang support tail-call optimization (TCO) via `CLX_MUSTTAIL`. On Clang this uses `[[clang::musttail]]`, on GCC it uses `[[gnu::musttail]]`.
 
 ### Windows
 

@@ -114,38 +114,47 @@ end
 
 ## 2. Inline caching
 
-### CacheSlot for table access
+### InlineCache for table access
 
-Each string-keyed table access site in the source gets a dedicated `CacheSlot`:
+Each LTable carries an embedded 4-entry inline cache (64 bytes):
 
 ```cpp
-struct CacheSlot {
-    uint64_t table_val;     // Cached table pointer (raw bits)
-    uint32_t shape_version; // Table shape version for staleness detection
-    LValue    cached;       // Cached value (non-GC only)
-    bool      valid;        // Is the cache valid?
+struct LTable {
+    static constexpr int IC_SIZE = 4;
+
+    struct InlineCache {
+        uint64_t key_payload = 0;  // Key's raw payload for fast comparison
+        uint32_t entry_idx = 0;    // Hash entry index
+        uint32_t table_ver = 0;    // Snapshot of hash_version at insertion
+    };
+
+    InlineCache ic[IC_SIZE];       // 4 entries × 16 bytes = 64 bytes
 };
 ```
 
-On repeated access to the same table key, the cache skips the hash probe entirely:
+The IC is indexed by `key ^ (key >> 17) ^ (key >> 33) % 4` — a cheap bit-mix of the key's
+64-bit payload, replacing the former wyhash64. On a hit (key_payload matches, table_ver matches
+`hash_version`, entry is non-nil), the hash probe is skipped entirely:
 
 ```lua
 -- First access: full hash probe
 local x = obj.value
 
--- Subsequent accesses: single pointer + version check
-local y = obj.value  -- Cache hit if same table and shape unchanged
+-- Subsequent accesses: single payload + version check
+local y = obj.value  -- Cache hit if same key and no structural mutation
 ```
 
-**Shape version guards**: Tables increment `shape_version` on every write. CacheSlots check
-the version to detect stale cached values, preventing incorrect reads after mutations.
+**Hash version guards**: Tables increment `hash_version` only on structural changes (inserts
+and deletes that alter the hash probe sequence), not on value-only overwrites. This means
+read-then-write patterns (e.g., `t[k] = t[k] + 1`) hit the cache on the read even when the
+value is overwritten, because the structural shape hasn't changed.
 
-**GC safety**: Only non-GC values (numbers, integers, booleans, nil) are cached to avoid
-dangling pointers after garbage collection.
+**No per-entry versioning**: The old system tracked a `version` field per `HashEntry` and
+invalidated on every write. The current system uses the single table-level `hash_version`,
+reducing overhead and improving cache hit rates for update-heavy workloads.
 
-**Non-global tables**: CacheSlot works for any identifier table — globals, locals, and function
-parameters — not just globals. This enables caching for patterns like `bodies[i].x` where
-`bodies` is a function parameter.
+**Works for any hash key**: InlineCache operates on raw key payload bits, not on identifier
+names. It works for globals, locals, function parameters, and computed string keys alike.
 
 ## 2.5 SIMD runtime scans
 
@@ -213,7 +222,7 @@ avalanche. Processes 8-byte chunks with safe tail handling for 1-7 byte remainde
 `intern_preallocated()` adopts a pre-formatted buffer directly into the StringPool, cutting
 string concat from 3 heap allocations to 1 (or 0 on pool hit).
 
-## 4. Code oeneration optimizations
+## 4. Code generation optimizations
 
 ### Loop transformations
 
@@ -251,7 +260,17 @@ Small functions are inlined at compile time through C++ compiler optimizations (
 All arithmetic operators (`add`, `sub`, `mul`, etc.) are marked `CLX_INLINE`
 with `always_inline` attributes.
 
-### SIMD vctorization
+### Tail-call optimization
+
+The `CLX_MUSTTAIL` attribute enforces guaranteed tail calls on supported compilers:
+
+- **Clang**: `[[clang::musttail]]` via `__has_builtin(__builtin_musttail)`
+- **GCC**: `[[gnu::musttail]]` via `__has_cpp_attribute(gnu::musttail)`
+- **MSVC / other**: TCO should be autodetected by the compiler
+
+This is used for tail-recursive function calls and certain dispatch paths, converting O(n) stack usage into O(1) for tail-recursive patterns.
+
+### SIMD vectorization
 
 The C++ compiler can vectorize simple loops when using `-O3 -march=native`:
 
@@ -321,6 +340,15 @@ string interning on every dispatch.
 
 String length is read from the baked allocation header (`ptr[-4..ptr[-1]]`), avoiding
 `strlen` entirely. For tables with dense arrays, `#` returns `array_size` directly.
+
+### Table arithmetic (table_op)
+
+The `+=`, `-=`, `*=`, `/=` operators on table fields (`t[k] += n`) are handled by a
+templated `table_op` helper in the runtime. It inlines the get-type-check-set sequence
+for `Double`, `Int64`, and `Nil` cases, falling back to full `clx::table_get`/`clx::table_set`
+for metamethod or non-numeric values. The codegen emits `table_increment`, `table_decrement`,
+`table_multiply`, or `table_divide` via `emitTableOp`, avoiding duplicated emit logic for
+each compound assignment operator.
 
 ## Optimization levels
 

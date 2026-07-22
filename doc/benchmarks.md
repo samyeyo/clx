@@ -95,9 +95,8 @@ Performance improvements vs lua 5.5 (10 runs average, single CPU, hyperfine) :
 ## Benchmark descriptions
 
 ### `fib.lua` — recursive Fibonacci
-Classic doubly-recursive `fib(n)` with no memoisation.  Stresses function-call
-overhead and tail-call optimisation.  clx eliminates boxing for the integer (by using a fast path)
-return value and emits a direct native recursive call.
+Classic tree-recursive `fib(n)` with no memoisation (O(2^n) complexity).
+`fib(34)` computes 5702887.  Stresses function-call overhead and arithmetic performance.  clx eliminates boxing for the integer return value and emits direct native arithmetic.
 
 ### `ackermann.lua` — Ackermann function
 Deeply recursive function with no numeric regularity that prevents loop
@@ -178,9 +177,7 @@ encoder.  Stresses string concatenation, `type()` dispatch, and recursive
 function calls on mixed-type data.
 
 ### `coro.lua` — coroutine yield
-Minimal coroutine smoke-test: a single producer yields four values to a
-consumer.  Measures raw coroutine creation and resume/yield overhead in
-isolation.
+Runs 5 million resume/yield cycles between a producer and consumer, summing the yielded values (expected result: 12500002500000).  Measures raw coroutine creation and resume/yield overhead at scale.
 
 ### `canada.lua` — GeoJSON parsing  *(real-world workload)*
 Parses the canonical 2.2 MB `canada.json` file (the Canada GeoJSON polygon
