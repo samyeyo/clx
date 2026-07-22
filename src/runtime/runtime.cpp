@@ -55,23 +55,28 @@ static void fiber_entry_impl(LThread *t) {
     LState *L = t->state;
     try {
         clx::LValue args[8];
-        size_t argc = t->resume_args.count < 8 ? t->resume_args.count : 8;
+        size_t argc = t->resume_args_count < 8 ? t->resume_args_count : 8;
         for (size_t i = 0; i < argc; ++i)
-            args[i] = t->resume_args[i];
-        t->resume_args = MultiValue();
+            args[i] = t->resume_args_buf[i];
+        t->resume_args_count = 0;
 
         size_t prev_top = L->shadow_top;
         for (size_t i = 0; i < argc; ++i)
             L->shadow_stack[L->shadow_top++] = TypedSlot(&args[i].val, &args[i].type);
-        t->yield_args = call_function(L, t->function, args, argc, "coroutine", 0);
+        MultiValue ret = call_function(L, t->function, args, argc, "coroutine", 0);
+        t->yield_args_count = ret.count;
+        for (size_t i = 0; i < ret.count && i < 3; ++i)
+            t->yield_args_buf[i] = ret[i];
         L->shadow_top = prev_top;
         t->status = THREAD_DEAD;
     } catch (const LRuntimeException &e) {
-        t->yield_args = MultiValue(e.error_obj);
+        t->yield_args_buf[0] = e.error_obj;
+        t->yield_args_count = 1;
         t->status = THREAD_DEAD;
         t->has_error = true;
     } catch (...) {
-        t->yield_args = MultiValue(clx::LValue("unknown error"));
+        t->yield_args_buf[0] = clx::LValue("unknown error");
+        t->yield_args_count = 1;
         t->status = THREAD_DEAD;
         t->has_error = true;
     }
@@ -133,7 +138,10 @@ LValue create_thread(LState *L, const LValue &func, double stack_size) {
 //------------------ resume: resumes a suspended coroutine (public API)
 MultiValue resume(LState *L, const LValue &thread, const LValue *args, size_t count) {
     LThread *t = static_cast<LThread *>(thread.as_pointer());
-    t->resume_args = MultiValue(args, count);
+
+    t->resume_args_count = count;
+    for (size_t i = 0; i < count && i < 3; ++i)
+        t->resume_args_buf[i] = args[i];
     t->caller = L->running_thread;
     t->caller->status = THREAD_NORMAL;
     t->status = THREAD_RUNNING;
@@ -147,12 +155,14 @@ MultiValue resume(LState *L, const LValue &thread, const LValue *args, size_t co
     swapcontext(&t->caller->ctx, &t->ctx);
 #endif
 
-    std::vector<LValue> ret;
-    ret.push_back(boolean(!t->has_error));
-    for (size_t i = 0; i < t->yield_args.count; ++i)
-        ret.push_back(t->yield_args[i]);
+    LValue ret_buf[3];
+    size_t ret_count = 0;
+    ret_buf[ret_count++] = boolean(!t->has_error);
+    size_t yc = t->yield_args_count;
+    for (size_t i = 0; i < yc && ret_count < 3; ++i)
+        ret_buf[ret_count++] = t->yield_args_buf[i];
     t->has_error = false;
-    return MultiValue(ret);
+    return MultiValue(ret_buf, ret_count, L);
 }
 
 //------------------ yield: yields from a coroutine (public API)
@@ -160,7 +170,9 @@ MultiValue yield(LState *L, const LValue *args, size_t count) {
     LThread *t = L->running_thread;
     if (t->is_main)
         clx::error(L, "attempt to yield from outside a coroutine");
-    t->yield_args = MultiValue(args, count);
+    t->yield_args_count = count;
+    for (size_t i = 0; i < count && i < 3; ++i)
+        t->yield_args_buf[i] = args[i];
     t->status = THREAD_SUSPENDED;
 
     LThread *caller = t->caller;
@@ -181,7 +193,11 @@ MultiValue yield(LState *L, const LValue *args, size_t count) {
         throw LRuntimeException(clx::string(L, "thread is being closed"));
     }
 
-    return t->resume_args;
+    size_t rc = t->resume_args_count;
+    if (rc == 0) return MultiValue();
+    if (rc == 1) return MultiValue(t->resume_args_buf[0]);
+    if (rc == 2) return MultiValue(t->resume_args_buf[0], t->resume_args_buf[1]);
+    return MultiValue(t->resume_args_buf[0], t->resume_args_buf[1], t->resume_args_buf[2]);
 }
 
 //------------------ close_thread: closes a suspended coroutine (public API)
@@ -873,6 +889,7 @@ LState::~LState() {
         ff = next;
     }
     free_functions = nullptr;
+    std::free(overflow_heap);
 }
 
 static void clx_trigger_gc(LState *L, LTable *t) {
@@ -1046,6 +1063,7 @@ bool LState::gc_step() {
         gc_finalizable_ud = nullptr;
         gc_prev = nullptr;
         gc_phase = GCPhase::Idle;
+        overflow_heap_used = 0;
         size_t live = allocated_bytes;
         size_t headroom = std::clamp(live / 2, size_t(512 * 1024), size_t(8 * 1024 * 1024));
         gc_bytes_threshold = live + headroom;
@@ -1170,10 +1188,10 @@ void LState::collect_garbage() {
         } else if (curr->type == static_cast<uint8_t>(Thread)) {
             LThread *th = static_cast<LThread *>(curr);
             push_if_needed(th->function);
-            for (size_t i = 0; i < th->yield_args.count; ++i)
-                push_if_needed(th->yield_args[i]);
-            for (size_t i = 0; i < th->resume_args.count; ++i)
-                push_if_needed(th->resume_args[i]);
+            for (size_t i = 0; i < th->yield_args_count && i < 3; ++i)
+                push_if_needed(th->yield_args_buf[i]);
+            for (size_t i = 0; i < th->resume_args_count && i < 3; ++i)
+                push_if_needed(th->resume_args_buf[i]);
         } else if (curr->type == static_cast<uint8_t>(Function)) {
             LCFunction *f = static_cast<LCFunction *>(curr);
             if (f->env)
