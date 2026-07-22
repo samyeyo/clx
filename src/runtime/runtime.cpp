@@ -147,12 +147,19 @@ MultiValue resume(LState *L, const LValue &thread, const LValue *args, size_t co
     swapcontext(&t->caller->ctx, &t->ctx);
 #endif
 
-    std::vector<LValue> ret;
-    ret.push_back(boolean(!t->has_error));
+    size_t total = 1 + t->yield_args.count;
+    LValue *buf;
+    LValue inline_buf[3];
+    if (total <= 3) {
+        buf = inline_buf;
+    } else {
+        buf = L->alloc_overflow(total);
+    }
+    buf[0] = boolean(!t->has_error);
     for (size_t i = 0; i < t->yield_args.count; ++i)
-        ret.push_back(t->yield_args[i]);
+        buf[1 + i] = t->yield_args[i];
     t->has_error = false;
-    return MultiValue(ret);
+    return MultiValue(buf, total, L);
 }
 
 //------------------ yield: yields from a coroutine (public API)
