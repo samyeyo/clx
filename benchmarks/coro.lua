@@ -1,11 +1,15 @@
-local c = coroutine.wrap(function()
-    coroutine.yield(10)
-    coroutine.yield(20)
-    coroutine.yield(30)
-    coroutine.yield(40)
+local N = 5000000
+
+local co = coroutine.create(function()
+    for i = 1, N do
+        coroutine.yield(i)
+    end
 end)
 
-print(c())
-print(c())
-print(c())
-print(c())
+local sum = 0
+for i = 1, N do
+    local ok, val = coroutine.resume(co)
+    sum = sum + val
+end
+
+print("sum = " .. string.format("%.0f", sum))
