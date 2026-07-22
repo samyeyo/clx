@@ -16,6 +16,7 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 * Enabled `[[clang::musttail]]` for Clang alongside existing GCC `[[gnu::musttail]]`
 * Removed ScopeGuard from generated function bodies — caller-side shadow_top save/restore instead; block/for-loop ScopeGuards kept for GC correctness
 * Replaced `wyhash64` with `key ^ (key >> 17) ^ (key >> 33)` for inline cache indexing — cheaper hash function
+* Coroutine resume() return values now use stack buffer (3 inline) with bump allocator overflow instead of std::vector heap allocation
 * Removed `version` field from `HashEntry` — per-entry versioning replaced by table-level `hash_version`
 * Code formatting applied with WebKit style via clang-format
 * Introduce AnalysisState as a shared data structure between Optimizer and CodeEmitter (7190cd0)
