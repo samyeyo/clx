@@ -409,7 +409,7 @@
         }
 
         .code-block {
-            background: var(--code-bg);
+            background: var(--card);
             border: 1px solid var(--border);
             border-radius: 10px;
             overflow: hidden;
@@ -439,6 +439,7 @@
             padding: 14px 18px;
             font-family: 'Cascadia Code', 'SF Mono', 'Consolas', 'Courier New', monospace;
             font-size: 0.8125rem;
+            font-weight: 500;
             line-height: 1.8;
             color: var(--text);
             overflow-x: auto;
@@ -747,17 +748,20 @@
                     High performance native Lua compiler
                 </h2>
                 <p>
-                    <span class="bright">clx</span> is an ahead-of-time (AOT) native compiler that compiles Lua 5.5 source code into optimized machine code. By eliminating the need for a runtime interpreter or bytecode virtual machine, <span class="bright">clx</span> provides predictable execution time, minimal latency, and a reduced resource footprint.
+                    Welcome to <span class="bright">clx</span> — a native Lua compiler that turns your Lua scripts into fast, standalone executables. No interpreter needed, no runtime dependencies — just your code compiled to machine code.
                 </p>
-                <p>
-                    <span class="bright">clx</span> transpiles Lua source code into optimized C++ code, which is then compiled using the system's C++ compiler to produce native machine code. This architecture provides performance up to 62x faster than standard Lua interpreters, thanks to static analysis and high performance optimizations.
-                </p>
-                <p>
-                    <span class="bright">clx</span> generates standalone binaries with zero external dependencies. The entire toolchain is fully open source and released under the permissive MIT License.
-                </p>
-                <p>
-                    Due to the static compilation model inherent to an AOT compiler, <span class="inline-code">load()</span>, <span class="inline-code">dofile()</span>, <span class="inline-code">loadfile()</span>, <span class="inline-code">string.dump()</span>, and the , <span class="inline-code">debug</span> library are not available. Dynamic code loading requires a runtime interpreter, and debug introspection requires runtime metadata that AOT compilation does not preserve.
-                </p>
+                <div style="display:flex;justify-content:center;margin:2.5rem 0">
+                    <div class="code-block" style="max-width:420px;box-shadow:var(--shadow-card);border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card)">
+                        <div class="code-body" style="padding:1.25rem 1.5rem"><span class="comment"># Write a Lua program</span>
+<span class="keyword">echo</span> 'print("Hello from clx!")' > hello.lua
+
+<span class="comment"># Compile to a native binary</span>
+clx hello.lua
+
+<span class="comment"># Run it — zero dependencies, instant startup</span>
+./hello</div>
+                    </div>
+                </div>
                 <div class="about-grid">
                     <div class="about-stat">
                         <div class="value">Multiplatform</div>
@@ -1394,8 +1398,8 @@ end
                     <p><span class="bright">Lexer</span> — Converts source to token stream (keywords, identifiers, literals, operators, delimiters).</p>
                     <p><span class="bright">Parser</span> — Recursive descent parser builds an AST with statement, expression, block, and function nodes.</p>
                     <p><span class="bright">AST Nodes</span> — Core node types: Block, Identifier, BinaryOp, UnaryOp, FunctionDef, TableConstructor, ForStatement, WhileStatement, IfStatement, CallExpression.</p>
-                    <p><span class="bright">Optimizer</span> — Analyzes the AST and annotates nodes with optimization hints: Numeric fast-path (direct C++ arithmetic), variable scope resolution, table purity analysis, constant folding preparation, shape version tracking for inline cache invalidation, <span class="inline-code">yields_number</span> analysis for numeric for loops.</p>
-                    <p><span class="bright">Code Generator</span> — Produces C++ code with fast-path for numeric operations, slow-path for dynamic operations, loop transformation, <span class="inline-code">[[likely]]</span> branch prediction hints, per-call-site <span class="inline-code">CacheSlot</span> inline caching, StringBuilder-based concatenation, and wyhash-based string hashing.</p>
+                    <p><span class="bright">Optimizer</span> — Analyzes the AST and annotates nodes with optimization hints: Numeric fast-path (direct C++ arithmetic), variable scope resolution, table purity analysis, constant folding preparation, table version tracking for inline cache invalidation, <span class="inline-code">yields_number</span> analysis for numeric for loops.</p>
+                    <p><span class="bright">Code Generator</span> — Produces C++ code with fast-path for numeric operations, slow-path for dynamic operations, loop transformation, <span class="inline-code">[[likely]]</span> branch prediction hints, per-LTable <span class="inline-code">InlineCache</span> (4 entries) for string-keyed table access, StringBuilder-based concatenation, and wyhash-based string hashing.</p>
                     <p><span class="bright">Runtime Library</span> — Implements Lua semantics: core VM (GC, tables, metamethods, arithmetic, bitwise ops), base library, math library, coroutines, module loading, and string library.</p>
                 </div>
                 <div class="doc-section">
@@ -1414,7 +1418,6 @@ end
 │   │   ├── lexer.h/cpp          # Tokenizer/scanner
 │   │   ├── parser.h/cpp         # Recursive descent parser
 │   │   ├── nodes.h              # AST node definitions
-│   │   └── visitor.h/cpp        # AST visitor pattern
 │   ├── optimizer/
 │   │   ├── optimizer.h           # Optimization passes
 │   │   └── optimizer.cpp         # Optimization implementation
@@ -1454,12 +1457,12 @@ end
                     <h4>wyhash</h4>
                     <p>Fast, high-quality hash function used for table keys and string interning. Uses compile-time constant secrets with 128-bit multiply for excellent avalanche. For interned strings, the hash is baked into the allocation header, making <span class="inline-code">lvalue_hash()</span> a single 4-byte load.</p>
                     <p>For strings ≤8 bytes, <span class="inline-code">swar_hash_8()</span> replaces <span class="inline-code">wyhash_str</span> — loads all bytes into one register with a single <span class="inline-code">memcpy</span> and mixes via <span class="inline-code">wyhash64</span>. Used consistently for both TAG_ISTR inline strings and short interned strings so cross-type hash compatibility is maintained.</p>
-                    <h4>CacheSlot Inline Caching</h4>
-                    <p>Per-call-site cache slots for string-keyed table access. Each access site in the source gets one <span class="inline-code">CacheSlot</span> that caches the last table pointer and value. Uses <span class="inline-code">shape_version</span> to detect stale cached values after table writes. Only caches non-GC values to avoid dangling pointers after collection. States: valid/invalid based on table pointer and shape version match. Works for any <span class="inline-code">NodeType::Identifier</span> table — globals, locals, and function parameters.</p>
+                    <h4>Per-LTable Inline Cache</h4>
+                    <p>Each LTable embeds a 4-entry <span class="inline-code">InlineCache</span> for string-keyed table access. Indexed by <span class="inline-code">key ^ (key >> 17) ^ (key >> 33) % 4</span>. Stores key payload, entry index, and table <span class="inline-code">hash_version</span>. Valid when key matches and hash_version hasn't changed. Uses <span class="inline-code">hash_version</span> (structural changes only — inserts/deletes/rehash) not per-entry version, so read-then-write patterns still hit. 64 bytes overhead per LTable.</p>
                     <h4>StringBuilder</h4>
                     <p>O(n) string concatenation that avoids the O(n²) quadratic blow-up of repeated <span class="inline-code">s = s .. part</span> patterns. Uses inline storage for up to 8 parts, grows to heap allocation when needed. Produces a single interned string with baked hash on <span class="inline-code">to_string()</span>.</p>
-                    <h4>Shape Version Tracking</h4>
-                    <p>Tables track a <span class="inline-code">shape_version</span> that increments on every write. CacheSlots check the version to detect stale cached values, preventing incorrect reads after table mutations.</p>
+                    <h4>Table Version Tracking</h4>
+                    <p>Tables track <span class="inline-code">hash_version</span> (increments on structural changes: inserts, deletes, rehash) and <span class="inline-code">array_version</span> (increments on array-size changes). The inline cache checks <span class="inline-code">hash_version</span> to detect stale entries after table mutations.</p>
                     <h4>SIMD Runtime Scans</h4>
                     <p><span class="inline-code">ValueType</span> is a <span class="inline-code">uint8_t</span> enum, so 16 type tags fit in a single 128-bit register. The runtime uses SSE2 (x64) or NEON (ARM64) to accelerate hot type-array scans: <span class="inline-code">rawlen()</span> (finds first nil in array), <span class="inline-code">next()</span> (finds first non-nil), <span class="inline-code">table_concat</span> validation (validates String/Double/Int64), and GC mark loop (skips nil entries). Scalar fallback handles non-16-byte-aligned remainders.</p>
                 </div>
@@ -1543,7 +1546,7 @@ end</div>
                 </div>
                 <div class="doc-section">
                     <h3>Inline Caching</h3>
-                    <p>Each string-keyed table access site gets a dedicated <span class="inline-code">CacheSlot</span>. On repeated access to the same table key, the cache skips the hash probe entirely. Shape version guards detect stale cached values after table mutations. Only non-GC values are cached to avoid dangling pointers.</p>
+                    <p>Each LTable embeds a 4-entry <span class="inline-code">InlineCache</span>. On repeated access to the same string key on the same table, the cache skips the hash probe entirely. <span class="inline-code">hash_version</span> guards detect stale entries after structural table mutations. Read-then-write patterns still hit because only inserts/deletes/rehash invalidate the cache — value updates don't.</p>
                 </div>
                 <div class="doc-section">
                     <h3>String Optimizations</h3>
@@ -1659,21 +1662,20 @@ end</div>
                     <div class="code-block">
                         <div class="code-body">__add  __sub  __mul  __div  __mod  __pow  __unm
 __len  __eq   __lt   __le   __concat
-__index  __newindex  __call  __tostring  __gc  __metatable</div>
+__index  __newindex  __call  __tostring  __gc  __close  __metatable</div>
                     </div>
                 </div>
                 <div class="doc-section">
-                    <h3>CacheSlot Inline Caching</h3>
+                    <h3>Per-LTable Inline Cache</h3>
                     <div class="code-block">
-                        <div class="code-header"><span class="lang">cpp</span><span>CacheSlot structure</span></div>
-                        <div class="code-body">struct CacheSlot {
-    uint64_t table_val;     // Cached table pointer (raw bits)
-    uint32_t shape_version; // Table shape version for staleness detection
-    LValue    cached;       // Cached value (non-GC only)
-    bool      valid;        // Cache validity flag
+                        <div class="code-header"><span class="lang">cpp</span><span>InlineCache structure (embedded in LTable)</span></div>
+                        <div class="code-body">struct InlineCache {
+    uint64_t key_payload;  // Raw key payload for fast comparison
+    uint32_t entry_idx;    // Index into hash entries array
+    uint32_t table_ver;    // Snapshot of hash_version at populate time
 };</div>
                     </div>
-                    <p>Per-call-site cache for string-keyed table access. Valid when table pointer matches, shape version hasn't changed, and cached value is not a GC object (avoiding dangling pointers). States: valid/invalid based on table pointer and shape version match.</p>
+                    <p>4-entry per-LTable cache for string-keyed table access. Indexed by <span class="inline-code">key ^ (key >> 17) ^ (key >> 33) % 4</span>. Valid when key matches and hash_version hasn't changed. Only structural changes (inserts/deletes/rehash) invalidate — value updates don't. 64 bytes overhead per LTable.</p>
                 </div>
                 <div class="doc-section">
                     <h3>Closures and Upvalues</h3>
@@ -1716,8 +1718,8 @@ __index  __newindex  __call  __tostring  __gc  __metatable</div>
                                 <tr><td style="padding-left:32px">keys</td><td style="color:var(--text-muted)">hash_size &times; 8 bytes</td></tr>
                                 <tr><td style="padding-left:32px">vals</td><td style="color:var(--text-muted)">hash_size &times; 8 bytes</td></tr>
                                 <tr><td style="padding-left:32px">nexts</td><td style="color:var(--text-muted)">hash_size &times; 2 bytes</td></tr>
-                                <tr><td style="padding-left:32px">shape_version</td><td style="color:var(--text-muted)">4 bytes</td></tr>
-                                <tr><td style="padding-left:32px">free_head</td><td style="color:var(--text-muted)">2 bytes</td></tr>
+                                <tr><td style="padding-left:32px">hash_version, array_version</td><td style="color:var(--text-muted)">8 bytes</td></tr>
+                                <tr><td style="padding-left:32px">inline cache (4 × 16B)</td><td style="color:var(--text-muted)">64 bytes</td></tr>
                             </tbody>
                         </table>
                     </div>
