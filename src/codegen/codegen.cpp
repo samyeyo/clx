@@ -1078,10 +1078,11 @@ void CodeEmitter::emitCallExpression(const ASTNode &node, uint32_t node_idx) {
             if (_chit != state.hoisted_lookups.end()) {
                 auto _cf_it = state.hoisted_cfuncs.find(_chit->second);
                 if (_cf_it != state.hoisted_cfuncs.end()) {
+                    out << "    size_t _ssaved = L->shadow_top;\n";
                     out << "    for (size_t i = 0; i < _dyn_count; ++i) L->shadow_stack[L->shadow_top++] = "
                            "clx::TypedSlot(&_dyn_buf[i].val, &_dyn_buf[i].type);\n";
                     out << "    clx::MultiValue _main_ret = clx::" << _cf_it->second << "(L, _dyn_buf, _dyn_count);\n";
-                    out << "    L->shadow_top -= _dyn_count;\n";
+                    out << "    L->shadow_top = _ssaved;\n";
                 } else {
                     goto _call_direct_dyn;
                 }
@@ -1095,15 +1096,17 @@ void CodeEmitter::emitCallExpression(const ASTNode &node, uint32_t node_idx) {
                 ctx.nodes[node.as.call_expr.target].as.ident.name, ctx.nodes[node.as.call_expr.target].as.ident.length);
             auto _alias_it = state.builtin_aliases.find(std::string(_alias_nm));
             if (_alias_it != state.builtin_aliases.end() && state.reassigned_vars.count(std::string(_alias_nm)) == 0) {
+                out << "    size_t _ssaved = L->shadow_top;\n";
                 out << "    for (size_t i = 0; i < _dyn_count; ++i) L->shadow_stack[L->shadow_top++] = "
                        "clx::TypedSlot(&_dyn_buf[i].val, &_dyn_buf[i].type);\n";
                 out << "    clx::MultiValue _main_ret = clx::" << _alias_it->second << "(L, _dyn_buf, _dyn_count);\n";
-                out << "    L->shadow_top -= _dyn_count;\n";
+                out << "    L->shadow_top = _ssaved;\n";
             } else {
                 goto _call_direct_dyn;
             }
         } else {
         _call_direct_dyn:;
+            out << "    size_t _ssaved = L->shadow_top;\n";
             out << "    for (size_t i = 0; i < _dyn_count; ++i) L->shadow_stack[L->shadow_top++] = "
                    "clx::TypedSlot(&_dyn_buf[i].val, &_dyn_buf[i].type);\n";
             out << "    clx::MultiValue _main_ret = clx::call_direct(L, ";
@@ -1112,7 +1115,7 @@ void CodeEmitter::emitCallExpression(const ASTNode &node, uint32_t node_idx) {
             else
                 emit_node(node.as.call_expr.target);
             out << ", _dyn_buf, _dyn_count, \"" << ctx.filename << "\", " << node.line << ");\n";
-            out << "    L->shadow_top -= _dyn_count;\n";
+            out << "    L->shadow_top = _ssaved;\n";
         }
 
         if (is_method_call)
@@ -1153,12 +1156,13 @@ void CodeEmitter::emitCallExpression(const ASTNode &node, uint32_t node_idx) {
                 if (_chit != state.hoisted_lookups.end()) {
                     auto _cf_it = state.hoisted_cfuncs.find(_chit->second);
                     if (_cf_it != state.hoisted_cfuncs.end()) {
+                        out << "    size_t _ssaved = L->shadow_top;\n";
                         out << "    for (size_t i = 0; i < " << node.as.call_expr.arg_count
                             << "; ++i) L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&args[i].val, "
                                "&args[i].type);\n";
                         out << "    clx::MultiValue _main_ret = clx::" << _cf_it->second << "(L, args, "
                             << node.as.call_expr.arg_count << ");\n";
-                        out << "    L->shadow_top -= " << node.as.call_expr.arg_count << ";\n";
+                        out << "    L->shadow_top = _ssaved;\n";
                     } else {
                         goto _call_direct_normal;
                     }
@@ -1173,16 +1177,18 @@ void CodeEmitter::emitCallExpression(const ASTNode &node, uint32_t node_idx) {
                 auto _alias_it = state.builtin_aliases.find(std::string(_alias_nm));
                 if (_alias_it != state.builtin_aliases.end()
                     && state.reassigned_vars.count(std::string(_alias_nm)) == 0) {
+                    out << "    size_t _ssaved = L->shadow_top;\n";
                     out << "    for (size_t i = 0; i < " << node.as.call_expr.arg_count
                         << "; ++i) L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&args[i].val, &args[i].type);\n";
                     out << "    clx::MultiValue _main_ret = clx::" << _alias_it->second << "(L, args, "
                         << node.as.call_expr.arg_count << ");\n";
-                    out << "    L->shadow_top -= " << node.as.call_expr.arg_count << ";\n";
+                    out << "    L->shadow_top = _ssaved;\n";
                 } else {
                     goto _call_direct_normal;
                 }
             } else {
             _call_direct_normal:
+                out << "    size_t _ssaved = L->shadow_top;\n";
                 out << "    for (size_t i = 0; i < " << node.as.call_expr.arg_count
                     << "; ++i) L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&args[i].val, &args[i].type);\n";
                 out << "    clx::MultiValue _main_ret = clx::call_direct(L, ";
@@ -1192,7 +1198,7 @@ void CodeEmitter::emitCallExpression(const ASTNode &node, uint32_t node_idx) {
                     emit_node(node.as.call_expr.target);
                 out << ", args, " << node.as.call_expr.arg_count << ", \"" << ctx.filename << "\", " << node.line
                     << ");\n";
-                out << "    L->shadow_top -= " << node.as.call_expr.arg_count << ";\n";
+                out << "    L->shadow_top = _ssaved;\n";
             }
         } else {
             if (is_direct) {
@@ -1517,7 +1523,6 @@ void CodeEmitter::emitFunctionDef(const ASTNode &node, uint32_t node_idx) {
         out << "[=]";
     }
     out << "(clx::LState* L, const clx::LValue* args, size_t arg_count) mutable -> clx::MultiValue {\n";
-    out << "clx::ScopeGuard _sg_func(L);\n";
     out << "clx::LValue _ENV = (L->current_func && L->current_func->env) ? clx::LValue(clx::ValueType::Table, "
            "L->current_func->env) : clx::LValue(clx::ValueType::Table, L->_G);\n";
     uint32_t saved_arena_func = state.current_arena_func;
@@ -3930,6 +3935,7 @@ void CodeEmitter::emitGenericForStatement(const ASTNode &node, uint32_t node_idx
                 << call_node.as.call_expr.arg_count << ");\n";
         } else {
             if (call_node.as.call_expr.arg_count > 0) {
+                out << "        size_t _ssaved = L->shadow_top;\n";
                 out << "        for (size_t i = 0; i < " << call_node.as.call_expr.arg_count
                     << "; ++i) L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&args_" << iter_node
                     << "[i].val, &args_" << iter_node << "[i].type);\n";
@@ -3940,7 +3946,7 @@ void CodeEmitter::emitGenericForStatement(const ASTNode &node, uint32_t node_idx
                 << ", " << call_node.as.call_expr.arg_count << ", \"" << ctx.filename << "\", " << call_node.line
                 << ");\n";
             if (call_node.as.call_expr.arg_count > 0) {
-                out << "        L->shadow_top -= " << call_node.as.call_expr.arg_count << ";\n";
+                out << "        L->shadow_top = _ssaved;\n";
             }
         }
         out << "    }\n";
