@@ -1804,7 +1804,7 @@ void CodeEmitter::emitReturnStatement(const ASTNode &node, uint32_t node_idx) {
         if (state.in_function_def) {
             if (state.current_arena_func != 0xFFFFFFFF)
                 out << "    clx::arena_reset(&_arena);\n";
-            out << "    return clx::MultiValue(_ret_args, " << v_count << ");\n";
+            out << "    return clx::MultiValue(_ret_args, " << v_count << ", L);\n";
         } else {
             out << "    return _ret_args[0];\n";
         }
@@ -1829,7 +1829,7 @@ void CodeEmitter::emitReturnStatement(const ASTNode &node, uint32_t node_idx) {
         if (state.in_function_def) {
             if (state.current_arena_func != 0xFFFFFFFF)
                 out << "    clx::arena_reset(&_arena);\n";
-            out << "    return clx::MultiValue(_ret_vals);\n";
+            out << "    return clx::MultiValue(_ret_vals, L);\n";
         } else {
             out << "    return (!_ret_vals.empty()) ? _ret_vals[0] : clx::LValue();\n";
         }
@@ -4188,7 +4188,7 @@ void CodeEmitter::emitTableAccess(const ASTNode &node, uint32_t node_idx) {
 //------------------ emitVararg: handles NodeType::Vararg
 void CodeEmitter::emitVararg(const ASTNode &node, uint32_t node_idx) {
     if (state.expect_multivalue)
-        out << "clx::MultiValue(_va_args, _va_count)";
+        out << "clx::MultiValue(_va_args, _va_count, L)";
     else
         out << "(_va_count > 0 ? _va_args[0] : clx::LValue())";
 }
