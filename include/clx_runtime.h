@@ -1860,7 +1860,7 @@ CLX_INLINE LValue make_string_pooled(LState *L, const char *s, size_t len) {
 }
 
 //------------------ Table read with __index fallback
-CLX_INLINE_HOT LValue table_get(LState *L, const LValue &obj, const LValue &key) {
+CLX_INLINE LValue table_get(LState *L, const LValue &obj, const LValue &key) {
     LTable *mt = nullptr;
     LValue direct;
 
@@ -1930,7 +1930,7 @@ CLX_INLINE_HOT LValue table_get(LState *L, const LValue &obj, const LValue &key)
 }
 
 //------------------ Table write with __newindex fallback
-CLX_INLINE_HOT void table_set(LState *L, const LValue &obj, const LValue &key, const LValue &val) {
+CLX_INLINE void table_set(LState *L, const LValue &obj, const LValue &key, const LValue &val) {
     LTable *mt = nullptr;
 
     if (obj.type == ValueType::Table) {
@@ -1981,7 +1981,7 @@ CLX_INLINE_HOT void table_set(LState *L, const LValue &obj, const LValue &key, c
 }
 
 //------------------ Integer-key table read (fast path)
-CLX_INLINE_HOT LValue table_get_int(LState *L, const LValue &obj, size_t idx) {
+CLX_INLINE LValue table_get_int(LState *L, const LValue &obj, size_t idx) {
     LTable *mt = nullptr;
     LValue key_val = LValue(static_cast<int64_t>(idx));
 
@@ -2020,7 +2020,7 @@ CLX_INLINE_HOT LValue table_get_int(LState *L, const LValue &obj, size_t idx) {
 }
 
 //------------------ Integer-key table write (fast path)
-CLX_INLINE_HOT void table_set_int(LState *L, const LValue &obj, size_t idx, const LValue &val) {
+CLX_INLINE void table_set_int(LState *L, const LValue &obj, size_t idx, const LValue &val) {
     LValue key_val = LValue(static_cast<int64_t>(idx));
 
     if (obj.type == ValueType::Table) {
