@@ -4061,35 +4061,53 @@ void CodeEmitter::emitTableConstructor(const ASTNode &node, uint32_t node_idx) {
     } else {
         out << ");\nL->shadow_stack[L->shadow_top++] = clx::TypedSlot(&_t.val, &_t.type);\n";
     }
-    if (_has_va)
-        out << "size_t _ai = 1;\n";
-    uint32_t array_index = 1;
+    bool _all_implicit = !_has_va && !_is_arena;
+    if (_all_implicit) {
+        for (uint32_t i = 0; i < node.as.table_cons.count; ++i) {
+            uint32_t k = ctx.block_statements[node.as.table_cons.first_item + i * 2];
+            if (k != 0xFFFFFFFF) { _all_implicit = false; break; }
+        }
+    }
+    if (_all_implicit && node.as.table_cons.count > 0) {
+        out << "{\nauto* _ta = static_cast<clx::LTable*>(_t.as_pointer());\n";
+        for (uint32_t i = 0; i < node.as.table_cons.count; ++i) {
+            uint32_t v = ctx.block_statements[node.as.table_cons.first_item + i * 2 + 1];
+            out << "{ clx::LValue _tv = ";
+            emit_node(v);
+            out << "; _ta->array[" << i << "] = _tv.val; _ta->array_types[" << i << "] = _tv.type; }\n";
+        }
+        out << "}\n";
+    } else {
+        if (_has_va)
+            out << "size_t _ai = 1;\n";
+        uint32_t array_index = 1;
 
-    for (uint32_t i = 0; i < node.as.table_cons.count; ++i) {
-        uint32_t k = ctx.block_statements[node.as.table_cons.first_item + i * 2];
-        uint32_t v = ctx.block_statements[node.as.table_cons.first_item + i * 2 + 1];
-        if (i == node.as.table_cons.count - 1
-            && (ctx.nodes[v].type == NodeType::Vararg || ctx.nodes[v].type == NodeType::CallExpression)) {
-            state.expect_multivalue = true;
-            out << "clx::MultiValue _mret_" << node_idx << " = ";
-            emit_node(v);
-            out << ";\n";
-            state.expect_multivalue = false;
-            out << "for (size_t _vi = 0; _vi < _mret_" << node_idx << ".count; ++_vi) {\n";
-            out << "  static_cast<clx::LTable*>(_t.as_pointer())->settable(";
-            out << "clx::LValue(static_cast<double>(_ai++)), _mret_" << node_idx << "[_vi]);\n";
-            out << "}\n";
-        } else {
-            out << "static_cast<clx::LTable*>(_t.as_pointer())->settable(";
-            if (k == 0xFFFFFFFF) {
-                out << "clx::LValue(static_cast<double>(" << (_has_va ? "_ai++" : std::to_string(array_index++))
-                    << "))";
+        for (uint32_t i = 0; i < node.as.table_cons.count; ++i) {
+            uint32_t k = ctx.block_statements[node.as.table_cons.first_item + i * 2];
+            uint32_t v = ctx.block_statements[node.as.table_cons.first_item + i * 2 + 1];
+            if (i == node.as.table_cons.count - 1
+                && (ctx.nodes[v].type == NodeType::Vararg || ctx.nodes[v].type == NodeType::CallExpression)) {
+                state.expect_multivalue = true;
+                out << "clx::MultiValue _mret_" << node_idx << " = ";
+                emit_node(v);
+                out << ";\n";
+                state.expect_multivalue = false;
+                out << "for (size_t _vi = 0; _vi < _mret_" << node_idx << ".count; ++_vi) {\n";
+                out << "  static_cast<clx::LTable*>(_t.as_pointer())->settable(";
+                out << "clx::LValue(static_cast<double>(_ai++)), _mret_" << node_idx << "[_vi]);\n";
+                out << "}\n";
             } else {
-                emit_node(k);
+                out << "static_cast<clx::LTable*>(_t.as_pointer())->settable(";
+                if (k == 0xFFFFFFFF) {
+                    out << "clx::LValue(static_cast<double>("
+                        << (_has_va ? "_ai++" : std::to_string(array_index++)) << "))";
+                } else {
+                    emit_node(k);
+                }
+                out << ", ";
+                emit_node(v);
+                out << ");\n";
             }
-            out << ", ";
-            emit_node(v);
-            out << ");\n";
         }
     }
     if (!_is_arena)
