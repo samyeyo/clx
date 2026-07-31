@@ -2,11 +2,15 @@
 // │  clx — Lua to C++ Native Compiler           │
 // │  Copyright (c) 2026 Tine Samir. MIT License.│
 // ├─────────────────────────────────────────────┤
-// │  coro_switch_aarch64.s                      │
+// │  coro_switch_aarch64.S                      │
 // │  ARM64 coroutine context switching primitives│
 // └─────────────────────────────────────────────┘
 
+#ifdef __APPLE__
 .section __TEXT,__text
+#else
+.text
+#endif
 .align 2
 
 // CoroutineContext struct offsets
@@ -38,8 +42,14 @@
 // Save all callee-saved registers (x19-x30, sp, d8-d15) into *ctx.
 // Returns normally — the captured return address means a later
 // switch into this context resumes after the original call.
+#ifdef __APPLE__
 .globl _clx_coro_save
 _clx_coro_save:
+#else
+.globl clx_coro_save
+.type  clx_coro_save, %function
+clx_coro_save:
+#endif
     stp x19, x20, [x0, #CTX_X19]
     stp x21, x22, [x0, #CTX_X21]
     stp x23, x24, [x0, #CTX_X23]
@@ -58,8 +68,14 @@ _clx_coro_save:
 //------------------ clx_coro_switch(CoroutineContext* from, CoroutineContext* to)
 // Save current callee-saved registers to *from, restore from *to,
 // then jump to the restored return address (context switch).
+#ifdef __APPLE__
 .globl _clx_coro_switch
 _clx_coro_switch:
+#else
+.globl clx_coro_switch
+.type  clx_coro_switch, %function
+clx_coro_switch:
+#endif
     // Save current context to [x0]
     stp x19, x20, [x0, #CTX_X19]
     stp x21, x22, [x0, #CTX_X21]
@@ -94,8 +110,14 @@ _clx_coro_switch:
 //------------------ clx_coro_init(CoroutineContext* ctx, void* stack_top, void* entry)
 // Initialise a fresh context for a new coroutine.
 // Sets sp = stack_top, lr = entry, zeros all other callee-saved slots.
+#ifdef __APPLE__
 .globl _clx_coro_init
 _clx_coro_init:
+#else
+.globl clx_coro_init
+.type  clx_coro_init, %function
+clx_coro_init:
+#endif
     str  x1, [x0, #CTX_SP]
     str  x2, [x0, #CTX_LR]
 

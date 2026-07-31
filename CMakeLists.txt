@@ -51,8 +51,12 @@ set(RUNTIME_SOURCES
 )
 
 string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _LOWER_PROC)
-if(APPLE AND _LOWER_PROC MATCHES "arm64|aarch64")
-    list(APPEND RUNTIME_SOURCES src/runtime/coro_switch_aarch64.s)
+if(_LOWER_PROC MATCHES "arm64|aarch64")
+    list(APPEND RUNTIME_SOURCES src/runtime/coro_switch_aarch64.S)
+elseif(_LOWER_PROC MATCHES "x86_64|amd64")
+    if(UNIX AND NOT APPLE)
+        list(APPEND RUNTIME_SOURCES src/runtime/coro_switch_x86_64.s)
+    endif()
 endif()
 
 add_library(clx_static STATIC ${RUNTIME_SOURCES})

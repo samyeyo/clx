@@ -82,7 +82,9 @@ static void fiber_entry_impl(LThread *t) {
 
 #if defined(_WIN32)
     SwitchToFiber(caller->fiber);
-#elif defined(__APPLE__) && defined(__aarch64__)
+#elif (defined(__APPLE__) || defined(__linux__)) && defined(__aarch64__)
+    clx_coro_switch(&t->ctx, &caller->ctx);
+#elif defined(__linux__) && defined(__x86_64__)
     clx_coro_switch(&t->ctx, &caller->ctx);
 #else
     swapcontext(&t->ctx, &caller->ctx);
@@ -110,7 +112,11 @@ LValue create_thread(LState *L, const LValue &func, double stack_size) {
 
 #if defined(_WIN32)
     t->fiber = CreateFiber(static_cast<SIZE_T>(stack_size), fiber_trampoline, t);
-#elif defined(__APPLE__) && defined(__aarch64__)
+#elif (defined(__APPLE__) || defined(__linux__)) && defined(__aarch64__)
+    t->stack_memory = new char[static_cast<size_t>(stack_size)];
+    clx_coro_init(&t->ctx, t->stack_memory + static_cast<size_t>(stack_size), (void *)fiber_trampoline);
+    g_starting_thread = t;
+#elif defined(__linux__) && defined(__x86_64__)
     t->stack_memory = new char[static_cast<size_t>(stack_size)];
     clx_coro_init(&t->ctx, t->stack_memory + static_cast<size_t>(stack_size), (void *)fiber_trampoline);
     g_starting_thread = t;
@@ -141,7 +147,9 @@ MultiValue resume(LState *L, const LValue &thread, const LValue *args, size_t co
 
 #if defined(_WIN32)
     SwitchToFiber(t->fiber);
-#elif defined(__APPLE__) && defined(__aarch64__)
+#elif (defined(__APPLE__) || defined(__linux__)) && defined(__aarch64__)
+    clx_coro_switch(&t->caller->ctx, &t->ctx);
+#elif defined(__linux__) && defined(__x86_64__)
     clx_coro_switch(&t->caller->ctx, &t->ctx);
 #else
     swapcontext(&t->caller->ctx, &t->ctx);
@@ -176,7 +184,9 @@ MultiValue yield(LState *L, const LValue *args, size_t count) {
 
 #if defined(_WIN32)
     SwitchToFiber(caller->fiber);
-#elif defined(__APPLE__) && defined(__aarch64__)
+#elif (defined(__APPLE__) || defined(__linux__)) && defined(__aarch64__)
+    clx_coro_switch(&t->ctx, &caller->ctx);
+#elif defined(__linux__) && defined(__x86_64__)
     clx_coro_switch(&t->ctx, &caller->ctx);
 #else
     swapcontext(&t->ctx, &caller->ctx);
@@ -1703,7 +1713,7 @@ LState *open(int argc, char *argv[]) {
     main_th->status = THREAD_RUNNING;
 #if defined(_WIN32)
     main_th->fiber = ConvertThreadToFiber(nullptr);
-#elif defined(__APPLE__) && defined(__aarch64__)
+#elif (defined(__APPLE__) || defined(__linux__)) && (defined(__aarch64__) || defined(__x86_64__))
     clx_coro_save(&main_th->ctx);
 #else
     getcontext(&main_th->ctx);

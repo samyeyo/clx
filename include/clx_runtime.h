@@ -23,13 +23,23 @@
 
 #if defined(_WIN32)
 #include <windows.h>
-#elif defined(__APPLE__) && defined(__aarch64__)
+#elif defined(__APPLE__) && defined(__aarch64__) || defined(__linux__) && defined(__aarch64__)
 struct CoroutineContext {
     uint64_t x19, x20, x21, x22, x23, x24, x25, x26, x27, x28;
     uint64_t fp;
     uint64_t lr;
     uint64_t sp;
     uint64_t d8, d9, d10, d11, d12, d13, d14, d15;
+};
+
+extern "C" {
+void clx_coro_save(CoroutineContext *ctx);
+void clx_coro_switch(CoroutineContext *from, CoroutineContext *to);
+void clx_coro_init(CoroutineContext *ctx, void *stack_top, void *entry);
+}
+#elif defined(__linux__) && defined(__x86_64__)
+struct CoroutineContext {
+    uint64_t rbx, rbp, r12, r13, r14, r15, rsp;
 };
 
 extern "C" {
@@ -922,7 +932,7 @@ struct LThread : public LHeader {
     bool close_requested;
 #if defined(_WIN32)
     LPVOID fiber;
-#elif defined(__APPLE__) && defined(__aarch64__)
+#elif (defined(__APPLE__) || defined(__linux__)) && (defined(__aarch64__) || defined(__x86_64__))
     CoroutineContext ctx;
     char *stack_memory;
 #else
