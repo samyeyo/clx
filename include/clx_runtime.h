@@ -406,7 +406,8 @@ struct MultiValue {
     }
 
     MultiValue(const clx::LValue *arr, size_t c, LState *L = nullptr)
-        : count(c), alloc_L(L) {
+        : count(c)
+        , alloc_L(L) {
         if (c <= INLINE_CAP) {
             for (size_t i = 0; i < c; ++i)
                 inline_vals[i] = arr[i];
@@ -424,7 +425,8 @@ struct MultiValue {
         : MultiValue(vec.data(), vec.size(), L) { }
 
     MultiValue(const MultiValue &other)
-        : count(other.count), alloc_L(other.alloc_L) {
+        : count(other.count)
+        , alloc_L(other.alloc_L) {
         size_t inline_c = (count < INLINE_CAP) ? count : INLINE_CAP;
         for (size_t i = 0; i < inline_c; ++i)
             inline_vals[i] = other.inline_vals[i];
@@ -474,7 +476,9 @@ struct MultiValue {
 
     clx::LValue &operator[](size_t i) { return (i < INLINE_CAP) ? inline_vals[i] : overflow[i - INLINE_CAP]; }
 
-    const clx::LValue &operator[](size_t i) const { return (i < INLINE_CAP) ? inline_vals[i] : overflow[i - INLINE_CAP]; }
+    const clx::LValue &operator[](size_t i) const {
+        return (i < INLINE_CAP) ? inline_vals[i] : overflow[i - INLINE_CAP];
+    }
 
     void overflow_init(const clx::LValue *arr, size_t c);
 };
@@ -539,7 +543,6 @@ struct LazyReg {
 };
 
 //------------------ Hash/array hybrid table
-
 static constexpr uint64_t HASH_EMPTY = 0xFFFFFFFFFFFFFFFFULL;
 static constexpr uint64_t HASH_TOMBSTONE = 0xFFFFFFFFFFFFFFFEULL;
 
@@ -1030,10 +1033,12 @@ struct LState {
     LValue *overflow_heap = nullptr;
     size_t overflow_heap_cap = 0;
     size_t overflow_heap_used = 0;
+
     CLX_INLINE_HOT LValue *alloc_overflow(size_t n) {
         if (overflow_heap_used + n > overflow_heap_cap) {
             size_t new_cap = overflow_heap_cap ? overflow_heap_cap * 2 : 64;
-            while (new_cap < overflow_heap_used + n) new_cap *= 2;
+            while (new_cap < overflow_heap_used + n)
+                new_cap *= 2;
             overflow_heap = static_cast<LValue *>(std::realloc(overflow_heap, new_cap * sizeof(LValue)));
             overflow_heap_cap = new_cap;
         }
