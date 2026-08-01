@@ -1918,7 +1918,6 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
         }
     }
 
-    //-------- Escape analysis: classify which local tables can be arena-allocated
     state.escaping_vars.clear();
     state.arena_safe_table_nodes.clear();
     state.arena_table_sizes.clear();
@@ -1978,7 +1977,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                     walk_body(sn.as.for_stmt.body_block);
                 } else if (sn.type == NodeType::GenericForStatement) {
                     walk_body(sn.as.generic_for.body_block);
-                } else if (sn.type == NodeType::FunctionDef) { /* don't recurse into nested functions */
+                } else if (sn.type == NodeType::FunctionDef) {
                 } else if (sn.type == NodeType::DoStatement) {
                     walk_body(sn.as.do_stmt.body_block);
                 }

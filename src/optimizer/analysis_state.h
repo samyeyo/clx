@@ -4,21 +4,6 @@
 // ├─────────────────────────────────────────────┤
 // │  analysis_state.h · Shared Analysis State   │
 // └─────────────────────────────────────────────┘
-//
-// AnalysisState holds every piece of information the Optimizer discovers
-// about a translation unit and that CodeEmitter later consumes while
-// generating C++.
-// A single AnalysisState is constructed per compiled file and passed by reference
-// to both Optimizer (which populates it) and CodeEmitter (which reads it).
-//
-// AnalysisState is constructed per compiled file and passed by reference to
-// both Optimizer (which populates it) and CodeEmitter (which reads it).
-//
-// Keeping this as one cohesive struct (rather than scattering the fields
-// back onto Optimizer/CodeEmitter individually) mirrors how the two classes
-// actually use the data: Optimizer's passes cross-reference each other's
-// findings, and CodeEmitter's emission logic reads whichever fields are
-// relevant to the node it's emitting.
 
 #ifndef ANALYSIS_STATE_H
 #define ANALYSIS_STATE_H
@@ -45,12 +30,10 @@ struct AnalysisState {
     std::map<std::string_view, double> global_constants;
     std::set<uint32_t> bce_safe_nodes;
     std::set<std::string_view> pure_numeric_arrays;
-    std::set<std::string_view>
-        tables_with_dynamic_length; // tables whose # may change (setmetatable, table.insert, table.remove)
-    std::map<std::string_view, size_t> known_table_lengths; // table name → known length (# operator)
-    std::map<std::string_view, std::set<uint32_t>>
-        pure_numeric_func_params; // param name → set of FunctionDef node indices
-    std::map<uint32_t, uint32_t> node_func_owner; // node index → FunctionDef node index that owns it
+    std::set<std::string_view> tables_with_dynamic_length;
+    std::map<std::string_view, size_t> known_table_lengths;
+    std::map<std::string_view, std::set<uint32_t>> pure_numeric_func_params;
+    std::map<uint32_t, uint32_t> node_func_owner;
     std::set<std::string, std::less<>> native_integers;
     std::set<std::string_view> int_returning_funcs;
     std::set<std::string, std::less<>> int_typed_locals;
@@ -58,7 +41,7 @@ struct AnalysisState {
     //------------------ Arena analysis data
     std::set<std::string_view> escaping_vars;
     std::set<uint32_t> arena_safe_table_nodes;
-    std::map<uint32_t, uint32_t> arena_table_sizes; // func_node → total arena bytes
+    std::map<uint32_t, uint32_t> arena_table_sizes;
 
     //------------------ Per-function analysis data
     std::map<std::string_view, std::set<std::string_view>> numeric_table_fields;
@@ -87,7 +70,7 @@ struct AnalysisState {
     std::string_view current_fast_func;
     std::string ref_capture;
     uint32_t current_func_body = 0xFFFFFFFF;
-    uint32_t current_arena_func = 0xFFFFFFFF; // node index of current function if it has an arena
+    uint32_t current_arena_func = 0xFFFFFFFF;
 };
 
 //------------------ is_purely_integer_expr: returns true if a node always evaluates to an integer.
