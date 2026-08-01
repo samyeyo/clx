@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(clx VERSION 0.2.0 LANGUAGES CXX ASM)
+project(clx VERSION 0.2.0 LANGUAGES C CXX ASM)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -59,6 +59,36 @@ elseif(_LOWER_PROC MATCHES "x86_64|amd64")
     endif()
 endif()
 
+#──────────────── Embedded Lua 5.5 VM (load / loadfile / dofile)
+# The Lua VM is built separately from the default runtime; use the vendored sources or override CLX_LUA_SOURCES_DIR for external Lua sources.
+set(CLX_VENDORED_LUA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/vm/lua")
+if(NOT DEFINED CLX_LUA_SOURCES_DIR)
+    set(CLX_LUA_SOURCES_DIR "${CLX_VENDORED_LUA_DIR}/src")
+    if(NOT EXISTS "${CLX_LUA_SOURCES_DIR}/lua.h")
+        set(CLX_LUA_SOURCES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/lua-5.5/src")
+    endif()
+endif()
+if(NOT EXISTS "${CLX_LUA_SOURCES_DIR}/lua.h")
+    message(FATAL_ERROR
+        "Lua 5.5 sources not at ${CLX_LUA_SOURCES_DIR}.\n"
+        "  Options:\n"
+        "    - Use the in-tree vendored sources at src/runtime/vm/lua\n"
+        "    - Run deps/fetch_lua.sh to fetch Lua into deps/lua-5.5/src/\n"
+        "    - Pass -DCLX_LUA_SOURCES_DIR=/path/to/lua-5.5/src when configuring")
+endif()
+if(EXISTS "${CLX_VENDORED_LUA_DIR}/CMakeLists.txt" AND
+   "${CLX_LUA_SOURCES_DIR}" STREQUAL "${CLX_VENDORED_LUA_DIR}/src")
+    # Build the in-tree Lua wrapper by default so clx --dynamic can find libclx_lua.a without adding a Lua-VM dependency to the default runtime.
+    add_subdirectory("${CLX_VENDORED_LUA_DIR}"
+                     "${CMAKE_BINARY_DIR}/clx_lua")
+else()
+    message(STATUS
+        "clx: external Lua at ${CLX_LUA_SOURCES_DIR} — user must build liblua.a")
+endif()
+message(STATUS "clx: embedding Lua from ${CLX_LUA_SOURCES_DIR}")
+
+# VM bridge sources live in the separate clx_lua library and are linked into user binaries only when clx is invoked with --dynamic.
+
 add_library(clx_static STATIC ${RUNTIME_SOURCES})
 
 if(ipo_supported)
@@ -66,6 +96,8 @@ if(ipo_supported)
 endif()
 
 target_include_directories(clx_static BEFORE PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+# clx_static intentionally has no Lua-VM dependency; the bridge is linked only through clx_lua when --dynamic is used.
 
 if(UNIX)
     set_target_properties(clx_static PROPERTIES OUTPUT_NAME "clx")
@@ -81,6 +113,8 @@ if(ipo_supported)
 endif()
 
 target_include_directories(clx_static_size BEFORE PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+# clx_static_size has no Lua-VM dependency. Mirror of clx_static (above).
 
 if(UNIX)
     set_target_properties(clx_static_size PROPERTIES OUTPUT_NAME "clx_size")
@@ -157,4 +191,12 @@ endif()
 install(TARGETS clx RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(TARGETS clx_static ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 install(TARGETS clx_static_size ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
-install(FILES include/clx.h include/clx_runtime.h include/clx_simd.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+if(TARGET clx_lua)
+    install(TARGETS clx_lua ARCHIVE
+            DESTINATION ${CMAKE_INSTALL_LIBDIR} OPTIONAL)
+endif()
+install(FILES include/clx.h include/clx_runtime.h include/clx_simd.h
+              OPTIONAL DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES doc/dyamic-lua.md
+        OPTIONAL DESTINATION ${CMAKE_INSTALL_DOCDIR})
