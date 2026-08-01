@@ -518,78 +518,41 @@ void CodeEmitter::emit(uint32_t root_node, std::string_view module_name) {
 
     if (!state.string_pool.empty()) {
         size_t n = state.string_pool.size();
-        size_t long_count = 0;
+        size_t cap = 64;
+        while (cap < n * 2)
+            cap *= 2;
+        out << "    L->string_pool.reserve(" << cap << ");\n";
 
-        for (size_t i = 0; i < n; ++i) {
-            std::string decoded = lua_decode_string(state.string_pool[i]);
-            if (decoded.length() > 6)
-                long_count++;
-        }
-
-        if (long_count > 0) {
-            size_t cap = 64;
-            while (cap < long_count * 2)
-                cap *= 2;
-            out << "    L->string_pool.reserve(" << cap << ");\n";
-        }
+        std::vector<uint8_t> occupied(cap, 0);
+        std::vector<size_t> slot_assignments(n);
+        size_t mask = cap - 1;
 
         for (size_t i = 0; i < n; ++i) {
             auto &s = state.string_pool[i];
             std::string decoded = lua_decode_string(s);
-            if (decoded.length() <= 6) {
-                out << "    cstr_[" << i << "] = clx::LValue::istr(\"" << cpp_escape(decoded) << "\", "
-                    << decoded.length() << ");\n";
-            }
+            uint64_t h = (decoded.length() <= 8) ? swar_hash_8(decoded.data(), decoded.length())
+                                                 : wyhash_str(decoded.data(), decoded.length());
+            size_t idx = h & mask;
+            while (occupied[idx])
+                idx = (idx + 1) & mask;
+            occupied[idx] = 1;
+            slot_assignments[i] = idx;
         }
 
-        if (long_count > 0) {
-            size_t cap = 64;
-            while (cap < long_count * 2)
-                cap *= 2;
-            std::vector<uint8_t> occupied(cap, 0);
-            std::vector<size_t> slot_assignments;
-            size_t mask = cap - 1;
+        out << "    static const clx::StringPool::PrecomputedEntry _cstr_all[" << n << "] = {\n";
+        for (size_t i = 0; i < n; ++i) {
+            auto &s = state.string_pool[i];
+            std::string decoded = lua_decode_string(s);
+            uint64_t h = (decoded.length() <= 8) ? swar_hash_8(decoded.data(), decoded.length())
+                                                 : wyhash_str(decoded.data(), decoded.length());
+            out << "        {\"" << cpp_escape(decoded) << "\", " << (unsigned int)decoded.length() << ", " << h
+                << "ULL, " << (unsigned int)slot_assignments[i] << "},\n";
+        }
+        out << "    };\n";
+        out << "    L->string_pool.bulk_fill_precomputed(_cstr_all, " << n << ");\n";
 
-            for (size_t i = 0; i < n; ++i) {
-                auto &s = state.string_pool[i];
-                std::string decoded = lua_decode_string(s);
-                if (decoded.length() > 6) {
-                    uint64_t h = (decoded.length() <= 8) ? swar_hash_8(decoded.data(), decoded.length())
-                                                         : wyhash_str(decoded.data(), decoded.length());
-                    size_t idx = h & mask;
-                    while (occupied[idx])
-                        idx = (idx + 1) & mask;
-                    occupied[idx] = 1;
-                    slot_assignments.push_back(idx);
-                }
-            }
-
-            out << "    static const clx::StringPool::PrecomputedEntry _cstr_long[" << long_count << "] = {\n";
-            size_t li = 0;
-            for (size_t i = 0; i < n; ++i) {
-                auto &s = state.string_pool[i];
-                std::string decoded = lua_decode_string(s);
-                if (decoded.length() > 6) {
-                    uint64_t h = (decoded.length() <= 8) ? swar_hash_8(decoded.data(), decoded.length())
-                                                         : wyhash_str(decoded.data(), decoded.length());
-                    out << "        {\"" << cpp_escape(decoded) << "\", " << (unsigned int)decoded.length() << ", " << h
-                        << "ULL, " << (unsigned int)slot_assignments[li] << "},\n";
-                    li++;
-                }
-            }
-            out << "    };\n";
-            out << "    L->string_pool.bulk_fill_precomputed(_cstr_long, " << long_count << ");\n";
-
-            li = 0;
-            for (size_t i = 0; i < n; ++i) {
-                auto &s = state.string_pool[i];
-                std::string decoded = lua_decode_string(s);
-                if (decoded.length() > 6) {
-                    out << "    cstr_[" << i << "] = clx::LValue(L->string_pool.slots[" << slot_assignments[li]
-                        << "].baked);\n";
-                    li++;
-                }
-            }
+        for (size_t i = 0; i < n; ++i) {
+            out << "    cstr_[" << i << "] = clx::LValue(L->string_pool.slots[" << slot_assignments[i] << "].baked);\n";
         }
     }
 
