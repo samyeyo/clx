@@ -113,7 +113,6 @@ static LValue read_all(LState *L, FILE *fp) {
 }
 
 //------------------ Shared file method helpers
-
 static MultiValue make_lines_iter(LState *L, FileUd *f) {
     LUserdata *u = static_cast<LUserdata *>(newuserdata(L, sizeof(LinesIterUd)).as_pointer());
     LinesIterUd *ud = static_cast<LinesIterUd *>(u->data());
@@ -217,6 +216,12 @@ static LValue make_file(LState *L, FILE *fp, bool close_on_gc, bool is_pipe = fa
         else
             r = fclose(f->fp);
         f->fp = nullptr;
+        if (f->is_pipe) {
+
+            if (r == 0)
+                return MultiValue({ clx::boolean(true), string(L, "exit"), integer(static_cast<int64_t>(r)) });
+            return MultiValue({ clx::LValue(), string(L, "exit"), integer(static_cast<int64_t>(r)) });
+        }
         if (r != 0) {
             char buf[128];
             std::snprintf(buf, sizeof(buf), "cannot close file: %s", std::strerror(errno));
@@ -593,6 +598,26 @@ static MultiValue io_write(LState *L, const LValue *args, size_t count) {
     return MultiValue(boolean(true));
 }
 
+//------------------ io_popen — open a process pipe for read or write
+static MultiValue io_popen(LState *L, const LValue *args, size_t count) {
+    if (count == 0 || args[0].type != String)
+        throw_runtime_error("bad argument #1 to 'popen' (string expected)");
+    const char *command = args[0].as_string();
+    const char *mode = "r";
+    if (count >= 2 && args[1].type != Nil)
+        mode = check_string(L, args[1]);
+    if (std::strcmp(mode, "r") != 0 && std::strcmp(mode, "w") != 0) {
+        throw_runtime_error("bad argument #2 to 'popen' (mode must be 'r' or 'w')");
+    }
+    FILE *fp = popen(command, mode);
+    if (!fp) {
+        char buf[256];
+        std::snprintf(buf, sizeof(buf), "cannot popen '%s': %s", command, std::strerror(errno));
+        throw_runtime_error(buf);
+    }
+    return MultiValue(make_file(L, fp, true, true));
+}
+
 static MultiValue io_type(LState *L, const LValue *args, size_t count) {
     if (count == 0)
         return MultiValue(nil());
@@ -619,8 +644,13 @@ void luastd_io(LState *L) {
     LTable *tbl = static_cast<LTable *>(t.as_pointer());
     tbl->bind_all(L,
         { { "close", io_close }, { "flush", io_flush }, { "input", io_input }, { "lines", io_lines },
-            { "open", io_open }, { "output", io_output }, { "read", io_read }, { "type", io_type },
-            { "write", io_write }, { "tmpfile", io_tmpfile } });
+            { "open", io_open }, { "output", io_output }, { "popen", io_popen }, { "read", io_read },
+            { "type", io_type }, { "write", io_write }, { "tmpfile", io_tmpfile } });
+
+    tbl->settable(LValue(L->intern_string("stdin")), get_std_file(L, stdin));
+    tbl->settable(LValue(L->intern_string("stdout")), get_std_file(L, stdout));
+    tbl->settable(LValue(L->intern_string("stderr")), get_std_file(L, stderr));
+
     set_global(L, "io", t);
 }
 
