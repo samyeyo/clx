@@ -12,7 +12,6 @@
 #include <cstdint>
 
 //------------------ Platform detection
-
 #if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
 #define CLX_HAS_SSE2 1
 #include <emmintrin.h>
@@ -34,7 +33,6 @@
 #endif
 
 //------------------ Portable count-trailing-zeros
-
 #ifdef _MSC_VER
 #include <intrin.h>
 
@@ -272,4 +270,4 @@ CLX_INLINE_HOT size_t clx_rawlen_array(const uint8_t *types, size_t array_size) 
     return clx_find_first_nil(types, array_size);
 }
 
-#endif // CLX_SIMD_H
+#endif
