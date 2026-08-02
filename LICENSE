@@ -3,7 +3,7 @@ clx - Cross-platform ahead-of-time Lua compiler and runtime
 Copyright (c) 2026 Samir Tine. All rights reserved.
 https://samyeyo.github.io/clx/
 ----------------------------------------------------------
-LuaRT is free software distributed under the terms of the MIT license reproduced below; 
+clx is free software distributed under the terms of the MIT license reproduced below; 
 it may be used for any purpose, including commercial purposes, at absolutely no cost without having to ask us.
 The only requirement is that if you do use LuaRT, then you should give us credit by including the appropriate copyright notice somewhere in your product or its documentation.
 
