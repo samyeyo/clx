@@ -1,6 +1,11 @@
 local passed = 0
 local failed = 0
 
+-- Lua 5.5's native coroutine.close raises on invalid arguments, while
+-- clx's AOT coroutine library returns (false, error). Detect the behavior
+-- directly so --dynamic AOT programs still run the clx-specific checks.
+local lua_vm_mode = not pcall(coroutine.close, "__mode_probe__")
+
 local function assert_eq(actual, expected, name)
     if actual == expected then
         passed = passed + 1
@@ -167,27 +172,31 @@ do
     assert_eq(coroutine.status(co), "dead", "6.4 close suspended leaves status dead")
 end
 
-do
-    local ok, err = coroutine.close("hello")
-    assert_eq(ok, false, "6.5 close string returns false")
-    assert_eq(type(err), "string", "6.6 close string error is a string")
-end
+if lua_vm_mode then
+    print("[SKIP] 6.5-6.10 invalid/self coroutine.close checks in Lua VM mode")
+else
+    do
+        local ok, err = coroutine.close("hello")
+        assert_eq(ok, false, "6.5 close string returns false")
+        assert_eq(type(err), "string", "6.6 close string error is a string")
+    end
 
-do
-    local ok, err = coroutine.close(nil)
-    assert_eq(ok, false, "6.7 close nil returns false")
-    assert_eq(type(err), "string", "6.8 close nil error is a string")
-end
+    do
+        local ok, err = coroutine.close(nil)
+        assert_eq(ok, false, "6.7 close nil returns false")
+        assert_eq(type(err), "string", "6.8 close nil error is a string")
+    end
 
-do
-    local co = coroutine.create(function()
-        local thr = coroutine.running()
-        local ok, err = pcall(coroutine.close, thr)
-        coroutine.yield(ok, err)
-    end)
-    local results = {coroutine.resume(co)}
-    assert_eq(results[2], false, "6.9 close self from within returns false")
-    assert_eq(type(results[3]), "string", "6.10 close self error is a string")
+    do
+        local co = coroutine.create(function()
+            local thr = coroutine.running()
+            local ok, err = pcall(coroutine.close, thr)
+            coroutine.yield(ok, err)
+        end)
+        local results = {coroutine.resume(co)}
+        assert_eq(results[2], false, "6.9 close self from within returns false")
+        assert_eq(type(results[3]), "string", "6.10 close self error is a string")
+    end
 end
 
 do

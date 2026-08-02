@@ -139,7 +139,11 @@ end
 make_global()
 assert_eq(global_redecl(), 300, "initial global function")
 
-global function global_redecl() return 400 end
+-- Opt in to implicit globals before the named global declaration,
+-- otherwise `print` (used at the end of this file) would be rejected
+-- as undeclared, matching Lua 5.5's explicit-globals semantics.
+global *
+function global_redecl() return 400 end
 assert_eq(global_redecl(), 400, "redeclared global function")
 
 local f = function(x) return x + 1 end
@@ -152,7 +156,16 @@ local original_print = print
 local logged = {}
 
 local function child()
-    _ENV = { print = function(...) table.insert(logged, table.concat({...}, "\t")) end }
+    _ENV = {
+        print = function(...)
+            table.insert(logged, table.concat({...}, "\t"))
+        end,
+        -- Lua 5.5: _ENV replaces the environment completely (no _G fallback).
+        -- The closure's upvalues (logged) are still reachable, but globals
+        -- like table and string must be explicitly provided.
+        table = table,
+        string = string,
+    }
     print("hello from child")
 end
 
