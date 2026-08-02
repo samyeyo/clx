@@ -64,7 +64,7 @@ struct Symbol {
 //------------------ Attribute: variable attribute qualifiers
 enum class Attribute { None, Const, Close };
 //------------------ ImplicitGlobalMode: controls implicit global variable access
-enum class ImplicitGlobalMode { None, ReadWrite, ReadOnly };
+enum class ImplicitGlobalMode { None, ReadWrite, ReadOnly, Default };
 
 //------------------ BinaryOp: binary operator codes mapped to Lua opcodes
 enum class BinaryOp : int {

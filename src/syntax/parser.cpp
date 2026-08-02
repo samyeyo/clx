@@ -27,7 +27,7 @@ Parser::Parser(const char *source, const char *filename, ASTContext &context)
     , ctx(context) {
     ctx.filename = filename ? filename : "";
     current_token = lexer.current();
-    implicit_globals.push_back(ImplicitGlobalMode::ReadWrite);
+    implicit_globals.push_back(ImplicitGlobalMode::Default);
 
     for (const char *lib : std_libs) {
         active_symbols.push_back({ lib, SymbolType::ExplicitGlobal, 0, 0, 0xFFFFFFFF });
@@ -734,6 +734,9 @@ uint32_t Parser::parse_statement() {
         advance();
 
         if (current_token.type == TokFunction) {
+
+            if (implicit_globals.back() == ImplicitGlobalMode::Default)
+                implicit_globals.back() = ImplicitGlobalMode::None;
             advance();
             if (current_token.type != TokIdent)
                 throw std::runtime_error(
@@ -853,7 +856,8 @@ uint32_t Parser::parse_statement() {
             for (auto v : values)
                 ctx.block_statements.push_back(v);
 
-            implicit_globals.back() = saved_mode;
+            implicit_globals.back()
+                = (saved_mode == ImplicitGlobalMode::Default) ? ImplicitGlobalMode::None : saved_mode;
 
             ASTNode node;
             node.type = NodeType::GlobalDeclStatement;
