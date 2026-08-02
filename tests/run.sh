@@ -13,6 +13,10 @@ fi
 
 cd "$SCRIPT_DIR" || exit
 
+# load / loadfile / dofile require the explicit --dynamic switch.
+# The dedicated tests/test-load.sh and tests/test-load.bat harnesses exercise
+# that path; this script runs the default AOT suite.
+
 PASS=0
 FAIL=0
 
@@ -26,6 +30,10 @@ for dir in conformance regression stress edge_cases; do
         case "$file" in
             conformance/package.lua|conformance/mymod.lua|conformance/test_native_mod.lua) continue ;;
         esac
+        if [ "$(basename "$file")" = "load.lua" ]; then
+            echo "SKIP: $file (run tests/test-load.sh to exercise --dynamic)"
+            continue
+        fi
         bin="$SCRIPT_DIR/${dir}_${name}"
         compile_log="$bin.compile.log"
         output_log="$bin.output.log"
