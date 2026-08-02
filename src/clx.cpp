@@ -35,6 +35,8 @@ namespace fs = std::filesystem;
 
 std::vector<std::string> precompiled_modules;
 
+static bool dynamic_loading_enabled = false;
+
 //------------------ ENUM: BuildMode - output mode (executable binary, object file, or static library)
 enum class BuildMode { Executable, Object, Static };
 
@@ -136,6 +138,7 @@ void print_help() {
               << "  --fast                Optimize for speed\n"
               << "  --cpp                 Generate C++ source file and exit\n"
               << "  --minimal             Exclude non-essential Lua modules; keeps base + package\n"
+              << "  --dynamic             Link the embedded Lua 5.5 VM (load/loadfile/dofile)\n"
               << "  --version             Print version and exit\n"
               << "  --help                Display this help message\n\n"
               << "Compiler Options:\n"
@@ -173,6 +176,8 @@ int main(int argc, char *argv[]) {
                 custom_output_name = argv[++i];
         } else if (arg == "--minimal") {
             minimal_active = true;
+        } else if (arg == "--dynamic") {
+            dynamic_loading_enabled = true;
         } else if (arg == "--modules") {
             if (i + 1 < argc) {
                 std::string mods = argv[++i];
@@ -253,7 +258,8 @@ int main(int argc, char *argv[]) {
 #ifndef __APPLE__
         debug_mode ? "" : " -s"
 #else
-        ""
+
+        debug_mode ? "" : " -Wl,-x"
 #endif
         ;
     std::string msvc_dce_cl = dce_mode ? " /Gy" : "";
@@ -321,11 +327,6 @@ int main(int argc, char *argv[]) {
         emitter.emit(root, module_name);
         cpp_files.push_back(cpp_file.string());
     }
-
-    if (emit_cpp) {
-        return 0;
-    }
-
     if (mode == BuildMode::Executable) {
         std::string main_module = fs::path(input_files[0]).stem().string();
         std::ofstream appender(cpp_files[0], std::ios::app);
@@ -338,10 +339,20 @@ int main(int argc, char *argv[]) {
             appender << "\nextern clx::LValue luaopen_" << mod << "(clx::LState* L);\n";
         }
 
+        if (dynamic_loading_enabled)
+            appender << "extern \"C\" void clx_register_load_builtins(clx::LState *L);\n";
         appender << "int main(int argc, char* argv[]) {\n";
         appender << "    clx::LState* L = clx::open(argc, argv);\n";
+
         if (!minimal_active)
             appender << "    clx::openlibs(L);\n";
+        if (dynamic_loading_enabled && !minimal_active) {
+            appender << "    // --dynamic enabled: link libclx_lua.a (POSIX) or clx_lua.lib (Windows)\n";
+            appender << "    //   In-tree: build/clx_lua/libclx_lua.a (or build/clx_lua/clx_lua.lib)\n";
+            appender
+                << "    //   Installed: /usr/local/lib/libclx_lua.a (or C:\\Program Files\\clx\\lib\\clx_lua.lib)\n";
+            appender << "    clx_register_load_builtins(L);\n";
+        }
         appender << "    try {\n";
 
         for (size_t i = 1; i < input_files.size(); ++i) {
@@ -372,10 +383,13 @@ int main(int argc, char *argv[]) {
         appender << "        clx::close(L);\n";
         appender << "        return 1;\n";
         appender << "    }\n";
-
         appender << "    clx::close(L);\n";
         appender << "    return 0;\n";
         appender << "}\n";
+    }
+
+    if (emit_cpp) {
+        return 0;
     }
 
     Compiler cc = get_compiler();
@@ -519,6 +533,91 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    if (dynamic_loading_enabled) {
+#if defined(__APPLE__) || defined(__linux__) || defined(__unix__)
+
+        std::vector<std::string> lua_search_dirs;
+        lua_search_dirs.push_back("deps/lua-5.5/src");
+        lua_search_dirs.push_back((build_root / "build" / "clx_lua").string());
+        for (const auto &dir : mod_search_dirs)
+            lua_search_dirs.push_back(dir.string());
+
+        std::string found_bridge_lib;
+        std::string found_bare_lua_lib;
+        for (const auto &dir : lua_search_dirs) {
+            fs::path p_bridge = fs::path(dir) / "libclx_lua.a";
+            if (fs::exists(p_bridge) && found_bridge_lib.empty())
+                found_bridge_lib = fs::absolute(p_bridge).string();
+            fs::path p_bare = fs::path(dir) / "liblua.a";
+            if (fs::exists(p_bare) && found_bare_lua_lib.empty())
+                found_bare_lua_lib = fs::absolute(p_bare).string();
+        }
+
+        if (!found_bridge_lib.empty()) {
+            lib_link += " \"" + found_bridge_lib + "\"";
+        } else if (!found_bare_lua_lib.empty()) {
+
+            std::cerr << "clx: --dynamic requires libclx_lua.a (vendored Lua 5.5 + "
+                      << "clx bridge). Found a bare liblua.a at " << found_bare_lua_lib
+                      << " but it does not define clx_register_load_builtins.\n"
+                      << "Fix:\n"
+                      << "  - Run `cmake --build build -j` to build clx_lua (libclx_lua.a), OR\n"
+                      << "  - Run deps/fetch_lua.sh to fetch Lua 5.5 into deps/lua-5.5/src/, OR\n"
+                      << "  - Configure clx with -DCLX_LUA_SOURCES_DIR=/path/to/lua-5.5/src, OR\n"
+                      << "  - Drop --dynamic if you don't need load/loadfile/dofile.\n";
+            return 1;
+        } else {
+            std::cerr << "clx: --dynamic requires libclx_lua.a (vendored Lua 5.5 + "
+                      << "clx bridge). Could not find it in:\n";
+            for (const auto &dir : lua_search_dirs)
+                std::cerr << "  " << dir << "/\n";
+            std::cerr << "Fix:\n"
+                      << "  - Run `cmake --build build -j` to build clx_lua (libclx_lua.a), OR\n"
+                      << "  - Run deps/fetch_lua.sh to fetch Lua 5.5 into deps/lua-5.5/src/, OR\n"
+                      << "  - Configure clx with -DCLX_LUA_SOURCES_DIR=/path/to/lua-5.5/src, OR\n"
+                      << "  - Drop --dynamic if you don't need load/loadfile/dofile.\n";
+            return 1;
+        }
+#elif _WIN32
+
+        std::vector<fs::path> lua_win_search_dirs;
+        lua_win_search_dirs.push_back(fs::path(input_files[0]).parent_path());
+        lua_win_search_dirs.push_back(build_root / "build" / "clx_lua");
+        lua_win_search_dirs.push_back(build_root / "lib");
+        for (const auto &dir : mod_search_dirs)
+            lua_win_search_dirs.push_back(dir);
+#if defined(_WIN32)
+        {
+            wchar_t pf[MAX_PATH];
+            if (GetEnvironmentVariableW(L"ProgramFiles", pf, MAX_PATH) > 0) {
+                fs::path p = fs::path(pf) / "clx" / "lib";
+                if (fs::exists(p))
+                    lua_win_search_dirs.push_back(p);
+            }
+        }
+#endif
+        std::string found_bridge_lib;
+        for (const auto &dir : lua_win_search_dirs) {
+            fs::path p = dir / "clx_lua.lib";
+            if (fs::exists(p)) {
+                found_bridge_lib = fs::absolute(p).string();
+                break;
+            }
+        }
+        if (found_bridge_lib.empty()) {
+            std::cerr << "clx: --dynamic requires clx_lua.lib (vendored Lua 5.5 + "
+                      << "clx bridge). Could not find it in:\n";
+            for (const auto &dir : lua_win_search_dirs)
+                std::cerr << "  " << dir.string() << "\n";
+            std::cerr << "Fix:\n"
+                      << "  - Run `cmake --build build` to build clx_lua, OR\n"
+                      << "  - Drop --dynamic if you don't need load/loadfile/dofile.\n";
+            return 1;
+        }
+        lib_link += " \"" + found_bridge_lib + "\" ";
+#endif
+    }
+
     std::string cmd;
     if (cc.name == "MSVC") {
         std::string tmp_dir = fs::temp_directory_path().string();
@@ -580,7 +679,13 @@ int main(int argc, char *argv[]) {
                     + cc_options_str + lib_link + gcc_dce_link + gcc_strip_link + " -o " + output_name + ".exe";
 #else
             cmd = cc.cmd + " " + opt_flags + gcc_dce_cl + " -std=c++20" + include_opt + " " + all_cpp_files
+#ifdef __APPLE__
+
+                + cc_options_str + lib_link + gcc_dce_link + gcc_strip_link + " -o " + output_name;
+#else
+
                 + cc_options_str + lib_link + " -rdynamic" + gcc_dce_link + gcc_strip_link + " -o " + output_name;
+#endif
 #endif
         }
     }
