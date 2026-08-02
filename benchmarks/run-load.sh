@@ -68,8 +68,10 @@ if not script_path then
     os.exit(1)
 end
 
--- Derive the script's directory for the preamble below.
-local script_dir = script_path:match("^(.*/)") or "./"
+-- Derive the script's directory for the preamble below, normalizing
+-- backslashes to forward slashes so it is safe inside a Lua string literal.
+local script_dir = script_path:match("^(.*)[/\\]") or "./"
+script_dir = script_dir:gsub("\\", "/")
 
 local f = io.open(script_path, "rb")
 if not f then
@@ -85,9 +87,9 @@ if not content or content == "" then
 end
 
 -- Prepend a package.path extension so require() in the loaded chunk
--- (which runs inside the Lua VM) can find sibling modules.  This runs
--- in the Lua VM context where package.path is already a valid string.
-local preamble = 'package.path = package.path .. ";' .. script_dir .. '?.lua"\n'
+-- (which runs inside the VM) can find sibling modules.  The directory is
+-- baked in as a literal so package.path gets the real path at runtime.
+local preamble = 'package.path = package.path .. ";" .. "' .. script_dir .. '?.lua"\n'
 local load_content = preamble .. content
 
 local chunk, err = load(load_content, script_path, "t")
