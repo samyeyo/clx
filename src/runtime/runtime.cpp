@@ -7,6 +7,7 @@
 
 #include "clx_runtime.h"
 #include "clx.h"
+#include "vm/vm_convert.h"
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -21,6 +22,8 @@ void register_static_preload(LState *L, const char *name, LValue(open_func)(LSta
 }
 
 namespace clx {
+
+void (*clx_mark_vm_proxies_ptr)(LState *clx_L, std::vector<LHeader *> &wl) = nullptr;
 
 //------------------ LThread::LThread — thread constructor
 LThread::LThread()
@@ -67,7 +70,8 @@ static void fiber_entry_impl(LThread *t) {
         L->shadow_top = prev_top;
         t->status = THREAD_DEAD;
     } catch (const LRuntimeException &e) {
-        t->yield_args = MultiValue(e.error_obj);
+
+        t->yield_args = MultiValue(clx::LValue(L->intern_string(e.what())));
         t->status = THREAD_DEAD;
         t->has_error = true;
     } catch (...) {
@@ -274,7 +278,7 @@ std::string LValue::to_string(LState *L) const {
     case Int64:
         return std::to_string(as_integer());
     case String:
-        return std::string(as_string(), string_len());
+        return std::string(as_string());
     case Table: {
         const char *prefix = "table";
         if (L && static_cast<LTable *>(as_pointer())->metatable) {
@@ -1100,6 +1104,9 @@ void LState::collect_garbage() {
         if (shadow_stack[i].val)
             push_if_needed(LValue(*shadow_stack[i].val, *shadow_stack[i].type));
 
+    if (clx_mark_vm_proxies_ptr)
+        clx_mark_vm_proxies_ptr(this, wl);
+
     while (!wl.empty()) {
         LHeader *curr = wl.back();
         wl.pop_back();
@@ -1439,7 +1446,9 @@ MultiValue pcall_function(LState *L, const LValue &func, const LValue *args, siz
             results.push_back(ret[i]);
         return MultiValue(results);
     } catch (const LRuntimeException &e) {
-        return MultiValue({ LValue(false), e.error_obj });
+
+        LValue err_val = LValue(L->intern_string(e.what()));
+        return MultiValue({ LValue(false), err_val });
     } catch (const std::exception &e) {
         return MultiValue({ LValue(false), LValue(L->intern_string(e.what())) });
     }
