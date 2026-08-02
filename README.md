@@ -141,10 +141,12 @@ Current status:
 See **[compatibility.md](doc/compatibility.md)** for detailed status.
 
 #### Known limitations
-- **`load()` / `dofile()` / `loadfile()` / `string.dump()`** — dynamic code loading requires a runtime interpreter
-- **`debug` module** — very complex in a pure AOT model
+- **`load()` / `loadfile()` / `dofile()`** — available only when the generated program is compiled with `--dynamic`; the source executes in the embedded Lua VM rather than in the AOT code path. They are absent from ordinary and `--minimal` builds.
+- **AOT `string.dump()` / `debug`** — these are not provided by the clx AOT runtime. Dynamic code uses the embedded VM’s own standard libraries when compiled with `--dynamic`.
 - The traditional Lua C API is not supported.
 - Binary modules should be written using the clx C++ API.
+
+See [Dynamic Lua](./doc/dyamic-lua.md) for activation, environments, `require`, and bridge limitations.
 
 ## Test suite
 
@@ -176,6 +178,7 @@ Documentation is available in the `doc/` directory, including :
 
 - Getting Started
 - CLI Reference
+- Dynamic Lua loading
 - Compatibility Status
 - Modules and Migration Guide
 - C++ API Reference
@@ -184,7 +187,7 @@ Documentation is available in the `doc/` directory, including :
 - Optimizations
 - Benchmarks
 
-See **[Documentation Index](./doc/index.md)**
+See **[Documentation Index](./doc/index.md)**. For runtime Lua loading, see **[Dynamic Lua](./doc/dyamic-lua.md)**.
 
 ## License
 

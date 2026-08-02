@@ -99,19 +99,24 @@ The following table summarizes the current implementation status, but real life 
 | os        | ✅      |
 | utf8      | ✅      |
 | package   | ✅      |
-| debug     | ❌      |
+| debug     | AOT: ❌ / VM: ✅ with `--dynamic` |
 
-## Unsupported Features
+## Conditional and Unsupported Features
 
-The following features are intentionally unsupported due to the AOT compilation model:
+The following loading functions are available only when the generated program is compiled with `--dynamic`. They execute source in the embedded Lua VM and cross the clx/VM bridge; they are not available in ordinary AOT or `--minimal` builds.
+
+| Feature    | Status | Notes |
+| ---------- | ------ | ----- |
+| `load()`   | ⚠️     | Requires `--dynamic`; the current bridge accepts source strings, not reader functions. |
+| `loadfile()` | ⚠️   | Requires `--dynamic`; compiles a file in the embedded VM. |
+| `dofile()` | ⚠️    | Requires `--dynamic`; loads and executes a file through the bridge. |
+
+The following features are not provided by the clx AOT runtime directly. The embedded VM behavior under `--dynamic` is noted explicitly:
 
 | Feature       | Reason                           |
 | ------------- | -------------------------------- |
-| load()        | Lua code loading                 |
-| loadfile()    | Lua code loading from file       |
-| dofile()      | Lua code running from file       |
-| string.dump() | Lua code compilation             |
-| debug library | Lua runtime introspection        |
+| `string.dump()` | Not provided by the clx AOT runtime; available inside the embedded VM with `--dynamic` |
+| debug library | Not provided as a clx AOT global; dynamic VM behavior is documented separately |
 
 
 ## Notes

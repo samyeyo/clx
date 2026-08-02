@@ -33,6 +33,7 @@ Options starting with `-` that are not recognized by clx are automatically passe
 | `--fast` | Optimize for speed (`-O3` or `/O2 /Ot` with MSVC) |
 | `--cpp` | Generate C++ source files, don't compile |
 | `--minimal` | Exclude non-essential modules (string, table, io, os, math, utf8, coroutine); keeps base + package |
+| `--dynamic` | Link the embedded Lua 5.5 VM and enable `load`, `loadfile`, and `dofile` |
 | `--modules <list>` | Precompiled modules to link (comma-separated list) |
 
 ### Other

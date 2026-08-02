@@ -70,17 +70,23 @@ See `docs/compatibility.md` for detailed support status.
 
 ---
 
-## Why are load(), loadfile(), string.dump() and dofile() unsupported?
+## How do load(), loadfile() and dofile() work?
 
-These functions require runtime code compilation.
+These functions are available when the generated program is compiled with `--dynamic`:
 
-Since clx follows an AOT model and does not embed a Lua interpreter, they are not supported.
+```bash
+clx script.lua --dynamic --output script
+```
+
+The generated program then links the embedded Lua VM. Source passed to `load`, `loadfile`, or `dofile` executes in that VM and crosses the clx/VM bridge when it calls AOT functions or returns values. Without `--dynamic`—and in `--minimal` builds—the loader functions are not registered.
+
+The clx AOT runtime does not provide `string.dump()` or the `debug` module directly. Dynamic code runs in the embedded VM and uses its own standard libraries; see `doc/dyamic-lua.md` for the environment and bridge boundaries.
 
 ---
 
-## Why is the debug module unsupported?
+## Does dynamic Lua provide string.dump() and debug?
 
-The `debug` module depends heavily on interpreter internals and runtime introspection facilities that do not exist in compiled native executables.
+The clx AOT runtime does not expose `string.dump()` or a `debug` global. When compiled with `--dynamic`, however, loaded code executes in the embedded Lua VM, which contains Lua’s own standard libraries. The default bridge environment copies selected VM globals and does not copy `debug` as a global; consult [Dynamic Lua](doc/dyamic-lua.md) for the boundary details.
 
 ---
 
@@ -110,7 +116,7 @@ Any architecture supported by the underlying C++ compiler, including:
 
 Yes.
 
-clx provides a C++ API for creating native modules that can be linked statically or dynamically.
+clx provides a C++ API for creating native modules that can be linked statically.
 
 See `docs/modules.md`.
 
