@@ -6,6 +6,7 @@ Welcome to the clx documentation. This folder contains comprehensive guides for 
 
 - **[Getting Started](./getting-started.md)** - Quick start guide, basic examples, and common patterns
 - **[CLI Reference](./cli.md)** - Command-line interface documentation
+- **[Dynamic Lua](./dyamic-lua.md)** - Runtime Lua loading with `--dynamic`
 - **[Lua 5.5 compatibility](./compatibility.md)** - Lua compatibility status
 - **[Modules](./modules.md)** - Lua source modules, C++ native modules, and dynamic libraries
 - **[Migration Guide](./migration-guide.md)** - Porting Lua C API modules to clx C++ API

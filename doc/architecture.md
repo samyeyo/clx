@@ -2,53 +2,56 @@
 
 ## Overview
 
-clx is a Lua-to-C++ compiler that transpiles Lua source code into optimized C++ code, which is then compiled using the system's C++ compiler to produce native machine code. This architecture provides performance near (most of the times faster) than standard Lua 5.5 interpreter.
+clx is a Lua-to-C++ compiler that transpiles Lua source code into optimized C++ code, which is then compiled using the system's C++ compiler to produce native machine code. The normal execution path is entirely AOT. An optional `--dynamic` link path embeds a separate Lua VM for loading and executing Lua source at runtime.
+
+The AOT runtime and the embedded VM are separate runtimes. They have different value representations, heaps, garbage collectors, standard-library implementations, and coroutine systems. The bridge converts primitive values and wraps supported tables, userdata, and functions; it does not make the two runtimes share native objects.
 
 ## System Architecture
 
+The following figure shows both paths. The compiler pipeline is shared; `--dynamic` changes the final link and generated runtime registration, not the compilation of the input source file.
+
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                     clx Compiler                             │
-├──────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌─────────┐     ┌──────────┐    ┌────────────┐              │
-│  │  CLI    │───▶ │  Parser  │───▶│   AST      │              │
-│  │         │     │          │    │            │              │
-│  └─────────┘     └──────────┘    └─────┬──────┘              │
-│                                       │                      │
-│                                       ▼                      │
-│                                ┌────────────┐                │
-│                                │ Optimizer  │                │
-│                                │            │                │
-│                                └─────┬──────┘                │
-│                                      │                       │
-│                                      ▼                       │
-│                                ┌────────────┐                │
-│                                │  Codegen   │                │
-│                                │            │                │
-│                                └─────┬──────┘                │
-│                                      │                       │
-│                                      ▼                       │
-│                                ┌────────────┐                │
-│                                │     C++    │                │
-│                                │   Source   │                │
-│                                └─────┬──────┘                │
-│                                      │                       │
-└──────────────────────────────────────│───────────────────────┘
-                                       │
-                   ┌───────────────────┴───────────────────────┐
-                   │                                           │
-                   ▼                                           ▼
-          ┌──────────────────┐                     ┌───────────────────────┐
-          │   C++ Compiler   │                     │      Runtime Lib      │
-          │ (gcc/clang/msvc) │                     │  (libclx / clx.lib)   │
-          └────────┬─────────┘                     └───────────────────────┘
-                   │
-                   ▼
-          ┌──────────────────┐
-          │  Native Binary   │
-          └──────────────────┘
+                         Lua source file
+                                │
+                                ▼
+┌──────────────────────────────────────────────────────────┐
+│                      clx compiler                        │
+│  CLI → Lexer → Parser → AST → Optimizer → Code generator │
+│                                             │             │
+│                                             ▼             │
+│                                       generated C++       │
+└─────────────────────────────────────────┬────────────────┘
+                                          │
+                                          ▼
+                                  system C++ compiler
+                                          │
+                 ┌────────────────────────┴────────────────────────┐
+                 │                                                 │
+              normal                                             --dynamic
+                 │                                                 │
+                 ▼                                                 ▼
+       ┌────────────────────┐                         ┌────────────────────┐
+       │ libclx / clx.lib   │                         │ libclx / clx.lib   │
+       │ clx AOT runtime    │                         │ clx AOT runtime    │
+       └─────────┬──────────┘                         └─────────┬──────────┘
+                 │                                             │
+                 │                                  libclx_lua.a / clx_lua.lib
+                 │                                  embedded Lua VM + bridge
+                 │                                             │
+                 └──────────────────┬──────────────────────────┘
+                                    ▼
+                         generated native executable
+
+       AOT code ───────────────▶ clx runtime
+          │                          │
+          │ load/loadfile/dofile     │ --dynamic bridge calls
+          │                          ▼
+          └──────────────────▶ embedded Lua VM
+                               VM libraries, heap,
+                               GC, and coroutines
 ```
+
+In a normal build, no embedded VM archive is linked and the dynamic loader functions are not registered. In a `--dynamic` build, the generated program creates a `DynamicVM` lazily when a loader or bridge operation first needs it. Runtime-loaded chunks execute in that VM, while the original clx program continues to execute as native code.
 
 ## Project layout
 
@@ -82,8 +85,15 @@ clx/
 │       ├── io.cpp                # I/O module
 │       ├── os.cpp                # OS module
 │       ├── utf8.cpp              # UTF-8 module
-│       ├── package.cpp           # Package/module system
-│       └── openlibs.cpp          # Standard modules loader
+│       ├── package.cpp           # AOT package/module system
+│       ├── openlibs.cpp          # AOT standard modules loader
+│       └── vm/                   # Optional embedded Lua VM and bridge
+│           ├── dynamic_vm.cpp    # VM lifetime, environment, and proxy roots
+│           ├── load_builtin.cpp  # load/loadfile/dofile registration
+│           ├── vm_convert.cpp    # clx ↔ VM value conversion
+│           ├── vm_function_object.cpp # VM function wrapper
+│           ├── vm_native_bridge.cpp   # VM-to-clx callable dispatch
+│           └── lua/              # Vendored Lua VM sources
 ├── tests/                       # End-to-end test suite
 ├── examples/                    # Example clx projects using the C++ embedding API
 │   ├── mandelbrot/              # Mandelbrot viewer
@@ -107,9 +117,10 @@ clx/
 ### 1. CLI (src/clx.cpp)
 
 The command-line interface handles:
-- Argument parsing (`--executable`, `--object`, `--static`, `--debug`, `--size`, `--fast`, `--cpp`, `--modules`, `--output`)
+- Argument parsing (`--executable`, `--object`, `--static`, `--debug`, `--size`, `--fast`, `--cpp`, `--modules`, `--dynamic`, `--output`)
 - File I/O and multiple lua files compilation
 - Invoking the C++ compiler (fixed at build time via CMake)
+- Selecting the optional dynamic link path: `--dynamic` links `libclx_lua.a` on POSIX or `clx_lua.lib` on Windows and emits registration for `load`, `loadfile`, and `dofile`
 - Output file management and temp file cleanup
 - Dead code elimination by default via `-ffunction-sections -Wl,--gc-sections` (gcc/clang) or `/Gy /link /OPT:REF /OPT:ICF` (MSVC)
 - Default optimization flags if none provided : `-O3 -flto=auto -fno-rtti -fvisibility=hidden` (gcc/clang) or `/O2 /Ot /GL /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy` (MSVC)
@@ -178,7 +189,19 @@ The runtime library implements Lua semantics:
  - `io.cpp` - I/O library
  - `os.cpp` - OS library (clock, time, date, difftime, execute, tmpname, getenv)
  - `utf8.cpp` - UTF-8 library
- - `package.cpp` - Package/module system
+ - `package.cpp` - AOT package/module system
+
+The optional dynamic path is kept separate from these AOT modules:
+
+- `runtime/vm/lua/` - Vendored Lua VM sources and its standard libraries
+- `runtime/vm/dynamic_vm.cpp` - Creates and owns one embedded VM per clx `LState`, including its VM environment and proxy roots
+- `runtime/vm/load_builtin.cpp` - Registers `load`, `loadfile`, and `dofile` when the generated program was linked with `--dynamic`
+- `runtime/vm/vm_convert.cpp` - Converts primitive values and creates proxies for supported clx tables and userdata
+- `runtime/vm/vm_function_object.cpp` - Represents a VM function as a callable clx value
+- `runtime/vm/vm_native_bridge.cpp` - Exposes clx callables to the VM and dispatches calls back into the AOT runtime
+- `runtime/vm/vm_table_proxy.cpp` - Implements VM-side access to proxied clx tables
+
+`--dynamic` does not replace clx's AOT `string`, `math`, `table`, `io`, `os`, `coroutine`, or `package` modules. Dynamically loaded chunks use the embedded VM's own libraries and `require` implementation. The two package systems and coroutine systems remain runtime-local.
 
 ## Data Flow
 
@@ -237,10 +260,22 @@ read-then-write patterns.
 
 ### Runtime Process
 
-1. **Initialization**: Create LState, load standard libraries
+1. **Initialization**: Create the clx `LState` and register the AOT standard libraries
 2. **Execution**: Run compiled code using native arithmetic where possible
-3. **Fallback**: Use Lua value representation when types are unknown
-4. **Cleanup**: Garbage collection of unused objects
+3. **Fallback**: Use the clx `LValue` representation when types are unknown
+4. **Cleanup**: Garbage collection of unused clx objects
+
+### Dynamic Runtime Process (`--dynamic`)
+
+1. **Linking**: Add the optional embedded VM archive and dynamic bridge registration to the generated executable
+2. **Initialization**: Keep the embedded VM dormant until `load`, `loadfile`, `dofile`, or another VM bridge path is used
+3. **VM setup**: Create one `DynamicVM` for the clx `LState`, open the VM's own standard libraries, and build the default VM-side environment
+4. **Loading**: Compile source or binary chunks with the VM's loader; `load` accepts the current bridge's string form and uses the VM's `loadbufferx` path
+5. **Calling**: Wrap loaded VM functions as clx-callable values, convert arguments into VM values, and convert returned values back into clx values
+6. **Reverse calls**: Expose clx functions to VM code through `NativeBridge`, with table proxies and tracked table-argument write-back where supported
+7. **Cleanup**: Destroy VM-owned values with the VM collector and release clx-side proxy roots with the clx collector
+
+The dynamic path is a boundary, not an alternate code generator. A loaded chunk is interpreted by the embedded VM; it is never turned into AOT C++ during program execution.
 
 ## Memory Management
 
@@ -255,6 +290,20 @@ clx uses a 16-byte `LValue` (8-byte payload + separate `ValueType` tag) to store
 - Nil/Boolean: Special sentinel values
 - Threads: Pointer to LThread (coroutine/fiber)
 - Userdata: Pointer to user-defined data
+
+### Runtime Ownership and Bridge Objects
+
+The clx runtime owns `LValue`, `LTable`, clx functions, clx threads, and clx userdata. The embedded VM owns `lua_State`, Lua tables, Lua closures, Lua threads, and VM userdata. A value crossing the boundary is either copied, wrapped in bridge userdata, or rejected:
+
+- nil, booleans, numbers, and strings are copied;
+- clx tables become `clx_proxy` userdata in the VM, with bridge metamethods for supported access;
+- clx userdata becomes `clx_userdata` proxy userdata; it is not exposed as a raw native pointer;
+- clx functions become VM-side callable bridge closures;
+- VM tables passed to a clx function are converted into clx tables, with write-back for tracked table arguments;
+- ordinary VM-created userdata and lightuserdata are VM-local and convert to `nil` when passed to clx; actual VM threads are rejected, while only recognized internal bridge proxies have special handling;
+- clx and VM coroutines cannot be resumed across the boundary, and a yield cannot cross it.
+
+Proxy nodes keep the referenced clx object alive from the VM side. The two collectors still run independently; the bridge explicitly marks proxy targets when the clx collector builds its root set.
 
 ### Garbage Collection
 

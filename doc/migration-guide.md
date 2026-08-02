@@ -462,7 +462,7 @@ clx main.lua --modules vector
 
 The following Lua C API features have no equivalent in clx:
 
-- **`lua_load` / `luaL_loadfile` / `luaL_loadstring`** — clx compiles Lua to C++ ahead of time; runtime code loading is not supported.
+- **`lua_load` / `luaL_loadfile`** — clx compiles Lua to C++ ahead of time; runtime code loading is provided only through the optional `--dynamic` Lua VM bridge.
 - **`lua_dump` / `luac`** — No bytecode format.
 - **`lua_pushcclosure`** — Use `clx::cfunction(L, func)` which wraps a `std::function`.
 - **`lua_upvalueindex` / `lua_getupvalue` / `lua_setupvalue`** — Use lambda captures instead.
