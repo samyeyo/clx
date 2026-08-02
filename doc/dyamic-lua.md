@@ -30,7 +30,7 @@ clx main.lua --dynamic --output myapp
 
 On POSIX systems, the generated program links the bridge archive `libclx_lua.a`. On Windows, it links `clx_lua.lib`. The archive contains the embedded Lua VM and clx’s bridge implementation.
 
-`--dynamic` is a compiler-driver option. It controls whether the generated application links the VM and registers the dynamic-loading functions. There is no separate `CLX_ENABLE_DYNAMIC_LOADING` switch.
+`--dynamic` is a clx compiler option. It controls whether the generated application links the Lua VM and registers the dynamic-loading functions.
 
 ### Minimal builds
 
