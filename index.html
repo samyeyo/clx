@@ -627,7 +627,7 @@
     <article class="card">
         <nav class="sidebar" role="tablist" aria-label="Section navigation">
             <div class="sidebar-brand">
-                <h1><span class="clr-main">cl</span><span class="clr-x">x</span></h1><span class="version">v0.1.0</span>
+                <h1><span class="clr-main">cl</span><span class="clr-x">x</span></h1><span class="version">v0.3.0</span>
             </div>
             <button class="nav-item active" data-section="overview" role="tab" aria-selected="true" aria-controls="overview">
                 <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg></span> Overview
@@ -643,6 +643,9 @@
             </button>
             <button class="nav-item" data-section="doc-getting-started" role="tab">
                 <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg></span> Getting Started
+            </button>
+            <button class="nav-item" data-section="doc-dynamic-lua" role="tab">
+                <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"></path><path d="M2 12h20"></path><circle cx="12" cy="12" r="9"></circle></svg></span> Dynamic Lua
             </button>
             <button class="nav-item" data-section="doc-cli" role="tab">
                 <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg></span> CLI Reference
@@ -682,7 +685,7 @@
                     Lua Compiler for Native Standalone Executables
                 </h2>
                 <p>
-                    Welcome to <span class="bright">clx</span> — a native Lua compiler that turns your Lua scripts into fast, standalone executables. No interpreter needed, no runtime dependencies — just your code compiled to machine code.
+                    Welcome to <span class="bright">clx</span> — a native Lua compiler that turns your Lua scripts into fast, standalone executables. Normal AOT builds need no interpreter or runtime dependency; use <span class="inline-code">--dynamic</span> when the application must load Lua source at runtime.
                 </p>
                 <div style="display:flex;justify-content:center;margin:2.5rem 0">
                     <div class="code-block" style="max-width:420px;box-shadow:var(--shadow-card);border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card)">
@@ -690,7 +693,7 @@
 <span class="keyword">echo</span> 'print("Hello from clx!")' > hello.lua
 <span class="comment"># Compile to a native binary</span>
 clx hello.lua
-<span class="comment"># Run it — zero dependencies, instant startup</span>
+<span class="comment"># Run it — the normal AOT binary has no runtime dependency</span>
 ./hello</div>
                     </div>
                 </div>
@@ -729,19 +732,19 @@ clx hello.lua
                         <div class="feature-title">
                             <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line></svg></span> Zero Dependencies
                         </div>
-                        <div class="feature-desc">Binaries with no runtime requirements. Ship a single file, run anywhere.</div>
+                        <div class="feature-desc">Normal AOT binaries are self-contained. <span class="inline-code">--dynamic</span> additionally links the embedded Lua VM for runtime loading.</div>
                     </div>
                     <div class="feature-card">
                         <div class="feature-title">
                             <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="#eab308" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg></span> Lua 5.5 runtime
                         </div>
-                        <div class="feature-desc">Lua 5.5 syntax and standard modules. <span style="color: var(--text-dim);">(load/dofile/loadfile and debug lib excluded — AOT limitations)</span></div>
+                        <div class="feature-desc">Lua 5.5 language and clx standard modules. <span style="color: var(--text-dim);">Dynamic chunks use the embedded VM's libraries and <span class="inline-code">require</span>; <span class="inline-code">load</span>/<span class="inline-code">loadfile</span>/<span class="inline-code">dofile</span> require <span class="inline-code">--dynamic</span>.</span></div>
                     </div>
                     <div class="feature-card">
                         <div class="feature-title">
                             <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></span> Modern garbage collector
                         </div>
-                        <div class="feature-desc">Incremental, shadow-stack-based Mark-and-Sweep collector.</div>
+                        <div class="feature-desc">Mark-and-sweep collector with reusable worklists and explicit incremental GC options.</div>
                     </div>
                     <div class="feature-card">
                         <div class="feature-title">
@@ -795,7 +798,7 @@ clx hello.lua
                 <div class="code-block">
                     <div class="code-header"><span class="lang">sh</span><span>Verify</span></div>
                     <div class="code-body"><span class="prompt">$</span> clx --version
-<span class="output">clx 0.1.0</span>
+<span class="output">clx 0.3.0</span>
 <span class="output">MIT License - Copyright (c) 2026 Tine Samir</span></div>
                 </div>
             </section>
@@ -804,14 +807,14 @@ clx hello.lua
                     <span class="section-title-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg></span>
                     Benchmarks
                 </h2>
-                <p>Performance comparison against popular Lua runtimes. The <i>speedup</i> is relative to Lua 5.5 interpreter. Benchmarks may vary depending on the C++ toolchain and environment.</p>
+                <p>Performance comparison against Lua 5.5 and LuaJIT. The <i>speedup</i> is relative to Lua 5.5. Results are averages from 10 runs using hyperfine on a single CPU; they vary with the C++ toolchain and environment.</p>
                 <div style="margin-bottom: 20px;">
                     <label for="bench-select" style="font-size: 0.8125rem; color: var(--text-dim); margin-bottom: 8px; display: block;">Select a benchmark:</label>
                     <select id="bench-select" style="width: 100%; max-width: 320px; padding: 10px; background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: inherit; font-size: 0.875rem; cursor: pointer; outline: none;">
                         <option value="fib">fib (Recursive Fibonacci)</option>
                         <option value="ackermann">ackermann (Deep Recursion)</option>
                         <option value="spectralnorm">spectralnorm (Spectral Norm)</option>
-                        <option value="arraysum">arraysum (Iteration & Sum)</option>
+                        <option value="arraysum">arraysum (Iteration &amp; Sum)</option>
                         <option value="pi">pi (Numeric Calculation)</option>
                         <option value="bubble">bubble (Sort Algorithm)</option>
                         <option value="json">json (JSON Parsing)</option>
@@ -845,7 +848,7 @@ clx hello.lua
                     </table>
                 </div>
                 <p id="bench-desc" style="font-size: 0.8125rem; color: var(--text-dim); line-height: 1.6; margin: 16px 0 8px 0; padding: 0 2px;"></p>
-                <label for="bench-select" style="font-size: 0.8125rem; color: var(--text-dim); margin-bottom: 8px; display: block;"><br>Intel® Core™ i5 Ultra 125U CPU @ 4.30GHz · Linux · GCC 13.3.0 · Avg of 10 runs · lower time is better</label>
+                <label for="bench-select" style="font-size: 0.8125rem; color: var(--text-dim); margin-bottom: 8px; display: block;"><br>Intel® Core™ i5 Ultra 125U CPU @ 4.30GHz · Linux · GCC 13.3.0 · hyperfine · 10-run average · lower time is better</label>
             </section>
             <section id="doc-getting-started" class="section doc-section" role="tabpanel">
                 <h2>
@@ -861,7 +864,8 @@ clx hello.lua
 <span class="prompt">$</span> cd clx
 <span class="prompt">$</span> ./build.sh
 <span class="comment"># Debug build: ./build.sh debug</span>
-<span class="comment"># Install: ./build.sh install</span></div>
+<span class="comment"># Build and install: ./build.sh install</span>
+<span class="comment"># Clean build directory: ./build.sh clean</span></div>
                     </div>
                     <p>Alternatively, build manually with CMake:</p>
                     <div class="code-block">
@@ -906,7 +910,7 @@ print("Fibonacci(20) = " .. fib(20))</div>
                 </div>
                 <div class="doc-section">
                     <h3>Language Features</h3>
-                    <p>clx supports most Lua 5.5 features including variables, control flow, functions, tables, metatables, coroutines, standard libraries, and bitwise operations. Due to the AOT compilation model, <span class="inline-code">load()</span>, <span class="inline-code">dofile()</span>, <span class="inline-code">loadfile()</span>, <span class="inline-code">string.dump()</span>, and the <span class="inline-code">debug</span> library are not available.</p>
+                    <p>clx supports most Lua 5.5 features including variables, control flow, functions, tables, metatables, coroutines, standard libraries, and bitwise operations. <span class="inline-code">load()</span>, <span class="inline-code">loadfile()</span>, and <span class="inline-code">dofile()</span> are registered only for programs compiled with <span class="inline-code">--dynamic</span>; they execute source in the embedded Lua VM and are absent from ordinary AOT and <span class="inline-code">--minimal</span> builds. The AOT runtime does not provide <span class="inline-code">string.dump()</span> or <span class="inline-code">debug</span> directly; the dynamic VM provides its own library behavior.</p>
                     <h4>Variables and Types</h4>
                     <div class="code-block">
                         <div class="code-header"><span class="lang">lua</span></div>
@@ -1111,7 +1115,60 @@ end
                 </div>
                 <div class="doc-section">
                     <h3>Next Steps</h3>
-                    <p>Read the <a href="#doc-architecture">Architecture</a>, <a href="#doc-optimizations">Optimizations</a>, <a href="#doc-runtime">Runtime</a>, and <a href="#doc-cli">CLI</a> documentation.</p>
+                    <p>Read the <a href="#doc-dynamic-lua">Dynamic Lua</a>, <a href="#doc-architecture">Architecture</a>, <a href="#doc-optimizations">Optimizations</a>, <a href="#doc-runtime">Runtime</a>, and <a href="#doc-cli">CLI</a> documentation.</p>
+                </div>
+            </section>
+            <section id="doc-dynamic-lua" class="section doc-section" role="tabpanel">
+                <h2>
+                    <span class="section-title-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"></path><path d="M2 12h20"></path><circle cx="12" cy="12" r="9"></circle></svg></span>
+                    Dynamic Lua
+                </h2>
+                <div class="doc-section">
+                    <h3>Enable Dynamic Lua</h3>
+                    <p>Normal clx builds compile Lua ahead of time into native C++. The <span class="inline-code">--dynamic</span> switch adds the embedded Lua VM and bridge needed to load or execute Lua source at runtime.</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">sh</span><span>Build and compile</span></div>
+                        <div class="code-body"><span class="prompt">$</span> cmake -S . -B build
+<span class="prompt">$</span> cmake --build build
+<span class="prompt">$</span> ./build/clx main.lua --dynamic --output myapp
+<span class="prompt">$</span> ./myapp</div>
+                    </div>
+                    <p>On POSIX the generated program links <span class="inline-code">libclx_lua.a</span>; on Windows it links <span class="inline-code">clx_lua.lib</span>. Do not combine <span class="inline-code">--minimal</span> with dynamic loading: minimal builds skip the standard-library setup that registers the loader functions.</p>
+                </div>
+                <div class="doc-section">
+                    <h3>Runtime Loading APIs</h3>
+                    <p>With <span class="inline-code">--dynamic</span>, clx registers the following globals:</p>
+                    <div class="code-block">
+                        <div class="code-body"><span class="kw">local</span> chunk, err = <span class="fn">load</span>(source [, chunkname [, mode [, env]]])
+<span class="kw">local</span> chunk, err = <span class="fn">loadfile</span>([filename [, mode [, env]]])
+<span class="kw">local</span> result = <span class="fn">dofile</span>([filename])</div>
+                    </div>
+                    <ul>
+                        <li><span class="inline-code">load</span> compiles a source string in the embedded VM and returns a callable clx function value. The current bridge does not implement the reader-function form.</li>
+                        <li><span class="inline-code">loadfile</span> reads and compiles a file without executing it.</li>
+                        <li><span class="inline-code">dofile</span> loads a file and immediately calls the resulting chunk.</li>
+                    </ul>
+                </div>
+                <div class="doc-section">
+                    <h3>VM Libraries and <code>require</code></h3>
+                    <p>Runtime-loaded chunks execute in the embedded VM, not in the clx AOT runtime. They use the VM's own <span class="inline-code">string</span>, <span class="inline-code">math</span>, <span class="inline-code">table</span>, <span class="inline-code">os</span>, <span class="inline-code">io</span>, <span class="inline-code">utf8</span>, <span class="inline-code">coroutine</span>, <span class="inline-code">package</span>, <span class="inline-code">require</span>, base functions, and VM <span class="inline-code">debug</span> library. The VM initializes that library, but the default dynamic environment does not copy a <span class="inline-code">debug</span> global into loaded chunks.</p>
+                    <p>The package systems are separate: AOT <span class="inline-code">require</span> uses clx's package runtime, while a dynamic chunk uses Lua VM <span class="inline-code">package.searchers</span>, <span class="inline-code">package.loaded</span>, and <span class="inline-code">package.preload</span>. AOT modules are not automatically inserted into the VM's <span class="inline-code">package.preload</span>.</p>
+                </div>
+                <div class="doc-section">
+                    <h3>Environments and Boundary Values</h3>
+                    <ul>
+                        <li>The default VM environment exposes selected VM globals and bridge callbacks for missing names in the clx global table.</li>
+                        <li>A custom environment passed to <span class="inline-code">load</span> or <span class="inline-code">loadfile</span> is a converted clx table; VM libraries must be provided explicitly when needed.</li>
+                        <li>Nil, booleans, numbers, and strings are copied by value. Functions are wrapped across the bridge.</li>
+                        <li>Clx tables and userdata become VM-side proxy userdata (<span class="inline-code">clx_proxy</span> and <span class="inline-code">clx_userdata</span>), not raw native objects. VM tables passed to clx are converted and tracked writes can be copied back.</li>
+                        <li>Ordinary VM userdata and lightuserdata are VM-local and convert to <span class="inline-code">nil</span> when passed to clx; VM threads are explicitly rejected. Only recognized bridge proxies have special handling.</li>
+                    </ul>
+                </div>
+                <div class="doc-section">
+                    <h3>Coroutines and Limitations</h3>
+                    <p>Coroutines are runtime-local. Keep creation, resume, yield, and close within either clx or the embedded VM; clx and VM coroutines cannot be passed or resumed across the boundary, and a yield cannot cross it. The bridge also rejects calling a VM function from inside a clx coroutine.</p>
+                    <p>Dynamic loading is unavailable without <span class="inline-code">--dynamic</span>, loader registration is skipped by <span class="inline-code">--minimal</span>, and the two runtimes do not share table identity, userdata layout, garbage collection, or package caches. The AOT runtime does not provide <span class="inline-code">string.dump</span>; that API belongs to the embedded VM path.</p>
+                    <p>For the complete API behavior and current limitations, see <span class="inline-code">doc/dyamic-lua.md</span>.</p>
                 </div>
             </section>
             <section id="doc-cli" class="section doc-section" role="tabpanel">
@@ -1149,6 +1206,7 @@ end
 <span class="flag">--fast</span>        Optimize for speed
 <span class="flag">--cpp</span>         Generate C++ source files, don't compile
 <span class="flag">--minimal</span>   Exclude non-essential modules (string, table, io, os, math, utf8, coroutine); keeps base + package
+<span class="flag">--dynamic</span>   Link the embedded Lua 5.5 VM and enable load, loadfile, and dofile
 <span class="flag">--modules</span> &lt;list&gt;  Precompiled modules to link (comma-separated)</div>
                     </div>
                 </div>
@@ -1186,11 +1244,11 @@ end
                         <div class="code-body"><span class="comment"># Linux/macOS:</span>
   Compiler: fixed at build time via CMake
   Executable: &lt;name&gt; (no extension)
-  Object: &lt;name&gt;.o  |  Static: &lt;name&gt;.a  |  Dynmod: &lt;name&gt;.so
+  Object: &lt;name&gt;.o  |  Static: &lt;name&gt;.a
 <span class="comment"># Windows:</span>
   Compiler: fixed at build time via CMake
   Executable: &lt;name&gt;.exe
-  Object: &lt;name&gt;.obj  |  Static: &lt;name&gt;.lib  |  Dynmod: &lt;name&gt;.dll</div>
+  Object: &lt;name&gt;.obj  |  Static: &lt;name&gt;.lib</div>
                     </div>
                 </div>
                 <div class="doc-section">
@@ -1237,8 +1295,8 @@ end
                     <div class="code-block">
                         <div class="code-body"><span class="prompt">$</span> mkdir build
 <span class="prompt">$</span> cd build
-<span class="prompt">$</span> cmake ..
-<span class="prompt">$</span> make
+<span class="prompt">$</span> cmake .. -DCMAKE_BUILD_TYPE=Release
+<span class="prompt">$</span> cmake --build .
 <span class="prompt">$</span> ./clx --help</div>
                     </div>
                 </div>
@@ -1250,7 +1308,7 @@ end
                 </h2>
                 <div class="doc-section">
                     <h3>Overview</h3>
-                    <p>clx transpiles Lua source code into optimized C++, then compiles with the system C++ compiler to produce native machine code. This architecture provides performance up to 62x faster than standard Lua interpreters.</p>
+                    <p>clx transpiles Lua source code into optimized C++, then compiles it with the system C++ compiler to produce native machine code. The normal execution path is entirely AOT. The optional <span class="inline-code">--dynamic</span> link path adds a separate embedded Lua VM for runtime-loaded source; it does not replace the AOT runtime.</p>
                 </div>
                 <div class="doc-section">
                     <h3>Compiler Pipeline</h3>
@@ -1273,8 +1331,12 @@ end
                                     <div style="padding: 6px 12px; border: 1px solid var(--border); background: var(--sidebar); border-radius: 4px; font-size: 0.75rem; color: var(--text-muted);">Runtime (libclx.a)</div>
                                     <div style="color: var(--text-dim);">➔</div>
                                 </div>
+                                <div style="position: absolute; right: -190px; display: flex; align-items: center; gap: 6px;">
+                                    <div style="padding: 6px 12px; border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 4px; font-size: 0.75rem; color: var(--accent);">--dynamic: libclx_lua.a / clx_lua.lib</div>
+                                    <div style="color: var(--text-dim);">➔</div>
+                                </div>
                             </div>
-                            <div style="color: var(--text-dim); font-size: 1rem;">▼</div>
+                            <div style="color: var(--text-dim); font-size: 0.75rem;">Link-time optional VM + bridge ▼</div>
                             <div style="padding: 8px 16px; border: 1px solid var(--border); background: var(--accent-strong); border-radius: 6px; font-size: 0.8125rem; font-weight: 600; color: var(--text-bright);">Native Binary</div>
                         </div>
                     </div>
@@ -1285,9 +1347,9 @@ end
                     <p><span class="bright">Lexer</span> — Converts source to token stream (keywords, identifiers, literals, operators, delimiters).</p>
                     <p><span class="bright">Parser</span> — Recursive descent parser builds an AST with statement, expression, block, and function nodes.</p>
                     <p><span class="bright">AST Nodes</span> — Core node types: Block, Identifier, BinaryOp, UnaryOp, FunctionDef, TableConstructor, ForStatement, WhileStatement, IfStatement, CallExpression.</p>
-                    <p><span class="bright">Optimizer</span> — Analyzes the AST and annotates nodes with optimization hints: Numeric fast-path (direct C++ arithmetic), variable scope resolution, table purity analysis, constant folding preparation, table version tracking for inline cache invalidation, <span class="inline-code">yields_number</span> analysis for numeric for loops.</p>
-                    <p><span class="bright">Code Generator</span> — Produces C++ code with fast-path for numeric operations, slow-path for dynamic operations, loop transformation, <span class="inline-code">[[likely]]</span> branch prediction hints, per-LTable <span class="inline-code">InlineCache</span> (4 entries) for string-keyed table access, StringBuilder-based concatenation, and wyhash-based string hashing.</p>
-                    <p><span class="bright">Runtime Library</span> — Implements Lua semantics: core VM (GC, tables, metamethods, arithmetic, bitwise ops), base library, math library, coroutines, module loading, and string library.</p>
+                    <p><span class="bright">Optimizer</span> — Analyzes the AST and annotates nodes with optimization hints: numeric fast-paths and parameter promotion, numeric record-field inference, variable scope resolution, table purity analysis, constant folding preparation, table version tracking for inline-cache invalidation, and <span class="inline-code">yields_number</span> analysis for numeric loops.</p>
+                    <p><span class="bright">Code Generator</span> — Produces C++ code with native numeric fast-paths, dynamic fallbacks, loop transformations, <span class="inline-code">[[likely]]</span> hints, per-LTable 4-entry inline caches, StringBuilder concatenation, and baked string hashes.</p>
+                    <p><span class="bright">Runtime Library</span> — Implements Lua semantics through the AOT runtime: values, GC, tables, metamethods, arithmetic, standard libraries, coroutines, and the clx package system. The optional <span class="inline-code">runtime/vm/</span> tree contains the separate embedded Lua VM and bridge.</p>
                 </div>
                 <div class="doc-section">
                     <h3>Project Layout</h3>
@@ -1298,7 +1360,8 @@ end
 ├── build.sh / build.bat        # Convenience build scripts
 ├── include/
 │   ├── clx.h                   # Public C++ API (value ctors, type queries, helpers)
-│   └── clx_runtime.h           # Internal runtime (types, GC, tables, inline ops)
+│   ├── clx_runtime.h           # Internal runtime (types, GC, tables, inline ops)
+│   └── clx_simd.h              # SIMD helpers for runtime type-array scans
 ├── src/
 │   ├── clx.cpp                  # Compiler driver / CLI
 │   ├── syntax/
@@ -1322,7 +1385,13 @@ end
 │       ├── os.cpp                # OS module
 │       ├── utf8.cpp              # UTF-8 module
 │       ├── package.cpp           # Package/module system
-│       └── openlibs.cpp          # Standard modules loader
+│       ├── openlibs.cpp          # Standard modules loader
+│       └── vm/                   # Optional embedded Lua VM and bridge
+│           ├── dynamic_vm.cpp    # VM lifetime and environment
+│           ├── load_builtin.cpp  # load/loadfile/dofile registration
+│           ├── vm_convert.cpp    # clx ↔ VM conversion
+│           ├── vm_native_bridge.cpp # Calls across the boundary
+│           └── lua/               # Vendored Lua VM sources
 ├── tests/                       # End-to-end test suite
 ├── examples/                    # Example clx projects using the C++ embedding API
 │   ├── mandelbrot/              # Mandelbrot viewer
@@ -1335,7 +1404,7 @@ end
                 <div class="doc-section">
                     <h3>Data Flow</h3>
                     <p><span class="bright">Compilation:</span> Lua source → Lexing → Parsing → AST → Optimization → Annotated AST → Codegen → C++ source → Compilation → Native binary</p>
-                    <p><span class="bright">Runtime:</span> Initialization (LState, standard libraries) → Execution (compiled code with Numeric fast-path) → Fallback (Lua value representation for dynamic types) → Cleanup (GC)</p>
+                    <p><span class="bright">Runtime:</span> Initialization (LState and selected AOT libraries) → Execution (native code with numeric fast-paths) → Dynamic fallback to the LValue representation when types are unknown → Cleanup (GC). With <span class="inline-code">--dynamic</span>, loaded chunks execute separately in the embedded VM.</p>
                 </div>
                 <div class="doc-section">
                     <h3>Key Runtime Components</h3>
@@ -1345,7 +1414,7 @@ end
                     <p>Fast, high-quality hash function used for table keys and string interning. Uses compile-time constant secrets with 128-bit multiply for excellent avalanche. For interned strings, the hash is baked into the allocation header, making <span class="inline-code">lvalue_hash()</span> a single 4-byte load.</p>
                     <p>For strings ≤8 bytes, <span class="inline-code">swar_hash_8()</span> replaces <span class="inline-code">wyhash_str</span> — loads all bytes into one register with a single <span class="inline-code">memcpy</span> and mixes via <span class="inline-code">wyhash64</span>. Used consistently for both TAG_ISTR inline strings and short interned strings so cross-type hash compatibility is maintained.</p>
                     <h4>Per-LTable Inline Cache</h4>
-                    <p>Each LTable embeds a 4-entry <span class="inline-code">InlineCache</span> for string-keyed table access. Indexed by <span class="inline-code">key ^ (key >> 17) ^ (key >> 33) % 4</span>. Stores key payload, entry index, and table <span class="inline-code">hash_version</span>. Valid when key matches and hash_version hasn't changed. Uses <span class="inline-code">hash_version</span> (structural changes only — inserts/deletes/rehash) not per-entry version, so read-then-write patterns still hit. 64 bytes overhead per LTable.</p>
+                    <p>Each LTable embeds a 4-entry <span class="inline-code">InlineCache</span> for string-keyed table access. The cache stores key payload, entry index, and table <span class="inline-code">hash_version</span>. It is valid when the key and version match; structural changes (inserts, deletes, and rehashes) invalidate it, while value-only updates preserve read-then-write hits. The cache occupies 64 bytes per LTable.</p>
                     <h4>StringBuilder</h4>
                     <p>O(n) string concatenation that avoids the O(n²) quadratic blow-up of repeated <span class="inline-code">s = s .. part</span> patterns. Uses inline storage for up to 8 parts, grows to heap allocation when needed. Produces a single interned string with baked hash on <span class="inline-code">to_string()</span>.</p>
                     <h4>Table Version Tracking</h4>
@@ -1400,7 +1469,7 @@ local result = a + b  <span class="comment">-- When known numeric, uses add dire
                         <li><span class="bright">sub</span>: Detects different-sign inputs where the result sign matches the subtrahend</li>
                         <li><span class="bright">mul</span>: Verifies <span class="inline-code">result / operand == other_operand</span>, with special-case for <span class="inline-code">INT64_MIN * -1</span></li>
                     </ul>
-                    <p>On overflow, the result is promoted to <span class="inline-code">double</span> (matching Lua 5.5 semantics). <span class="inline-code">mod</span>, <span class="inline-code">idiv</span>, <span class="inline-code">pow</span>, and <span class="inline-code">unm</span> always promote to double for all numeric inputs.</p>
+                    <p>On overflow, the result is promoted to <span class="inline-code">double</span> (matching Lua 5.5 semantics). <span class="inline-code">mod</span>, <span class="inline-code">idiv</span>, <span class="inline-code">pow</span>, and <span class="inline-code">unm</span> follow their Lua numeric semantics for integer and floating-point inputs.</p>
                 </div>
                 <div class="doc-section">
                     <h3>Non-Fast Function Parameter Numeric Promotion</h3>
@@ -1516,7 +1585,7 @@ end</div>
                             </div>
                             <div style="display: flex; flex-direction: column; padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--card);">
                                 <span style="font-size: 0.8125rem; font-weight: 600; color: var(--accent);">Inline String (TAG_ISTR)</span>
-                                <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">8-bit length + up to 6 bytes of character data in TValue payload (byte 6 unused)</span>
+                                <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">Small strings up to 6 bytes are stored inline in the 8-byte payload without heap allocation</span>
                             </div>
                             <div style="display: flex; flex-direction: column; padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--card);">
                                 <span style="font-size: 0.8125rem; font-weight: 600; color: var(--accent);">Special System Literals</span>
@@ -1533,8 +1602,8 @@ end</div>
                     <h3>Standard Libraries</h3>
                     <p><span class="bright">Base Library</span> — print, error, assert, type, tostring, tonumber, pairs, ipairs, next, pcall, xpcall, select, collectgarbage, setmetatable, getmetatable, rawequal, rawget, rawset, rawlen, warn, _VERSION</p>
                     <p><span class="bright">Math Library</span> — Uses <span class="inline-code">set_lazy_funcs</span> for lazy registration via <span class="inline-code">constexpr LazyReg[]</span>. Functions created as <span class="inline-code">LCFunction</span> closures on first access, then cached on the table.</p>
-                    <p><span class="bright">String Library</span> — len, sub, reverse, lower, upper, rep, byte, char, format, find, match, gmatch, gsub, pack, unpack, packsize with full pattern matching support.</p>
-                    <p><span class="bright">Coroutine Library</span> — create, resume, yield, status, wrap using OS-level fibers/ucontext. On macOS Apple Silicon, uses hand-written ARM64 assembly (<span class="inline-code">src/runtime/coro_switch_aarch64.s</span>) replacing buggy <span class="inline-code">ucontext</span>.</p>
+                    <p><span class="bright">String Library</span> — len, sub, reverse, lower, upper, rep, byte, char, format, find, match, gmatch, and gsub with pattern matching support.</p>
+                    <p><span class="bright">Coroutine Library</span> — create, resume, yield, status, wrap, isyieldable, and close using OS-level fibers/context. On macOS Apple Silicon, it uses hand-written ARM64 assembly (<span class="inline-code">src/runtime/coro_switch_aarch64.s</span>) instead of the buggy Darwin <span class="inline-code">ucontext</span> shim.</p>
                     <p><span class="bright">Table Library</span> — insert, remove, concat, sort, unpack, pack, move.</p>
                 </div>
                 <div class="doc-section">
@@ -1555,7 +1624,7 @@ __index  __newindex  __call  __tostring  __gc  __close  __metatable</div>
     uint32_t table_ver;    // Snapshot of hash_version at populate time
 };</div>
                     </div>
-                    <p>4-entry per-LTable cache for string-keyed table access. Indexed by <span class="inline-code">key ^ (key >> 17) ^ (key >> 33) % 4</span>. Valid when key matches and hash_version hasn't changed. Only structural changes (inserts/deletes/rehash) invalidate — value updates don't. 64 bytes overhead per LTable.</p>
+                    <p>4-entry per-LTable cache for string-keyed table access. A hit requires a matching key payload, the current <span class="inline-code">hash_version</span>, and a non-nil cached entry. Structural changes (inserts, deletes, and rehashes) invalidate the cache; value-only updates do not. The cache occupies 64 bytes per LTable.</p>
                 </div>
                 <div class="doc-section">
                     <h3>Closures and Upvalues</h3>
@@ -2145,13 +2214,14 @@ main() {
 <span class="kw">local</span> proc = <span class="fn">require</span>(<span class="str">"native_processor"</span>)   <span class="comment">-- C++ native module (preload)</span>
 <span class="kw">local</span> extra = <span class="fn">require</span>(<span class="str">"extra_plugin"</span>)      <span class="comment">-- Static module (preload)</span></div>
                     </div>
-                    <p>All modules are registered in <span class="inline-code">package.preload</span> and loaded via <span class="inline-code">require</span>.</p>
+                    <p>All AOT modules in this build are registered in clx's <span class="inline-code">package.preload</span> and loaded via the AOT <span class="inline-code">require</span>. This does not populate the embedded VM's package registry.</p>
                 </div>
                 <div class="doc-section">
                     <h3>Options Reference</h3>
                     <div class="code-block">
                         <div class="code-body"><span class="flag">--modules</span> &lt;list&gt;   Comma-separated list of precompiled C++ modules
 <span class="flag">--minimal</span>          Exclude non-essential modules (string, table, io, os, math, utf8, coroutine); keeps base + package
+<span class="flag">--dynamic</span>          Link the embedded Lua 5.5 VM and enable load, loadfile, and dofile
 <span class="flag">--static</span>            Compile to static library (exports <span class="fn">luaopen_</span>*)
 <span class="flag">--object</span>            Compile to object file (exports <span class="fn">luaopen_</span>*)</div>
                     </div>
@@ -2258,23 +2328,23 @@ main() {
                                 <tr><td>os</td><td style="color:#22c55e">✅</td></tr>
                                 <tr><td>utf8</td><td style="color:#22c55e">✅</td></tr>
                                 <tr><td>package</td><td style="color:#22c55e">✅</td></tr>
-                                <tr><td>debug</td><td style="color:#ef4444">❌</td></tr>
+                                <tr><td>debug</td><td>AOT: ❌ / VM: ✅ with <span class="inline-code">--dynamic</span></td></tr>
                             </tbody>
                         </table>
                     </div>
                 </div>
                 <div class="doc-section">
-                    <h3>Unsupported — AOT Limitations</h3>
-                    <p>Due to the static compilation model, the following features are intentionally unsupported:</p>
+                    <h3>Conditional and Unsupported Features</h3>
+                    <p>Runtime loading requires <span class="inline-code">--dynamic</span> and executes in the embedded Lua VM. The clx AOT runtime does not provide these features directly:</p>
                     <div class="bench-wrap" style="margin-top:16px">
                         <table class="bench-table">
                             <thead><tr><th>Feature</th><th>Reason</th></tr></thead>
                             <tbody>
-                                <tr><td>load()</td><td>Runtime Lua code loading</td></tr>
-                                <tr><td>loadfile()</td><td>Runtime Lua code loading from file</td></tr>
-                                <tr><td>dofile()</td><td>Runtime Lua code execution from file</td></tr>
-                                <tr><td>string.dump()</td><td>Lua code compilation</td></tr>
-                                <tr><td>debug library</td><td>Runtime introspection</td></tr>
+                                <tr><td>load()</td><td>Requires <span class="inline-code">--dynamic</span>; the current bridge accepts source strings, not reader functions</td></tr>
+                                <tr><td>loadfile()</td><td>Requires <span class="inline-code">--dynamic</span>; compiles a file in the embedded Lua VM</td></tr>
+                                <tr><td>dofile()</td><td>Requires <span class="inline-code">--dynamic</span>; loads and executes a file through the bridge</td></tr>
+                                <tr><td>string.dump()</td><td>Not provided by the clx AOT runtime; available in the embedded VM path</td></tr>
+                                <tr><td>debug library</td><td>Not provided as a clx AOT global; embedded VM behavior applies to dynamic code</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -2422,7 +2492,7 @@ CLX_API clx::LValue luaopen_vector(clx::LState* L) {
     return t;
 }</div>
                     </div>
-                    <p>Not supported in clx: <span class="inline-code">lua_load</span>, <span class="inline-code">luaL_loadfile</span>, <span class="inline-code">luaL_loadstring</span>, <span class="inline-code">lua_dump</span>, bytecode format, <span class="inline-code">lua_pushcclosure</span>, upvalue API, <span class="inline-code">lua_newstate</span>, <span class="inline-code">lua_gc</span>, <span class="inline-code">luaL_Buffer</span>.</p>
+                    <p>Not supported directly by the clx C++ API: <span class="inline-code">lua_load</span> and <span class="inline-code">luaL_loadfile</span> (use the optional <span class="inline-code">--dynamic</span> VM bridge for runtime loading), <span class="inline-code">lua_dump</span> and a shared bytecode format, <span class="inline-code">lua_pushcclosure</span> and the upvalue API, <span class="inline-code">lua_newstate</span>, <span class="inline-code">lua_gc</span>, and <span class="inline-code">luaL_Buffer</span>.</p>
                 </div>
             </section>
         </div>
