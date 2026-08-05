@@ -623,8 +623,8 @@ int main(int argc, char *argv[]) {
         std::string tmp_dir = fs::temp_directory_path().string();
         while (!tmp_dir.empty() && (tmp_dir.back() == '\\' || tmp_dir.back() == '/'))
             tmp_dir.pop_back();
-        std::string fo_arg = " /Fo\"" + tmp_dir + "\"";
 
+        std::string fo_arg = " /Fo\"" + tmp_dir + "\\\\\"";
         std::string out_ext;
         if (mode != BuildMode::Object && mode != BuildMode::Static) {
             out_ext = ".exe";
