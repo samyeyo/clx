@@ -31,7 +31,7 @@ set FAIL=0
 :: Walk through subdirectories
 for %%D in (conformance regression stress compiler_killers edge_cases) do (
     if exist "%%D" (
-        for /f "delims=" %%F in ('dir /b "%%D\*.lua" 2^>nul ^| findstr /v /i "^package\.lua$ ^mymod\.lua$ ^test_native_mod\.lua$"') do (
+        for /f "delims=" %%F in ('dir /b "%%D\*.lua" 2^>nul ^| findstr /v /i "^package\.lua$ ^mymod\.lua$ ^test_native_mod\.lua$ ^load\.lua$"') do (
             set "name=%%~nF"
             set "prefix=%%D_!name!"
 
