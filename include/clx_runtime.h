@@ -22,6 +22,7 @@
 #include <initializer_list>
 
 #if defined(_WIN32)
+#define NOMINMAX
 #include <windows.h>
 #elif defined(__APPLE__) && defined(__aarch64__) || defined(__linux__) && defined(__aarch64__)
 struct CoroutineContext {
@@ -54,14 +55,12 @@ void clx_coro_init(CoroutineContext *ctx, void *stack_top, void *entry);
 #include <ucontext.h>
 #endif
 
-#if defined(__clang__) && __has_builtin(__builtin_musttail)
-#define CLX_MUSTTAIL [[clang::musttail]]
-#elif defined(__GNUC__) && !defined(__clang__) && defined(__has_cpp_attribute)
-#if __has_cpp_attribute(gnu::musttail)
-#define CLX_MUSTTAIL [[gnu::musttail]]
-#else
+#if defined(_MSC_VER) || !defined(__has_builtin)
 #define CLX_MUSTTAIL
-#endif
+#elif __has_builtin(__builtin_musttail)
+#define CLX_MUSTTAIL [[clang::musttail]]
+#elif defined(__GNUC__) && defined(__has_cpp_attribute) && __has_cpp_attribute(gnu::musttail)
+#define CLX_MUSTTAIL [[gnu::musttail]]
 #else
 #define CLX_MUSTTAIL
 #endif
