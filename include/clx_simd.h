@@ -74,7 +74,7 @@ CLX_INLINE_HOT size_t clx_find_first_nil(const uint8_t *types, size_t size) {
     for (; i + 32 <= size; i += 32) {
         __m256i v = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(types + i));
         __m256i cmp = _mm256_cmpeq_epi8(v, zero256);
-        uint32_t mask = ~_mm256_movemask_epi8(cmp);
+        uint32_t mask = _mm256_movemask_epi8(cmp);
         if (mask != 0) {
             return i + clx_ctz(mask);
         }
@@ -85,7 +85,7 @@ CLX_INLINE_HOT size_t clx_find_first_nil(const uint8_t *types, size_t size) {
     for (; i + 16 <= size; i += 16) {
         __m128i v = _mm_loadu_si128(reinterpret_cast<const __m128i *>(types + i));
         __m128i cmp = _mm_cmpeq_epi8(v, zero);
-        int mask = ~_mm_movemask_epi8(cmp);
+        int mask = _mm_movemask_epi8(cmp);
         if (mask != 0) {
             return i + clx_ctz(static_cast<unsigned>(mask));
         }
