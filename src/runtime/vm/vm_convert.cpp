@@ -15,6 +15,7 @@
 
 #include <cstring>
 #include <cstdio>
+#include <limits>
 
 extern "C" int clx_vm_userdata_index(lua_State *L);
 extern "C" int clx_vm_proxy_index(lua_State *L);
@@ -62,7 +63,7 @@ void clx_to_vm_value_(LState *clx_L, lua_State *L, const LValue &v) {
     case Double:
         if (v.val.payload.f64 != v.val.payload.f64) {
 
-            lua_pushnumber(L, 0.0 / 0.0);
+            lua_pushnumber(L, std::numeric_limits<double>::quiet_NaN());
         } else {
             lua_pushnumber(L, v.val.payload.f64);
         }
