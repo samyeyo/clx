@@ -22,5 +22,5 @@ local function bubble_sort(size)
 end
 
 print("Bubble Sorting 2,000 elements (Worst Case)...")
-local first, last = bubble_sort(2000)
+local first, last = bubble_sort(5000)
 print("First: " .. tostring(first) .. " | Last: " .. tostring(last))

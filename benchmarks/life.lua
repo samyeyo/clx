@@ -1,6 +1,6 @@
 local WIDTH = 40
 local HEIGHT = 20
-local GENERATIONS = 300
+local GENERATIONS = 1200
 
 local function create_grid(...)
     local grid = {}

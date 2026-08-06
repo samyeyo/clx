@@ -15,5 +15,5 @@ local function estimate_pi(iterations)
 end
 
 print("Monte Carlo Pi (1,000,000 iterations)...")
-local res = estimate_pi(1000000)
+local res = estimate_pi(4000000)
 print("Result: " .. tostring(res))

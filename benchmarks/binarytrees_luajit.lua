@@ -30,7 +30,7 @@ local function Stress(mindepth, maxdepth, depth)
     return { iterations, check }
 end
 
-N = N or 10
+N = N or 14
 
 local mindepth = 4
 local maxdepth = math.max(mindepth + 2, N)

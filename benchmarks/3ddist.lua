@@ -18,5 +18,5 @@ local function distance_test(iterations)
 end
 
 print("Running 2,000,000 math.sqrt iterations...")
-local res = distance_test(2000000)
+local res = distance_test(8000000)
 print("Checksum: " .. tostring(res))

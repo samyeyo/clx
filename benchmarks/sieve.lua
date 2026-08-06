@@ -19,5 +19,5 @@ local function sieve(limit)
 end
 
 print("Calculating primes under 2,000,000...")
-local res = sieve(2000000)
+local res = sieve(8000000)
 print("Total primes found: " .. tostring(res))

@@ -74,7 +74,7 @@ local function single_freq(seq, s)
     io.write(freq[s], "\t", s, "\n")
 end
 
-N = N or 1000
+N = N or 20000
 
 local f, err = io.open("fasta-output-"..tostring(N)..".txt", "r")
 if not f then error(err) end

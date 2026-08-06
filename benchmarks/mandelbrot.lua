@@ -54,6 +54,6 @@ local function mandelbrot(N)
     end
 end
 
-N = N or 100
+N = N or 600
 io.write(string.format("P4\n%d %d\n", N, N))
 mandelbrot(N)

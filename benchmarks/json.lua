@@ -21,7 +21,7 @@ local function enc(v, depth)
     return "null"
 end
 
-local N = 8000
+local N = 11000
 local t = {}
 for i = 1, N do
     t[i] = { id = i, val = i * 2, name = "obj_" .. i }

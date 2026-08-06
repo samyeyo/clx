@@ -1,7 +1,7 @@
 -- Array sum benchmark
 -- Simple loop over array elements
 
-local N = tonumber(arg and arg[1]) or 5000000
+local N = tonumber(arg and arg[1]) or 15000000
 
 local arr = {}
 for i = 1, N do

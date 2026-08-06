@@ -9,5 +9,5 @@ local function ackermann(m, n)
 end
 
 print("Calculating Ackermann(3, 8)...")
-local res = ackermann(3, 8)
+local res = ackermann(3, 9)
 print("Result: " .. tostring(res))

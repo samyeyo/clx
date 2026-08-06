@@ -159,7 +159,7 @@ local bodies = {
      5.15138902046611451e-05 * SOLAR_MASS ),
 }
 
-N = N or 2000
+N = N or 100000
 offset_momentum(bodies)
 print(string.format("%0.9f", energy(bodies)))
 advance_multiple_steps(N, bodies, 0.01)
