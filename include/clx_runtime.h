@@ -148,8 +148,11 @@ static constexpr const char *VALUE_TYPE_NAMES[]
 struct LHeader {
     uint8_t type;
     uint8_t marked;
+    uint8_t flags = 0;
     LHeader *next;
 };
+
+static constexpr uint8_t LFLAG_VM_PROXY = 0x01;
 
 struct LState;
 struct TValue;
@@ -571,8 +574,10 @@ struct LTable : public LHeader {
 
     LTable *metatable;
     bool is_arena;
+    bool in_meta_list = false;
+    LTable *meta_next = nullptr;
 
-    static constexpr int IC_SIZE = 4;
+    static constexpr int IC_SIZE = 8;
 
     struct InlineCache {
         uint64_t key_payload = 0;
@@ -580,7 +585,7 @@ struct LTable : public LHeader {
         uint32_t table_ver = 0;
     };
 
-    InlineCache ic[IC_SIZE] = { };
+    InlineCache *ic = nullptr;
 
     LTable();
     ~LTable();
@@ -954,6 +959,7 @@ struct LState {
     LTable *free_tables;
     LCFunction *free_functions;
     LUserdata *finalizable_ud;
+    LTable *metatabled_tables = nullptr;
 
     LThread *main_thread;
     LThread *running_thread;
@@ -1013,6 +1019,12 @@ struct LState {
     LValue create_closure(CFunctionType func, LTable *env = nullptr);
 
     std::vector<LHeader *> gc_worklist;
+    std::vector<LValue> permanent_roots;
+
+    void root_value(const LValue &v) {
+        if (v.is_gc_obj())
+            permanent_roots.push_back(v);
+    }
 
     enum class GCPhase : uint8_t { Idle, Sweeping };
     GCPhase gc_phase = GCPhase::Idle;
@@ -1048,6 +1060,27 @@ struct LState {
 
     void register_module(const std::string &name, LValue (*func)(LState *));
 };
+
+//------------------ Metatabled-tables list (protect-pass fast path)
+CLX_INLINE void meta_list_add(LState *L, LTable *t) {
+    if (t->in_meta_list)
+        return;
+    t->meta_next = L->metatabled_tables;
+    L->metatabled_tables = t;
+    t->in_meta_list = true;
+}
+
+CLX_INLINE void meta_list_remove(LState *L, LTable *t) {
+    if (!t->in_meta_list)
+        return;
+    LTable **pp = &L->metatabled_tables;
+    while (*pp && *pp != t)
+        pp = &(*pp)->meta_next;
+    if (*pp == t)
+        *pp = t->meta_next;
+    t->in_meta_list = false;
+    t->meta_next = nullptr;
+}
 
 inline std::string file_line_prefix(LState *L) {
     if (L->current_file && L->current_file[0] != '\0')
@@ -1893,6 +1926,20 @@ CLX_INLINE LValue table_get(LState *L, const LValue &obj, const LValue &key) {
             }
         }
         if (direct.type == ValueType::Nil) {
+            if (t->ic) {
+                uint32_t ic_idx
+                    = static_cast<uint32_t>(key.val.payload.u64 ^ (key.val.payload.u64 >> 17)
+                                            ^ (key.val.payload.u64 >> 33) ^ (key.val.payload.u64 >> 5)
+                                            ^ (key.val.payload.u64 >> 11))
+                    % LTable::IC_SIZE;
+                LTable::InlineCache &_ic = t->ic[ic_idx];
+                if (_ic.key_payload == key.val.payload.u64 && _ic.table_ver == t->hash_version
+                    && _ic.entry_idx < t->hash_size) {
+                    HashEntry &_e = t->entries[_ic.entry_idx];
+                    if (_e.ktype != ValueType::Nil)
+                        return LValue(_e.val, _e.vtype);
+                }
+            }
             direct = t->get_value(L, key);
         }
         if (direct.type != ValueType::Nil)
@@ -2075,6 +2122,23 @@ CLX_INLINE void table_set_int(LState *L, const LValue &obj, size_t idx, const LV
 CLX_INLINE_HOT void table_set_direct(LState *L, const LValue &obj, const LValue &key, const LValue &val) {
     if (obj.type == ValueType::Table) {
         LTable *t = static_cast<LTable *>(obj.as_pointer());
+        if (val.type != ValueType::Nil && t->hash_size > 0 && t->ic) {
+            uint32_t ic_idx
+                = static_cast<uint32_t>(key.val.payload.u64 ^ (key.val.payload.u64 >> 17)
+                                        ^ (key.val.payload.u64 >> 33) ^ (key.val.payload.u64 >> 5)
+                                        ^ (key.val.payload.u64 >> 11))
+                % LTable::IC_SIZE;
+            LTable::InlineCache &_ic = t->ic[ic_idx];
+            if (_ic.key_payload == key.val.payload.u64 && _ic.table_ver == t->hash_version
+                && _ic.entry_idx < t->hash_size) {
+                HashEntry &_e = t->entries[_ic.entry_idx];
+                if (_e.ktype != ValueType::Nil) {
+                    _e.val = val.val;
+                    _e.vtype = val.type;
+                    return;
+                }
+            }
+        }
         t->settable(key, val);
         return;
     }
