@@ -1560,6 +1560,7 @@ void luastd_string(LState *L) {
 
     LValue mt = L->create_table();
     L->string_metatable = static_cast<LTable *>(mt.as_pointer());
+    L->root_value(mt);
     L->string_metatable->settable(LValue(L->intern_string("__index")), string_table);
 }
 
