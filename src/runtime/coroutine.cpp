@@ -92,7 +92,9 @@ static clx::MultiValue coroutine_wrap(clx::LState *L, const clx::LValue *args, s
           });
 
     clx::set_field(L, meta, "__call", call_closure);
-    static_cast<clx::LTable *>(wrapper.as_pointer())->metatable = static_cast<clx::LTable *>(meta.as_pointer());
+    LTable *wrapper_t = static_cast<clx::LTable *>(wrapper.as_pointer());
+    wrapper_t->metatable = static_cast<clx::LTable *>(meta.as_pointer());
+    clx::meta_list_add(L, wrapper_t);
 
     return clx::MultiValue(wrapper);
 }
