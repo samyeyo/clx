@@ -403,6 +403,10 @@ CLX_INLINE void setmetatable(LState *L, const LValue &obj, const LValue &mt) {
         }
         t->metatable = new_mt;
         t->hash_version++;
+        if (new_mt)
+            meta_list_add(L, t);
+        else
+            meta_list_remove(L, t);
     } else if (obj.type == ValueType::UserData) {
         static_cast<LUserdata *>(obj.as_pointer())->metatable = new_mt;
     }
