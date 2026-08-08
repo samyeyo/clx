@@ -59,6 +59,8 @@ public:
 
     void mark_proxy_roots(std::vector<LHeader *> &wl);
 
+    void pace_vm_gc();
+
     static constexpr unsigned PROXY_GC_PACE_THRESHOLD = 32;
 
 private:
