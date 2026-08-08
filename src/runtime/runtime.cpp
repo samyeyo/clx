@@ -1578,7 +1578,6 @@ LValue LState::create_table(size_t asize, size_t hsize) {
     if (free_tables) {
         t = free_tables;
         free_tables = static_cast<LTable *>(free_tables->next);
-        t->array_size = 0;
         t->hash_count = 0;
         t->hash_tombs = 0;
         t->hash_version++;
@@ -1609,7 +1608,8 @@ LValue LState::create_table(size_t asize, size_t hsize) {
             t->array_types = t->small_array_types;
             t->array_size = asize;
             t->array_cap = asize;
-            std::fill(t->array_types, t->array_types + asize, ValueType::Nil);
+            t->array_types[0] = ValueType::Nil;
+            t->array_types[1] = ValueType::Nil;
         } else if (t->array_cap >= asize) {
             // Reuse retained buffers from the free list (avoids new[]/delete[]
             // churn for the common small-table case). Count asize (logical)
@@ -1635,6 +1635,8 @@ LValue LState::create_table(size_t asize, size_t hsize) {
             t->array_cap = asize;
             allocated_bytes += sizeof(TValue) * asize + sizeof(ValueType) * asize;
         }
+    } else {
+        t->array_size = 0;
     }
 
     t->type = static_cast<uint8_t>(Table);
