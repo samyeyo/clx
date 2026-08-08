@@ -8,6 +8,7 @@
 #include "dynamic_vm.h"
 #include "vm_convert.h"
 #include "vm_table_proxy.h"
+#include "vm_function_object.h"
 
 #include <clx_simd.h>
 #include <unordered_map>
@@ -26,6 +27,32 @@ int clx_vm_env_collectgarbage(lua_State *L);
 namespace clx {
 
 void clx_mark_vm_proxies_(LState *clx_L, std::vector<LHeader *> &wl);
+
+//------------------ clx_register_vm_proxy - link a VM proxy into clx GC
+void clx_register_vm_proxy(LState *clx_L, LHeader *proxy, size_t bytes) {
+    proxy->next = clx_L->allocated_objects;
+    clx_L->allocated_objects = proxy;
+    clx_L->object_count++;
+    clx_L->allocated_bytes += bytes;
+
+    // Pace the embedded VM's GC too: load() compiles chunks on the VM side,
+    // and if the VM never collects, its memory grows even though the clx
+    // proxies are freed. Mirror link_proxy's threshold.
+    DynamicVM *vm = DynamicVM::find(clx_L);
+    if (vm)
+        vm->pace_vm_gc();
+}
+
+//------------------ clx_free_vm_proxy_ - free a VM proxy collected by clx GC
+static void clx_free_vm_proxy_(LState *clx_L, LHeader *proxy) {
+    if (proxy->type == static_cast<uint8_t>(Table)) {
+        clx_L->allocated_bytes -= sizeof(VMTableProxy);
+        delete static_cast<VMTableProxy *>(proxy);
+    } else {
+        clx_L->allocated_bytes -= sizeof(VMFunction);
+        delete static_cast<VMFunction *>(proxy);
+    }
+}
 
 namespace {
 
@@ -52,6 +79,7 @@ DynamicVM::DynamicVM(LState *clx_L)
     env_table_ref_ = build_default_env();
 
     clx_mark_vm_proxies_ptr = clx_mark_vm_proxies_;
+    clx_free_vm_proxy_ptr = clx_free_vm_proxy_;
 }
 
 //------------------ DynamicVM::~DynamicVM
@@ -301,6 +329,14 @@ DynamicVM *DynamicVM::find(LState *clx_L) {
     return (it != g_dynamic_vms_.end()) ? it->second : nullptr;
 }
 
+//------------------ DynamicVM::pace_vm_gc - throttle embedded VM GC
+void DynamicVM::pace_vm_gc() {
+    if (L_ && ++proxy_alloc_since_gc_ >= PROXY_GC_PACE_THRESHOLD) {
+        proxy_alloc_since_gc_ = 0;
+        lua_gc(L_, LUA_GCSTEP, 200);
+    }
+}
+
 //------------------ DynamicVM::link_proxy - O(1) head insert
 void DynamicVM::link_proxy(ProxyNode *node) {
     if (!node)
@@ -310,14 +346,9 @@ void DynamicVM::link_proxy(ProxyNode *node) {
     if (proxy_head_)
         proxy_head_->prev = node;
     proxy_head_ = node;
-    if (L_ && ++proxy_alloc_since_gc_ >= PROXY_GC_PACE_THRESHOLD) {
-        proxy_alloc_since_gc_ = 0;
-
-        lua_gc(L_, LUA_GCSTEP, 200);
-
-        if (clx_L_)
-            clx_L_->gc_step();
-    }
+    pace_vm_gc();
+    if (clx_L_)
+        clx_L_->gc_step();
 }
 
 //------------------ DynamicVM::unlink_proxy - O(1) pointer surgery
