@@ -743,6 +743,9 @@ void CodeEmitter::emit_native(uint32_t n_idx) {
                         }
                     }
                 }
+                out << "(";
+                emit_node(n_idx);
+                out << ").as_number()";
                 return;
             }
             if (!t_name.empty() && state.pure_numeric_arrays.count(t_name)) {
