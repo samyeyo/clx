@@ -18,6 +18,7 @@ VMFunction::VMFunction(DynamicVM *vm_, int ref)
     , registry_ref(ref) {
     type = static_cast<uint8_t>(Function);
     marked = 0;
+    flags = LFLAG_VM_PROXY;
     next = nullptr;
 }
 
@@ -37,6 +38,7 @@ LValue VMFunction::wrap(LState *clx_L, lua_State *L, int idx) {
     lua_pushvalue(L, idx);
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
     VMFunction *vf = new VMFunction(vm, ref);
+    clx_register_vm_proxy(clx_L, vf, sizeof(VMFunction));
     return LValue(Function, vf);
 }
 
@@ -44,6 +46,7 @@ LValue VMFunction::wrap(LState *clx_L, lua_State *L, int idx) {
 LValue VMFunction::from_ref(LState *clx_L, int ref) {
     DynamicVM *vm = DynamicVM::acquire(clx_L);
     VMFunction *vf = new VMFunction(vm, ref);
+    clx_register_vm_proxy(clx_L, vf, sizeof(VMFunction));
     return LValue(Function, vf);
 }
 
