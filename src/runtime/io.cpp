@@ -395,6 +395,12 @@ static LValue get_std_file(LState *L, FILE *fp) {
 static LValue default_input;
 static LValue default_output;
 
+static void set_default(LState *L, LValue &slot, const LValue &v) {
+    slot = v;
+    if (L)
+        L->root_value(v);
+}
+
 static MultiValue io_open(LState *L, const LValue *args, size_t count) {
     if (count == 0)
         throw_runtime_error("bad argument #1 to 'open' (string expected, got no value)");
@@ -445,11 +451,11 @@ static MultiValue io_flush(LState *L, const LValue *args, size_t count) {
 static MultiValue io_input(LState *L, const LValue *args, size_t count) {
     if (count == 0 || args[0].type == Nil) {
         if (default_input.type != UserData)
-            default_input = get_std_file(L, stdin);
+            set_default(L, default_input, get_std_file(L, stdin));
         return MultiValue(default_input);
     }
     if (args[0].type == UserData) {
-        default_input = args[0];
+        set_default(L, default_input, args[0]);
     } else if (args[0].type == String) {
         const char *filename = args[0].as_string();
         FILE *fp = std::fopen(filename, "r");
@@ -458,7 +464,7 @@ static MultiValue io_input(LState *L, const LValue *args, size_t count) {
             std::snprintf(buf, sizeof(buf), "cannot open file '%s': %s", filename, std::strerror(errno));
             throw_runtime_error(buf);
         }
-        default_input = make_file(L, fp, true);
+        set_default(L, default_input, make_file(L, fp, true));
     }
     return MultiValue(default_input);
 }
@@ -466,7 +472,7 @@ static MultiValue io_input(LState *L, const LValue *args, size_t count) {
 static MultiValue io_lines(LState *L, const LValue *args, size_t count) {
     if (count == 0) {
         if (default_input.type != UserData)
-            default_input = get_std_file(L, stdin);
+            set_default(L, default_input, get_std_file(L, stdin));
         LValue file = default_input;
         FileUd *f = as_file(L, file);
         return MultiValue(make_lines_iter(L, f));
@@ -511,11 +517,11 @@ static MultiValue io_lines(LState *L, const LValue *args, size_t count) {
 static MultiValue io_output(LState *L, const LValue *args, size_t count) {
     if (count == 0 || args[0].type == Nil) {
         if (default_output.type != UserData)
-            default_output = get_std_file(L, stdout);
+            set_default(L, default_output, get_std_file(L, stdout));
         return MultiValue(default_output);
     }
     if (args[0].type == UserData) {
-        default_output = args[0];
+        set_default(L, default_output, args[0]);
     } else if (args[0].type == String) {
         const char *filename = args[0].as_string();
         FILE *fp = std::fopen(filename, "w");
@@ -524,14 +530,14 @@ static MultiValue io_output(LState *L, const LValue *args, size_t count) {
             std::snprintf(buf, sizeof(buf), "cannot open file '%s': %s", filename, std::strerror(errno));
             throw_runtime_error(buf);
         }
-        default_output = make_file(L, fp, true);
+        set_default(L, default_output, make_file(L, fp, true));
     }
     return MultiValue(default_output);
 }
 
 static MultiValue io_read(LState *L, const LValue *args, size_t count) {
     if (default_input.type != UserData)
-        default_input = get_std_file(L, stdin);
+        set_default(L, default_input, get_std_file(L, stdin));
 
     LValue file = default_input;
     FileUd *f = as_file(L, file);
@@ -578,7 +584,7 @@ static MultiValue io_read(LState *L, const LValue *args, size_t count) {
 
 static MultiValue io_write(LState *L, const LValue *args, size_t count) {
     if (default_output.type != UserData)
-        default_output = get_std_file(L, stdout);
+        set_default(L, default_output, get_std_file(L, stdout));
     LUserdata *u = static_cast<LUserdata *>(default_output.as_pointer());
     FileUd *f = static_cast<FileUd *>(u->data());
     for (size_t i = 0; i < count; ++i) {
