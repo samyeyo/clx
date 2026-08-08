@@ -25,6 +25,10 @@ int clx_vm_install_traceback_(lua_State *L);
 
 extern void (*clx_mark_vm_proxies_ptr)(LState *clx_L, std::vector<LHeader *> &wl);
 
+void clx_register_vm_proxy(LState *clx_L, LHeader *proxy, size_t bytes);
+
+extern void (*clx_free_vm_proxy_ptr)(LState *clx_L, LHeader *proxy);
+
 }
 
 extern "C" {
