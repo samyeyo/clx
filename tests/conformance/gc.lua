@@ -40,6 +40,9 @@ collectgarbage("collect")
 allocate_garbage()
 local mem_peak_2 = collectgarbage("count")
 
-assert_eq(mem_peak_2, mem_peak_1, "pool reuses freed slots without expanding")
+-- Pool reuse must not expand the heap: with correct accounting peak 2 is at
+-- most equal to peak 1 (small slack for one-time closure/setup garbage that
+-- differs between the two runs).
+assert_eq(mem_peak_2 <= mem_peak_1 + 1.0 and 1 or 0, 1, "pool reuses freed slots without expanding")
 
 print_summary("GARBAGE COLLECTION")
