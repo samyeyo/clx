@@ -383,9 +383,9 @@ LTable::~LTable() {
     delete[] ic;
     ic = nullptr;
     if (!is_arena) {
-        if (array)
+        if (array && array != small_array)
             delete[] array;
-        if (array_types)
+        if (array_types && array_types != small_array_types)
             delete[] array_types;
         if (entries)
             delete[] entries;
@@ -504,8 +504,10 @@ void LTable::settable(const LValue &key, const LValue &val) {
                 std::memcpy(new_types, array_types, array_cap * sizeof(ValueType));
             }
             if (!is_arena) {
-                delete[] array;
-                delete[] array_types;
+                if (array != small_array)
+                    delete[] array;
+                if (array_types != small_array_types)
+                    delete[] array_types;
             }
             is_arena = false;
             array = new_arr;
@@ -567,8 +569,10 @@ void LTable::settable(const LValue &key, const LValue &val) {
                     std::memcpy(new_types, array_types, array_cap * sizeof(ValueType));
                 }
                 if (!is_arena) {
-                    delete[] array;
-                    delete[] array_types;
+                    if (array != small_array)
+                        delete[] array;
+                    if (array_types != small_array_types)
+                        delete[] array_types;
                 }
                 is_arena = false;
                 array = new_arr;
@@ -810,11 +814,11 @@ LState::LState()
 }
 
 static void dtor_free_table(LTable *t) {
-    if (t->array) {
+    if (t->array && t->array != t->small_array) {
         delete[] t->array;
         t->array = nullptr;
     }
-    if (t->array_types) {
+    if (t->array_types && t->array_types != t->small_array_types) {
         delete[] t->array_types;
         t->array_types = nullptr;
     }
@@ -1009,22 +1013,10 @@ bool LState::gc_step() {
                     t->next = gc_finalizable;
                     gc_finalizable = t;
                 } else {
-                    if (t->entries) {
-                        delete[] t->entries;
-                        t->entries = nullptr;
-                    }
-                    if (t->hash_bitmap) {
-                        delete[] t->hash_bitmap;
-                        t->hash_bitmap = nullptr;
-                    }
-                    // Retain array buffers on the free list to avoid new[]/delete[]
-                    // churn, but keep accounting symmetric: subtract the retained
-                    // bytes now; create_table re-adds them when it reuses the buffer.
-                    if (t->array_cap > 0)
+                    if (t->array_cap > 0 && t->array != t->small_array)
                         allocated_bytes -= sizeof(TValue) * t->array_cap + sizeof(ValueType) * t->array_cap;
                     allocated_bytes -= sizeof(LTable);
-                    t->array_size = t->hash_size = t->hash_count = 0;
-                    t->hash_count = t->hash_tombs = 0;
+                    t->array_size = t->hash_count = t->hash_tombs = 0;
                     t->next = free_tables;
                     free_tables = t;
                 }
@@ -1066,14 +1058,14 @@ bool LState::gc_step() {
             LTable *nx = static_cast<LTable *>(t->next);
             meta_list_remove(this, t);
             clx_trigger_gc(this, t);
-            if (t->array_cap > 0)
+            if (t->array_cap > 0 && t->array != t->small_array)
                 allocated_bytes -= sizeof(TValue) * t->array_cap + sizeof(ValueType) * t->array_cap;
             allocated_bytes -= sizeof(LTable);
-            if (t->array) {
+            if (t->array && t->array != t->small_array) {
                 delete[] t->array;
                 t->array = nullptr;
             }
-            if (t->array_types) {
+            if (t->array_types && t->array_types != t->small_array_types) {
                 delete[] t->array_types;
                 t->array_types = nullptr;
             }
@@ -1101,7 +1093,7 @@ bool LState::gc_step() {
         overflow_heap_used = 0;
 
         size_t live = allocated_bytes;
-        size_t headroom = std::clamp(live / 2, size_t(512 * 1024), size_t(8 * 1024 * 1024));
+        size_t headroom = std::clamp(live / 2, size_t(64 * 1024 * 1024), size_t(256 * 1024 * 1024));
         if (const char *e = getenv("CLX_GC_HEADROOM")) {
             long long v = atoll(e);
             if (v > 0)
@@ -1587,13 +1579,20 @@ LValue LState::create_table(size_t asize, size_t hsize) {
         t = free_tables;
         free_tables = static_cast<LTable *>(free_tables->next);
         t->array_size = 0;
-        t->hash_size = 0;
         t->hash_count = 0;
         t->hash_tombs = 0;
-        t->hash_version = 0;
+        t->hash_version++;
         t->array_version = 0;
         t->metatable = nullptr;
         t->marked = 0;
+        if (t->entries) {
+            for (size_t i = 0; i < t->hash_size; ++i) {
+                t->entries[i].key.payload.u64 = HASH_EMPTY;
+                t->entries[i].ktype = Nil;
+            }
+            if (t->hash_bitmap)
+                std::memset(t->hash_bitmap, 0, ((t->hash_size + 63) / 64) * sizeof(uint64_t));
+        }
         allocated_bytes += sizeof(LTable);
     } else {
         t = new LTable();
@@ -1601,7 +1600,17 @@ LValue LState::create_table(size_t asize, size_t hsize) {
     }
 
     if (asize > 0) {
-        if (t->array_cap >= asize) {
+        if (asize <= 2) {
+            // Inline buffer: lives inside sizeof(LTable), so it is never
+            // separately accounted and never heap-allocated. This removes the
+            // malloc/free churn for the common small-table case (fresh nodes
+            // in the cold start) even when the free list cannot help.
+            t->array = t->small_array;
+            t->array_types = t->small_array_types;
+            t->array_size = asize;
+            t->array_cap = asize;
+            std::fill(t->array_types, t->array_types + asize, ValueType::Nil);
+        } else if (t->array_cap >= asize) {
             // Reuse retained buffers from the free list (avoids new[]/delete[]
             // churn for the common small-table case). Count asize (logical)
             // bytes so accounting matches a fresh allocation, independent of
@@ -1616,9 +1625,9 @@ LValue LState::create_table(size_t asize, size_t hsize) {
             // Retained buffer too small: free it and allocate fresh. Its bytes
             // were already subtracted at sweep, so do not subtract again; just
             // add the new allocation.
-            if (t->array)
+            if (t->array && t->array != t->small_array)
                 delete[] t->array;
-            if (t->array_types)
+            if (t->array_types && t->array_types != t->small_array_types)
                 delete[] t->array_types;
             t->array = new TValue[asize];
             t->array_types = new ValueType[asize]();

@@ -562,6 +562,8 @@ struct LTable : public LHeader {
     ValueType *array_types;
     size_t array_size;
     size_t array_cap;
+    TValue small_array[2];
+    ValueType small_array_types[2];
 
     HashEntry *entries;
     size_t hash_size;

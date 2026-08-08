@@ -372,6 +372,17 @@ void DynamicVM::mark_proxy_roots(std::vector<LHeader *> &wl) {
             n->header->marked = 1;
             wl.push_back(n->header);
         }
+        // A table proxy pins the clx table it wraps. Without this, clx GC would
+        // sweep a clx table the VM still owns, park it on the free list, and
+        // hand it out again — the VM would then free the same retained hash
+        // buffer twice when that table later grows.
+        if (n->header && n->header->type == static_cast<uint8_t>(Table)) {
+            VMTableProxy *tp = static_cast<VMTableProxy *>(n->header);
+            if (tp->clx_underlying && tp->clx_underlying->marked == 0) {
+                tp->clx_underlying->marked = 1;
+                wl.push_back(reinterpret_cast<LHeader *>(tp->clx_underlying));
+            }
+        }
     }
 }
 
