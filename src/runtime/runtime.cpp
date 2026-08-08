@@ -24,6 +24,7 @@ void register_static_preload(LState *L, const char *name, LValue(open_func)(LSta
 namespace clx {
 
 void (*clx_mark_vm_proxies_ptr)(LState *clx_L, std::vector<LHeader *> &wl) = nullptr;
+void (*clx_free_vm_proxy_ptr)(LState *clx_L, LHeader *proxy) = nullptr;
 
 //------------------ LThread::LThread — thread constructor
 LThread::LThread()
@@ -379,6 +380,8 @@ LTable::LTable()
 
 //------------------ LTable::~LTable — table destructor
 LTable::~LTable() {
+    delete[] ic;
+    ic = nullptr;
     if (!is_arena) {
         if (array)
             delete[] array;
@@ -448,8 +451,12 @@ LValue LTable::gettable(const LValue &key) {
     if (hash_size == 0)
         return LValue();
 
+    if (!ic)
+        ic = new InlineCache[IC_SIZE]();
+
     uint32_t ic_idx
-        = static_cast<uint32_t>(key.val.payload.u64 ^ (key.val.payload.u64 >> 17) ^ (key.val.payload.u64 >> 33))
+        = static_cast<uint32_t>(key.val.payload.u64 ^ (key.val.payload.u64 >> 17) ^ (key.val.payload.u64 >> 33)
+                                ^ (key.val.payload.u64 >> 5) ^ (key.val.payload.u64 >> 11))
         % IC_SIZE;
     auto &_ic = ic[ic_idx];
     if (_ic.key_payload == key.val.payload.u64 && _ic.table_ver == hash_version && _ic.entry_idx < hash_size) {
@@ -635,6 +642,23 @@ void LTable::settable(const LValue &key, const LValue &val) {
         resize_hash(8);
     } else if ((hash_count + hash_tombs + 1) * 4 >= hash_size * 3) {
         resize_hash(hash_count >= hash_size / 2 ? hash_size * 2 : hash_size);
+    }
+
+    if (ic) {
+        uint32_t ic_idx
+            = static_cast<uint32_t>(key.val.payload.u64 ^ (key.val.payload.u64 >> 17) ^ (key.val.payload.u64 >> 33)
+                                    ^ (key.val.payload.u64 >> 5) ^ (key.val.payload.u64 >> 11))
+            % IC_SIZE;
+        InlineCache &_ic = ic[ic_idx];
+        if (_ic.key_payload == key.val.payload.u64 && _ic.table_ver == hash_version
+            && _ic.entry_idx < hash_size) {
+            HashEntry &_e = entries[_ic.entry_idx];
+            if (_e.ktype != Nil) {
+                _e.val = val.val;
+                _e.vtype = val.type;
+                return;
+            }
+        }
     }
 
     uint32_t mask = static_cast<uint32_t>(hash_size - 1);
@@ -846,7 +870,10 @@ LState::~LState() {
     LHeader *curr = allocated_objects;
     while (curr) {
         LHeader *next = curr->next;
-        if (curr->type == static_cast<uint8_t>(Table))
+        if (curr->flags & LFLAG_VM_PROXY) {
+            if (clx_free_vm_proxy_ptr)
+                clx_free_vm_proxy_ptr(this, curr);
+        } else if (curr->type == static_cast<uint8_t>(Table))
             dtor_free_table(static_cast<LTable *>(curr));
         else if (curr->type == static_cast<uint8_t>(Function))
             delete static_cast<LCFunction *>(curr);
@@ -965,28 +992,23 @@ bool LState::gc_step() {
                     LHeader *h = allocated_objects;
                     while (h && h->next != curr)
                         h = h->next;
-                    if (h)
+                    if (h) {
                         h->next = next_obj;
+                        prev = h;
+                    }
                 } else {
                     allocated_objects = next_obj;
                 }
             }
-            if (curr->type == static_cast<uint8_t>(Table)) {
+            if (curr->flags & LFLAG_VM_PROXY) {
+                if (clx_free_vm_proxy_ptr)
+                    clx_free_vm_proxy_ptr(this, curr);
+            } else if (curr->type == static_cast<uint8_t>(Table)) {
                 LTable *t = static_cast<LTable *>(curr);
                 if (t->metatable) {
                     t->next = gc_finalizable;
                     gc_finalizable = t;
                 } else {
-                    if (t->array_cap > 0)
-                        allocated_bytes -= sizeof(TValue) * t->array_cap + sizeof(ValueType) * t->array_cap;
-                    if (t->array) {
-                        delete[] t->array;
-                        t->array = nullptr;
-                    }
-                    if (t->array_types) {
-                        delete[] t->array_types;
-                        t->array_types = nullptr;
-                    }
                     if (t->entries) {
                         delete[] t->entries;
                         t->entries = nullptr;
@@ -995,7 +1017,13 @@ bool LState::gc_step() {
                         delete[] t->hash_bitmap;
                         t->hash_bitmap = nullptr;
                     }
-                    t->array_size = t->array_cap = t->hash_size = t->hash_count = 0;
+                    // Retain array buffers on the free list to avoid new[]/delete[]
+                    // churn, but keep accounting symmetric: subtract the retained
+                    // bytes now; create_table re-adds them when it reuses the buffer.
+                    if (t->array_cap > 0)
+                        allocated_bytes -= sizeof(TValue) * t->array_cap + sizeof(ValueType) * t->array_cap;
+                    allocated_bytes -= sizeof(LTable);
+                    t->array_size = t->hash_size = t->hash_count = 0;
                     t->hash_count = t->hash_tombs = 0;
                     t->next = free_tables;
                     free_tables = t;
@@ -1036,9 +1064,11 @@ bool LState::gc_step() {
     if (!gc_sweep_cursor) {
         for (LTable *t = static_cast<LTable *>(gc_finalizable); t;) {
             LTable *nx = static_cast<LTable *>(t->next);
+            meta_list_remove(this, t);
             clx_trigger_gc(this, t);
             if (t->array_cap > 0)
                 allocated_bytes -= sizeof(TValue) * t->array_cap + sizeof(ValueType) * t->array_cap;
+            allocated_bytes -= sizeof(LTable);
             if (t->array) {
                 delete[] t->array;
                 t->array = nullptr;
@@ -1069,8 +1099,14 @@ bool LState::gc_step() {
         gc_prev = nullptr;
         gc_phase = GCPhase::Idle;
         overflow_heap_used = 0;
+
         size_t live = allocated_bytes;
         size_t headroom = std::clamp(live / 2, size_t(512 * 1024), size_t(8 * 1024 * 1024));
+        if (const char *e = getenv("CLX_GC_HEADROOM")) {
+            long long v = atoll(e);
+            if (v > 0)
+                headroom = size_t(v);
+        }
         gc_bytes_threshold = live + headroom;
         return true;
     }
@@ -1082,16 +1118,33 @@ void LState::collect_garbage() {
     auto &wl = gc_worklist;
     wl.clear();
 
-    auto push_if_needed = [&](LValue v) {
+    auto mark_gc = [&](LValue v, uint8_t mark) -> LHeader * {
         if (!v.is_gc_obj())
-            return;
+            return nullptr;
         LHeader *h = v.as_pointer();
-        if (h && h->marked == 0) {
-            h->marked = 1;
-            ValueType t = v.type;
-            if (t == Table || t == Thread || t == Function)
-                wl.push_back(h);
+        if (!h)
+            return nullptr;
+        if (h->type != static_cast<uint8_t>(v.type))
+            return nullptr;
+        if (v.type == ValueType::UserData) {
+            bool real = false;
+            for (LHeader *o = allocated_objects; o; o = o->next)
+                if (o == h) { real = true; break; }
+            if (!real)
+                return nullptr;
         }
+        if (h->marked != 0)
+            return nullptr;
+        h->marked = mark;
+        return h;
+    };
+    auto push_if_needed = [&](LValue v) {
+        LHeader *h = mark_gc(v, 1);
+        if (!h)
+            return;
+        ValueType t = v.type;
+        if (t == Table || t == Thread || t == Function)
+            wl.push_back(h);
     };
 
     if (_G)
@@ -1104,12 +1157,19 @@ void LState::collect_garbage() {
         if (shadow_stack[i].val)
             push_if_needed(LValue(*shadow_stack[i].val, *shadow_stack[i].type));
 
+    for (const LValue &r : permanent_roots)
+        push_if_needed(r);
+
     if (clx_mark_vm_proxies_ptr)
         clx_mark_vm_proxies_ptr(this, wl);
 
     while (!wl.empty()) {
         LHeader *curr = wl.back();
         wl.pop_back();
+
+        if (curr->flags & LFLAG_VM_PROXY) {
+            continue;
+        }
 
         if (curr->type == static_cast<uint8_t>(Table)) {
             LTable *t = static_cast<LTable *>(curr);
@@ -1208,12 +1268,11 @@ void LState::collect_garbage() {
     }
 
     std::vector<LHeader *> protect_wl;
-    for (LHeader *obj = allocated_objects; obj; obj = obj->next) {
-        if (obj->marked == 0 && obj->type == static_cast<uint8_t>(Table)) {
-            LTable *t = static_cast<LTable *>(obj);
-            if (t->metatable && t->metatable->marked == 0) {
-                t->metatable->marked = 2;
-                protect_wl.push_back(t->metatable);
+    for (LTable *obj = metatabled_tables; obj; obj = obj->meta_next) {
+        if (obj->marked == 0 && !(obj->flags & LFLAG_VM_PROXY)) {
+            if (obj->metatable && obj->metatable->marked == 0) {
+                obj->metatable->marked = 2;
+                protect_wl.push_back(obj->metatable);
             }
         }
     }
@@ -1234,13 +1293,7 @@ void LState::collect_garbage() {
                     while (mask) {
                         int bit = clx_ctz(mask);
                         LValue v = LValue(tt->array[i + bit], tt->array_types[i + bit]);
-                        if (v.is_gc_obj()) {
-                            LHeader *h = v.as_pointer();
-                            if (h && h->marked == 0) {
-                                h->marked = 2;
-                                protect_wl.push_back(h);
-                            }
-                        }
+                        if (LHeader *h = mark_gc(v, 2)) protect_wl.push_back(h);
                         mask &= mask - 1;
                     }
                 }
@@ -1251,13 +1304,7 @@ void LState::collect_garbage() {
                     while (mask) {
                         int bit = clx_ctz(mask);
                         LValue v = LValue(tt->array[i + bit], tt->array_types[i + bit]);
-                        if (v.is_gc_obj()) {
-                            LHeader *h = v.as_pointer();
-                            if (h && h->marked == 0) {
-                                h->marked = 2;
-                                protect_wl.push_back(h);
-                            }
-                        }
+                        if (LHeader *h = mark_gc(v, 2)) protect_wl.push_back(h);
                         mask &= mask - 1;
                     }
                 }
@@ -1270,13 +1317,7 @@ void LState::collect_garbage() {
                     while (mask) {
                         int bit = clx_ctz(mask);
                         LValue v = LValue(tt->array[i + bit], tt->array_types[i + bit]);
-                        if (v.is_gc_obj()) {
-                            LHeader *h = v.as_pointer();
-                            if (h && h->marked == 0) {
-                                h->marked = 2;
-                                protect_wl.push_back(h);
-                            }
-                        }
+                        if (LHeader *h = mark_gc(v, 2)) protect_wl.push_back(h);
                         mask &= mask - 1;
                     }
                 }
@@ -1290,26 +1331,14 @@ void LState::collect_garbage() {
                     for (int k = 0; k < 16; ++k) {
                         if (lane_vals[k]) {
                             LValue v = LValue(tt->array[i + k], tt->array_types[i + k]);
-                            if (v.is_gc_obj()) {
-                                LHeader *h = v.as_pointer();
-                                if (h && h->marked == 0) {
-                                    h->marked = 2;
-                                    protect_wl.push_back(h);
-                                }
-                            }
+                            if (LHeader *h = mark_gc(v, 2)) protect_wl.push_back(h);
                         }
                     }
                 }
 #endif
                 for (; i < tt->array_size; ++i) {
                     LValue v = LValue(tt->array[i], tt->array_types[i]);
-                    if (v.is_gc_obj()) {
-                        LHeader *h = v.as_pointer();
-                        if (h && h->marked == 0) {
-                            h->marked = 2;
-                            protect_wl.push_back(h);
-                        }
-                    }
+                    if (LHeader *h = mark_gc(v, 2)) protect_wl.push_back(h);
                 }
             }
             if (tt->hash_bitmap) {
@@ -1322,13 +1351,7 @@ void LState::collect_garbage() {
                             break;
                         LValue kv(tt->entries[idx].key, tt->entries[idx].ktype);
                         for (LValue v : { kv, LValue(tt->entries[idx].val, tt->entries[idx].vtype) }) {
-                            if (v.is_gc_obj()) {
-                                LHeader *h = v.as_pointer();
-                                if (h && h->marked == 0) {
-                                    h->marked = 2;
-                                    protect_wl.push_back(h);
-                                }
-                            }
+                            if (LHeader *h = mark_gc(v, 2)) protect_wl.push_back(h);
                         }
                         bits &= bits - 1;
                     }
@@ -1339,26 +1362,20 @@ void LState::collect_garbage() {
                         continue;
                     LValue kv(tt->entries[_pi].key, tt->entries[_pi].ktype);
                     for (LValue v : { kv, LValue(tt->entries[_pi].val, tt->entries[_pi].vtype) }) {
-                        if (v.is_gc_obj()) {
-                            LHeader *h = v.as_pointer();
-                            if (h && h->marked == 0) {
-                                h->marked = 2;
-                                protect_wl.push_back(h);
-                            }
-                        }
+                        if (LHeader *h = mark_gc(v, 2)) protect_wl.push_back(h);
                     }
                 }
             }
         }
     }
-
     gc_phase = GCPhase::Sweeping;
     gc_sweep_cursor = allocated_objects;
     gc_prev = nullptr;
     gc_finalizable = nullptr;
     gc_finalizable_ud = nullptr;
     object_count = 0;
-    gc_step();
+    while (!gc_step())
+        ;
 }
 
 //------------------ LState::register_module — register module loader
@@ -1544,8 +1561,7 @@ void set_lazy_funcs(LState *L, const LValue &table, const LazyReg *regs, size_t 
         t->metatable = mt;
         t->hash_version++;
     }
-
-    mt->settable(LValue(L->intern_string("__lazy_regs")),
+    meta_list_add(L, t);    mt->settable(LValue(L->intern_string("__lazy_regs")),
         LValue(UserData, reinterpret_cast<LHeader *>(const_cast<LazyReg *>(regs))));
     mt->settable(LValue(L->intern_string("__lazy_count")), LValue(static_cast<int64_t>(count)));
 
@@ -1571,7 +1587,6 @@ LValue LState::create_table(size_t asize, size_t hsize) {
         t = free_tables;
         free_tables = static_cast<LTable *>(free_tables->next);
         t->array_size = 0;
-        t->array_cap = 0;
         t->hash_size = 0;
         t->hash_count = 0;
         t->hash_tombs = 0;
@@ -1579,17 +1594,38 @@ LValue LState::create_table(size_t asize, size_t hsize) {
         t->array_version = 0;
         t->metatable = nullptr;
         t->marked = 0;
+        allocated_bytes += sizeof(LTable);
     } else {
         t = new LTable();
         allocated_bytes += sizeof(LTable);
     }
 
     if (asize > 0) {
-        t->array = new TValue[asize];
-        t->array_types = new ValueType[asize]();
-        t->array_size = asize;
-        t->array_cap = asize;
-        allocated_bytes += sizeof(TValue) * asize + sizeof(ValueType) * asize;
+        if (t->array_cap >= asize) {
+            // Reuse retained buffers from the free list (avoids new[]/delete[]
+            // churn for the common small-table case). Count asize (logical)
+            // bytes so accounting matches a fresh allocation, independent of
+            // which retained buffer (and its array_cap) is popped. Reset
+            // array_cap to asize so a later sweep subtracts exactly what was
+            // added (the physically larger buffer becomes untracked slack).
+            t->array_size = asize;
+            std::fill(t->array_types, t->array_types + asize, ValueType::Nil);
+            t->array_cap = asize;
+            allocated_bytes += sizeof(TValue) * asize + sizeof(ValueType) * asize;
+        } else {
+            // Retained buffer too small: free it and allocate fresh. Its bytes
+            // were already subtracted at sweep, so do not subtract again; just
+            // add the new allocation.
+            if (t->array)
+                delete[] t->array;
+            if (t->array_types)
+                delete[] t->array_types;
+            t->array = new TValue[asize];
+            t->array_types = new ValueType[asize]();
+            t->array_size = asize;
+            t->array_cap = asize;
+            allocated_bytes += sizeof(TValue) * asize + sizeof(ValueType) * asize;
+        }
     }
 
     t->type = static_cast<uint8_t>(Table);
