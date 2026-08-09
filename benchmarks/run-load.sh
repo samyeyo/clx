@@ -131,7 +131,10 @@ for file in "$TEST_DIR"/*.lua; do
     basename=$(basename "$file" .lua)
 
     # Skip *_luajit.lua — they are only run with luajit
-    case "$basename" in *_luajit | dkjson | run | run-hyperfine | run-load | warmup) continue ;; esac
+    # run_load_shim is the load() loader itself: its AOT output would collide
+    # with (and overwrite/delete) the shared $TMPDIR/run_load_shim binary,
+    # killing the load() column for every benchmark after it in glob order.
+    case "$basename" in *_luajit | dkjson | run | run-hyperfine | run-load | run_load_shim | warmup) continue ;; esac
 
     luajit_file="$TEST_DIR/${basename}_luajit.lua"
     [ -f "$luajit_file" ] || luajit_file="$file"
