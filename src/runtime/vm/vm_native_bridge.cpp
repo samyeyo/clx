@@ -47,16 +47,16 @@ static void write_back_table(
         lua_rawset(L, tbl_idx);
     }
 
-    if (tbl->hash_bitmap) {
-        size_t bm_words = (tbl->hash_size + 63) / 64;
+    if (tbl->ext && tbl->ext->hash_bitmap) {
+        size_t bm_words = (tbl->ext->hash_size + 63) / 64;
         for (size_t word = 0; word < bm_words; ++word) {
-            uint64_t bits = tbl->hash_bitmap[word];
+            uint64_t bits = tbl->ext->hash_bitmap[word];
             while (bits) {
                 size_t idx = word * 64 + clx_ctzll(bits);
-                if (idx >= tbl->hash_size)
+                if (idx >= tbl->ext->hash_size)
                     break;
-                LValue key(tbl->entries[idx].key, tbl->entries[idx].ktype);
-                LValue val(tbl->entries[idx].val, tbl->entries[idx].vtype);
+                LValue key(tbl->ext->entries[idx].key, tbl->ext->entries[idx].ktype);
+                LValue val(tbl->ext->entries[idx].val, tbl->ext->entries[idx].vtype);
                 clx_to_vm_value_(clx_L, L, key);
                 clx_to_vm_value_(clx_L, L, val);
                 lua_rawset(L, tbl_idx);
@@ -66,8 +66,8 @@ static void write_back_table(
     }
 
     //------------------ Write back metatable
-    if (tbl->metatable && sync_metatable) {
-        LTable *mt = tbl->metatable;
+    LTable *mt = tbl_metatable(tbl);
+    if (mt && sync_metatable) {
         lua_newtable(L);
         int mt_idx = lua_gettop(L);
 
@@ -80,16 +80,16 @@ static void write_back_table(
             }
         }
 
-        if (mt->hash_bitmap) {
-            size_t bm_words = (mt->hash_size + 63) / 64;
+        if (mt->ext && mt->ext->hash_bitmap) {
+            size_t bm_words = (mt->ext->hash_size + 63) / 64;
             for (size_t word = 0; word < bm_words; ++word) {
-                uint64_t bits = mt->hash_bitmap[word];
+                uint64_t bits = mt->ext->hash_bitmap[word];
                 while (bits) {
                     size_t idx = word * 64 + clx_ctzll(bits);
-                    if (idx >= mt->hash_size)
+                    if (idx >= mt->ext->hash_size)
                         break;
-                    LValue key(mt->entries[idx].key, mt->entries[idx].ktype);
-                    LValue val(mt->entries[idx].val, mt->entries[idx].vtype);
+                    LValue key(mt->ext->entries[idx].key, mt->ext->entries[idx].ktype);
+                    LValue val(mt->ext->entries[idx].val, mt->ext->entries[idx].vtype);
                     clx_to_vm_value_(clx_L, L, key);
                     clx_to_vm_value_(clx_L, L, val);
                     lua_rawset(L, mt_idx);
@@ -137,7 +137,7 @@ extern "C" int clx_vm_native_bridge_call(lua_State *L) {
             LTable *initial_mt = nullptr;
             if (cv_args[i].type == Table && cv_args[i].as_pointer()) {
                 LTable *ct = static_cast<LTable *>(cv_args[i].as_pointer());
-                initial_mt = ct->metatable;
+                initial_mt = tbl_metatable(ct);
             }
             table_tracks.push_back({ reg_ref, cv_args[i], orig_len, initial_mt });
         } else {
@@ -159,7 +159,7 @@ extern "C" int clx_vm_native_bridge_call(lua_State *L) {
             auto &trk = table_tracks[t];
             LTable *tbl = static_cast<LTable *>(trk.clx_table.as_pointer());
             if (tbl) {
-                bool mt_was_modified = (tbl->metatable != trk.saved_metatable);
+                bool mt_was_modified = (tbl_metatable(tbl) != trk.saved_metatable);
                 write_back_table(clx_L, L, tbl, trk.reg_ref, trk.orig_len, mt_was_modified);
             }
             luaL_unref(L, LUA_REGISTRYINDEX, trk.reg_ref);

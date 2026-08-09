@@ -2240,6 +2240,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
             constexpr size_t TVAL = sizeof(clx::TValue);
             constexpr size_t VT = sizeof(clx::ValueType);
             constexpr size_t HENTRY = sizeof(clx::HashEntry);
+            constexpr size_t EXT = sizeof(clx::LTableExt);
             if (arr_count < CLX_ARENA_DEFAULT_FIELDS)
                 arr_count = CLX_ARENA_DEFAULT_FIELDS;
             if (hash_count < CLX_ARENA_DEFAULT_FIELDS)
@@ -2247,7 +2248,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
             size_t aligned_arr = ((TVAL * arr_count + 7) & ~static_cast<size_t>(7));
             size_t aligned_types = ((VT * arr_count + 7) & ~static_cast<size_t>(7));
             size_t aligned_hash = ((HENTRY * hash_count + 7) & ~static_cast<size_t>(7));
-            total_arena += static_cast<uint32_t>(HDR + aligned_arr + aligned_types + aligned_hash);
+            total_arena += static_cast<uint32_t>(HDR + aligned_arr + aligned_types + aligned_hash + EXT);
         }
         if (total_arena > 0) {
             state.arena_table_sizes[fi] = total_arena;

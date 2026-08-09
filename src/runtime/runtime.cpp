@@ -247,9 +247,9 @@ const char *LRuntimeException::what() const noexcept {
 std::string LValue::to_string(LState *L) const {
     if (L && type == Table) {
         LTable *t = static_cast<LTable *>(as_pointer());
-        if (t->metatable) {
+        if (LTable *mt = tbl_metatable(t)) {
             LValue meta_key = L->str_tostring;
-            LValue meta_func = t->metatable->gettable(meta_key);
+            LValue meta_func = mt->gettable(meta_key);
 
             if (meta_func.type != Nil && meta_func.type == Function) {
                 LValue args[1];
@@ -282,10 +282,13 @@ std::string LValue::to_string(LState *L) const {
         return std::string(as_string());
     case Table: {
         const char *prefix = "table";
-        if (L && static_cast<LTable *>(as_pointer())->metatable) {
-            LValue n = static_cast<LTable *>(as_pointer())->metatable->gettable(LValue(L->intern_string("__name")));
-            if (n.type != Nil && n.type == String)
-                prefix = n.as_string();
+        if (L) {
+            LTable *mt = tbl_metatable(static_cast<LTable *>(as_pointer()));
+            if (mt) {
+                LValue n = mt->gettable(LValue(L->intern_string("__name")));
+                if (n.type != Nil && n.type == String)
+                    prefix = n.as_string();
+            }
         }
         char buf[64];
         std::snprintf(buf, sizeof(buf), "%s: %p", prefix, as_pointer());
@@ -364,15 +367,7 @@ LTable::LTable()
     , array_types(nullptr)
     , array_size(0)
     , array_cap(0)
-    , entries(nullptr)
-    , hash_size(0)
-    , hash_count(0)
-    , hash_tombs(0)
-    , hash_bitmap(nullptr)
-    , hash_version(0)
-    , array_version(0)
-    , metatable(nullptr)
-    , is_arena(false) {
+    , ext(nullptr) {
     type = static_cast<uint8_t>(Table);
     marked = 0;
     next = nullptr;
@@ -380,23 +375,31 @@ LTable::LTable()
 
 //------------------ LTable::~LTable — table destructor
 LTable::~LTable() {
-    delete[] ic;
-    ic = nullptr;
-    if (!is_arena) {
+    if (ext) {
+        if (ext->ic)
+            delete[] ext->ic;
+        if (!(flags & LFLAG_ARENA)) {
+            if (ext->entries)
+                delete[] ext->entries;
+            if (ext->hash_bitmap)
+                delete[] ext->hash_bitmap;
+        }
+        delete ext;
+        ext = nullptr;
+    }
+    if (!(flags & LFLAG_ARENA)) {
         if (array && array != small_array)
             delete[] array;
         if (array_types && array_types != small_array_types)
             delete[] array_types;
-        if (entries)
-            delete[] entries;
-        if (hash_bitmap)
-            delete[] hash_bitmap;
     }
 }
 
 //------------------ LTable::resize_hash — allocate/rehash to new_size (power of 2)
 void LTable::resize_hash(size_t new_size) {
     new_size = next_pow2(new_size);
+
+    LTableExt *ex = tbl_ensure_ext(this);
 
     HashEntry *new_entries = new HashEntry[new_size];
     for (size_t i = 0; i < new_size; ++i) {
@@ -408,32 +411,31 @@ void LTable::resize_hash(size_t new_size) {
     uint64_t *new_bitmap = new uint64_t[bm_words]();
 
     uint32_t mask = static_cast<uint32_t>(new_size - 1);
-    if (entries) {
-        for (size_t i = 0; i < hash_size; ++i) {
-            if (entries[i].ktype == Nil)
+    if (ex->entries) {
+        for (size_t i = 0; i < ex->hash_size; ++i) {
+            if (ex->entries[i].ktype == Nil)
                 continue;
-            uint64_t h = lvalue_hash(LValue(entries[i].key, entries[i].ktype)) & mask;
+            uint64_t h = lvalue_hash(LValue(ex->entries[i].key, ex->entries[i].ktype)) & mask;
             while (new_entries[h].ktype != Nil)
                 h = (h + 1) & mask;
-            new_entries[h].key = entries[i].key;
-            new_entries[h].ktype = entries[i].ktype;
-            new_entries[h].val = entries[i].val;
-            new_entries[h].vtype = entries[i].vtype;
+            new_entries[h].key = ex->entries[i].key;
+            new_entries[h].ktype = ex->entries[i].ktype;
+            new_entries[h].val = ex->entries[i].val;
+            new_entries[h].vtype = ex->entries[i].vtype;
             new_bitmap[h / 64] |= (1ULL << (h % 64));
         }
-        if (!is_arena) {
-            delete[] entries;
-        }
+        if (!(flags & LFLAG_ARENA))
+            delete[] ex->entries;
     }
 
-    is_arena = false;
-    entries = new_entries;
-    hash_size = new_size;
-    hash_tombs = 0;
-    if (hash_bitmap)
-        delete[] hash_bitmap;
-    hash_bitmap = new_bitmap;
-    hash_version++;
+    flags &= ~LFLAG_ARENA;
+    ex->entries = new_entries;
+    ex->hash_size = new_size;
+    ex->hash_tombs = 0;
+    if (ex->hash_bitmap)
+        delete[] ex->hash_bitmap;
+    ex->hash_bitmap = new_bitmap;
+    ex->hash_version++;
 }
 
 //------------------ LTable::gettable — get value by key
@@ -448,34 +450,36 @@ LValue LTable::gettable(const LValue &key) {
         if (d == static_cast<double>(idx) && static_cast<uint64_t>(idx - 1) < array_cap)
             return LValue(array[idx - 1], array_types[idx - 1]);
     }
-    if (hash_size == 0)
+    LTableExt *ex = ext;
+    if (!ex || ex->hash_size == 0)
         return LValue();
 
-    if (!ic)
-        ic = new InlineCache[IC_SIZE]();
+    if (!ex->ic)
+        ex->ic = new LTableInlineCache[LTABLE_IC_SIZE]();
 
     uint32_t ic_idx
         = static_cast<uint32_t>(key.val.payload.u64 ^ (key.val.payload.u64 >> 17) ^ (key.val.payload.u64 >> 33)
                                 ^ (key.val.payload.u64 >> 5) ^ (key.val.payload.u64 >> 11))
-        % IC_SIZE;
-    auto &_ic = ic[ic_idx];
-    if (_ic.key_payload == key.val.payload.u64 && _ic.table_ver == hash_version && _ic.entry_idx < hash_size) {
-        HashEntry &_e = entries[_ic.entry_idx];
+        % LTABLE_IC_SIZE;
+    auto &_ic = ex->ic[ic_idx];
+    if (_ic.key_payload == key.val.payload.u64 && _ic.table_ver == ex->hash_version
+        && _ic.entry_idx < ex->hash_size) {
+        HashEntry &_e = ex->entries[_ic.entry_idx];
         if (_e.ktype != Nil)
             return LValue(_e.val, _e.vtype);
     }
 
-    uint32_t mask = static_cast<uint32_t>(hash_size - 1);
+    uint32_t mask = static_cast<uint32_t>(ex->hash_size - 1);
     uint64_t h = lvalue_hash(key) & mask;
     for (;;) {
-        HashEntry &e = entries[h];
+        HashEntry &e = ex->entries[h];
         if (e.ktype == Nil) {
             if (e.key.payload.u64 == HASH_EMPTY)
                 return LValue();
         } else if (lvalue_eq_fast(LValue(e.key, e.ktype), key)) {
             _ic.key_payload = key.val.payload.u64;
             _ic.entry_idx = static_cast<uint32_t>(h);
-            _ic.table_ver = hash_version;
+            _ic.table_ver = ex->hash_version;
             return LValue(e.val, e.vtype);
         }
         h = (h + 1) & mask;
@@ -492,7 +496,6 @@ void LTable::settable(const LValue &key, const LValue &val) {
             array_types[idx - 1] = val.type;
             if (static_cast<size_t>(idx) > array_size)
                 array_size = static_cast<size_t>(idx);
-            array_version++;
             return;
         }
         if (idx == static_cast<int64_t>(array_size + 1)) {
@@ -503,25 +506,24 @@ void LTable::settable(const LValue &key, const LValue &val) {
                 std::memcpy(new_arr, array, array_cap * sizeof(TValue));
                 std::memcpy(new_types, array_types, array_cap * sizeof(ValueType));
             }
-            if (!is_arena) {
+            if (!(flags & LFLAG_ARENA)) {
                 if (array != small_array)
                     delete[] array;
                 if (array_types != small_array_types)
                     delete[] array_types;
             }
-            is_arena = false;
+            flags &= ~LFLAG_ARENA;
             array = new_arr;
             array_types = new_types;
             array[array_size] = val.val;
             array_types[array_size] = val.type;
             array_size++;
             array_cap = new_cap;
-            array_version++;
-            if (hash_size > 0) {
-                for (size_t i = 0; i < hash_size; ++i) {
-                    if (entries[i].ktype == Nil)
+            if (ext && ext->hash_size > 0) {
+                for (size_t i = 0; i < ext->hash_size; ++i) {
+                    if (ext->entries[i].ktype == Nil)
                         continue;
-                    LValue kv(entries[i].key, entries[i].ktype);
+                    LValue kv(ext->entries[i].key, ext->entries[i].ktype);
                     int64_t hidx = -1;
                     if (kv.type == Int64)
                         hidx = kv.as_integer();
@@ -532,17 +534,17 @@ void LTable::settable(const LValue &key, const LValue &val) {
                             hidx = t;
                     }
                     if (hidx > 0 && hidx != idx && static_cast<uint64_t>(hidx - 1) < new_cap) {
-                        array[hidx - 1] = entries[i].val;
-                        array_types[hidx - 1] = entries[i].vtype;
-                        entries[i].key.payload.u64 = HASH_TOMBSTONE;
-                        entries[i].ktype = Nil;
-                        entries[i].val = TValue();
-                        entries[i].vtype = Nil;
-                        hash_count--;
-                        hash_tombs++;
-                        hash_version++;
-                        if (hash_bitmap)
-                            hash_bitmap[i / 64] &= ~(1ULL << (i % 64));
+                        array[hidx - 1] = ext->entries[i].val;
+                        array_types[hidx - 1] = ext->entries[i].vtype;
+                        ext->entries[i].key.payload.u64 = HASH_TOMBSTONE;
+                        ext->entries[i].ktype = Nil;
+                        ext->entries[i].val = TValue();
+                        ext->entries[i].vtype = Nil;
+                        ext->hash_count--;
+                        ext->hash_tombs++;
+                        ext->hash_version++;
+                        if (ext->hash_bitmap)
+                            ext->hash_bitmap[i / 64] &= ~(1ULL << (i % 64));
                     }
                 }
             }
@@ -557,7 +559,6 @@ void LTable::settable(const LValue &key, const LValue &val) {
                 array_types[idx - 1] = val.type;
                 if (static_cast<size_t>(idx) > array_size)
                     array_size = static_cast<size_t>(idx);
-                array_version++;
                 return;
             }
             if (idx == static_cast<int64_t>(array_size + 1)) {
@@ -568,25 +569,24 @@ void LTable::settable(const LValue &key, const LValue &val) {
                     std::memcpy(new_arr, array, array_cap * sizeof(TValue));
                     std::memcpy(new_types, array_types, array_cap * sizeof(ValueType));
                 }
-                if (!is_arena) {
+                if (!(flags & LFLAG_ARENA)) {
                     if (array != small_array)
                         delete[] array;
                     if (array_types != small_array_types)
                         delete[] array_types;
                 }
-                is_arena = false;
+                flags &= ~LFLAG_ARENA;
                 array = new_arr;
                 array_types = new_types;
                 array[array_size] = val.val;
                 array_types[array_size] = val.type;
                 array_size++;
                 array_cap = new_cap;
-                array_version++;
-                if (hash_size > 0) {
-                    for (size_t i = 0; i < hash_size; ++i) {
-                        if (entries[i].ktype == Nil)
+                if (ext && ext->hash_size > 0) {
+                    for (size_t i = 0; i < ext->hash_size; ++i) {
+                        if (ext->entries[i].ktype == Nil)
                             continue;
-                        LValue kv(entries[i].key, entries[i].ktype);
+                        LValue kv(ext->entries[i].key, ext->entries[i].ktype);
                         int64_t hidx = -1;
                         if (kv.type == Int64)
                             hidx = kv.as_integer();
@@ -597,17 +597,17 @@ void LTable::settable(const LValue &key, const LValue &val) {
                                 hidx = t;
                         }
                         if (hidx > 0 && hidx != idx && static_cast<uint64_t>(hidx - 1) < new_cap) {
-                            array[hidx - 1] = entries[i].val;
-                            array_types[hidx - 1] = entries[i].vtype;
-                            entries[i].key.payload.u64 = HASH_TOMBSTONE;
-                            entries[i].ktype = Nil;
-                            entries[i].val = TValue();
-                            entries[i].vtype = Nil;
-                            hash_count--;
-                            hash_tombs++;
-                            hash_version++;
-                            if (hash_bitmap)
-                                hash_bitmap[i / 64] &= ~(1ULL << (i % 64));
+                            array[hidx - 1] = ext->entries[i].val;
+                            array_types[hidx - 1] = ext->entries[i].vtype;
+                            ext->entries[i].key.payload.u64 = HASH_TOMBSTONE;
+                            ext->entries[i].ktype = Nil;
+                            ext->entries[i].val = TValue();
+                            ext->entries[i].vtype = Nil;
+                            ext->hash_count--;
+                            ext->hash_tombs++;
+                            ext->hash_version++;
+                            if (ext->hash_bitmap)
+                                ext->hash_bitmap[i / 64] &= ~(1ULL << (i % 64));
                         }
                     }
                 }
@@ -617,12 +617,13 @@ void LTable::settable(const LValue &key, const LValue &val) {
     }
 
     if (val.type == Nil) {
-        if (hash_size == 0)
+        LTableExt *ex = ext;
+        if (!ex || ex->hash_size == 0)
             return;
-        uint32_t mask = static_cast<uint32_t>(hash_size - 1);
+        uint32_t mask = static_cast<uint32_t>(ex->hash_size - 1);
         uint64_t h = lvalue_hash(key) & mask;
         for (;;) {
-            HashEntry &e = entries[h];
+            HashEntry &e = ex->entries[h];
             if (e.ktype == Nil) {
                 if (e.key.payload.u64 == HASH_EMPTY)
                     return;
@@ -631,32 +632,35 @@ void LTable::settable(const LValue &key, const LValue &val) {
                 e.ktype = Nil;
                 e.val = TValue();
                 e.vtype = Nil;
-                hash_count--;
-                hash_tombs++;
-                hash_version++;
-                if (hash_bitmap)
-                    hash_bitmap[h / 64] &= ~(1ULL << (h % 64));
+                ex->hash_count--;
+                ex->hash_tombs++;
+                ex->hash_version++;
+                if (ex->hash_bitmap)
+                    ex->hash_bitmap[h / 64] &= ~(1ULL << (h % 64));
                 return;
             }
             h = (h + 1) & mask;
         }
     }
 
-    if (hash_size == 0) {
+    LTableExt *ex = ext;
+    if (!ex || ex->hash_size == 0) {
         resize_hash(8);
-    } else if ((hash_count + hash_tombs + 1) * 4 >= hash_size * 3) {
-        resize_hash(hash_count >= hash_size / 2 ? hash_size * 2 : hash_size);
+        ex = ext;
+    } else if ((ex->hash_count + ex->hash_tombs + 1) * 4 >= ex->hash_size * 3) {
+        resize_hash(ex->hash_count >= ex->hash_size / 2 ? ex->hash_size * 2 : ex->hash_size);
+        ex = ext;
     }
 
-    if (ic) {
+    if (ex->ic) {
         uint32_t ic_idx
             = static_cast<uint32_t>(key.val.payload.u64 ^ (key.val.payload.u64 >> 17) ^ (key.val.payload.u64 >> 33)
                                     ^ (key.val.payload.u64 >> 5) ^ (key.val.payload.u64 >> 11))
-            % IC_SIZE;
-        InlineCache &_ic = ic[ic_idx];
-        if (_ic.key_payload == key.val.payload.u64 && _ic.table_ver == hash_version
-            && _ic.entry_idx < hash_size) {
-            HashEntry &_e = entries[_ic.entry_idx];
+            % LTABLE_IC_SIZE;
+        LTableInlineCache &_ic = ex->ic[ic_idx];
+        if (_ic.key_payload == key.val.payload.u64 && _ic.table_ver == ex->hash_version
+            && _ic.entry_idx < ex->hash_size) {
+            HashEntry &_e = ex->entries[_ic.entry_idx];
             if (_e.ktype != Nil) {
                 _e.val = val.val;
                 _e.vtype = val.type;
@@ -665,24 +669,24 @@ void LTable::settable(const LValue &key, const LValue &val) {
         }
     }
 
-    uint32_t mask = static_cast<uint32_t>(hash_size - 1);
+    uint32_t mask = static_cast<uint32_t>(ex->hash_size - 1);
     uint64_t h = lvalue_hash(key) & mask;
     int32_t tomb = -1;
     for (;;) {
-        HashEntry &e = entries[h];
+        HashEntry &e = ex->entries[h];
         if (e.ktype == Nil) {
-            HashEntry &slot = (tomb != -1) ? entries[tomb] : e;
+            HashEntry &slot = (tomb != -1) ? ex->entries[tomb] : e;
             slot.key = key.val;
             slot.ktype = key.type;
             slot.val = val.val;
             slot.vtype = val.type;
             if (tomb != -1)
-                hash_tombs--;
-            hash_count++;
-            hash_version++;
-            if (hash_bitmap) {
+                ex->hash_tombs--;
+            ex->hash_count++;
+            ex->hash_version++;
+            if (ex->hash_bitmap) {
                 size_t bit_idx = (tomb != -1) ? static_cast<size_t>(tomb) : h;
-                hash_bitmap[bit_idx / 64] |= (1ULL << (bit_idx % 64));
+                ex->hash_bitmap[bit_idx / 64] |= (1ULL << (bit_idx % 64));
             }
             return;
         }
@@ -704,9 +708,9 @@ LValue LTable::get_value(LState *L, const LValue &key) {
     if (ptr.type != Nil)
         return ptr;
 
-    if (metatable) {
+    if (ext && ext->metatable) {
         LValue index_key = L->str_index;
-        LValue index_ptr = metatable->gettable(index_key);
+        LValue index_ptr = ext->metatable->gettable(index_key);
 
         if (index_ptr.type != Nil) {
             if (index_ptr.type == Table) {
@@ -737,9 +741,9 @@ void LTable::set_value(LState *L, const LValue &key, const LValue &val) {
         return;
     }
 
-    if (metatable) {
+    if (ext && ext->metatable) {
         LValue newindex_key = L->str_newindex;
-        LValue newindex_ptr = metatable->gettable(newindex_key);
+        LValue newindex_ptr = ext->metatable->gettable(newindex_key);
 
         if (newindex_ptr.type != Nil) {
             if (newindex_ptr.type == Table) {
@@ -822,16 +826,23 @@ static void dtor_free_table(LTable *t) {
         delete[] t->array_types;
         t->array_types = nullptr;
     }
-    if (t->entries) {
-        delete[] t->entries;
-        t->entries = nullptr;
+    if (t->ext) {
+        if (t->ext->entries) {
+            delete[] t->ext->entries;
+            t->ext->entries = nullptr;
+        }
+        if (t->ext->hash_bitmap) {
+            delete[] t->ext->hash_bitmap;
+            t->ext->hash_bitmap = nullptr;
+        }
+        if (t->ext->ic) {
+            delete[] t->ext->ic;
+            t->ext->ic = nullptr;
+        }
+        delete t->ext;
+        t->ext = nullptr;
     }
-    if (t->hash_bitmap) {
-        delete[] t->hash_bitmap;
-        t->hash_bitmap = nullptr;
-    }
-    t->array_size = t->array_cap = t->hash_size = t->hash_count = 0;
-    t->hash_count = t->hash_tombs = 0;
+    t->array_size = t->array_cap = 0;
     delete t;
 }
 
@@ -929,9 +940,10 @@ LState::~LState() {
 }
 
 static void clx_trigger_gc(LState *L, LTable *t) {
-    if (!t->metatable)
+    LTable *mt = tbl_metatable(t);
+    if (!mt)
         return;
-    LValue gc_func = t->metatable->gettable(L->str_gc);
+    LValue gc_func = mt->gettable(L->str_gc);
     if (gc_func.type == Nil)
         return;
 
@@ -955,9 +967,10 @@ CloseGuard::~CloseGuard() {
     if (val.type != Table)
         return;
     LTable *t = static_cast<LTable *>(val.as_pointer());
-    if (!t->metatable)
+    LTable *mt = tbl_metatable(t);
+    if (!mt)
         return;
-    LValue close_func = t->metatable->gettable(L->str_close);
+    LValue close_func = mt->gettable(L->str_close);
     if (close_func.type == Nil)
         return;
 
@@ -1009,14 +1022,18 @@ bool LState::gc_step() {
                     clx_free_vm_proxy_ptr(this, curr);
             } else if (curr->type == static_cast<uint8_t>(Table)) {
                 LTable *t = static_cast<LTable *>(curr);
-                if (t->metatable) {
+                if (tbl_metatable(t)) {
                     t->next = gc_finalizable;
                     gc_finalizable = t;
                 } else {
                     if (t->array_cap > 0 && t->array != t->small_array)
                         allocated_bytes -= sizeof(TValue) * t->array_cap + sizeof(ValueType) * t->array_cap;
                     allocated_bytes -= sizeof(LTable);
-                    t->array_size = t->hash_count = t->hash_tombs = 0;
+                    if (t->ext) {
+                        t->ext->hash_count = 0;
+                        t->ext->hash_tombs = 0;
+                    }
+                    t->array_size = 0;
                     t->next = free_tables;
                     free_tables = t;
                 }
@@ -1069,12 +1086,17 @@ bool LState::gc_step() {
                 delete[] t->array_types;
                 t->array_types = nullptr;
             }
-            if (t->entries) {
-                delete[] t->entries;
-                t->entries = nullptr;
+            if (t->ext) {
+                if (t->ext->entries) {
+                    delete[] t->ext->entries;
+                    t->ext->entries = nullptr;
+                }
+                t->ext->hash_count = 0;
+                t->ext->hash_tombs = 0;
+                t->ext->metatable = nullptr;
+                t->ext->meta_next = nullptr;
             }
-            t->array_size = t->array_cap = t->hash_size = t->hash_count = 0;
-            t->hash_count = t->hash_tombs = 0;
+            t->array_size = t->array_cap = 0;
             t->next = free_tables;
             free_tables = t;
             t = nx;
@@ -1218,32 +1240,35 @@ void LState::collect_garbage() {
                 for (; i < t->array_size; ++i)
                     push_if_needed(LValue(t->array[i], t->array_types[i]));
             }
-            if (t->hash_bitmap) {
-                size_t bm_words = (t->hash_size + 63) / 64;
-                for (size_t word = 0; word < bm_words; ++word) {
-                    uint64_t bits = t->hash_bitmap[word];
-                    while (bits) {
-                        size_t idx = word * 64 + clx_ctzll(bits);
-                        if (idx >= t->hash_size)
-                            break;
-                        LValue kv(t->entries[idx].key, t->entries[idx].ktype);
+            LTableExt *ex = t->ext;
+            if (ex) {
+                if (ex->hash_bitmap) {
+                    size_t bm_words = (ex->hash_size + 63) / 64;
+                    for (size_t word = 0; word < bm_words; ++word) {
+                        uint64_t bits = ex->hash_bitmap[word];
+                        while (bits) {
+                            size_t idx = word * 64 + clx_ctzll(bits);
+                            if (idx >= ex->hash_size)
+                                break;
+                            LValue kv(ex->entries[idx].key, ex->entries[idx].ktype);
+                            push_if_needed(kv);
+                            push_if_needed(LValue(ex->entries[idx].val, ex->entries[idx].vtype));
+                            bits &= bits - 1;
+                        }
+                    }
+                } else {
+                    for (size_t _i = 0; _i < ex->hash_size; ++_i) {
+                        if (ex->entries[_i].ktype == Nil)
+                            continue;
+                        LValue kv(ex->entries[_i].key, ex->entries[_i].ktype);
                         push_if_needed(kv);
-                        push_if_needed(LValue(t->entries[idx].val, t->entries[idx].vtype));
-                        bits &= bits - 1;
+                        push_if_needed(LValue(ex->entries[_i].val, ex->entries[_i].vtype));
                     }
                 }
-            } else {
-                for (size_t _i = 0; _i < t->hash_size; ++_i) {
-                    if (t->entries[_i].ktype == Nil)
-                        continue;
-                    LValue kv(t->entries[_i].key, t->entries[_i].ktype);
-                    push_if_needed(kv);
-                    push_if_needed(LValue(t->entries[_i].val, t->entries[_i].vtype));
+                if (ex->metatable && ex->metatable->marked == 0) {
+                    ex->metatable->marked = 1;
+                    wl.push_back(ex->metatable);
                 }
-            }
-            if (t->metatable && t->metatable->marked == 0) {
-                t->metatable->marked = 1;
-                wl.push_back(t->metatable);
             }
         } else if (curr->type == static_cast<uint8_t>(Thread)) {
             LThread *th = static_cast<LThread *>(curr);
@@ -1260,11 +1285,12 @@ void LState::collect_garbage() {
     }
 
     std::vector<LHeader *> protect_wl;
-    for (LTable *obj = metatabled_tables; obj; obj = obj->meta_next) {
+    for (LTable *obj = metatabled_tables; obj; obj = obj->ext->meta_next) {
         if (obj->marked == 0 && !(obj->flags & LFLAG_VM_PROXY)) {
-            if (obj->metatable && obj->metatable->marked == 0) {
-                obj->metatable->marked = 2;
-                protect_wl.push_back(obj->metatable);
+            LTable *mt = obj->ext ? obj->ext->metatable : nullptr;
+            if (mt && mt->marked == 0) {
+                mt->marked = 2;
+                protect_wl.push_back(mt);
             }
         }
     }
@@ -1333,28 +1359,31 @@ void LState::collect_garbage() {
                     if (LHeader *h = mark_gc(v, 2)) protect_wl.push_back(h);
                 }
             }
-            if (tt->hash_bitmap) {
-                size_t bm_words = (tt->hash_size + 63) / 64;
-                for (size_t word = 0; word < bm_words; ++word) {
-                    uint64_t bits = tt->hash_bitmap[word];
-                    while (bits) {
-                        size_t idx = word * 64 + clx_ctzll(bits);
-                        if (idx >= tt->hash_size)
-                            break;
-                        LValue kv(tt->entries[idx].key, tt->entries[idx].ktype);
-                        for (LValue v : { kv, LValue(tt->entries[idx].val, tt->entries[idx].vtype) }) {
+            LTableExt *tt_ex = tt->ext;
+            if (tt_ex) {
+                if (tt_ex->hash_bitmap) {
+                    size_t bm_words = (tt_ex->hash_size + 63) / 64;
+                    for (size_t word = 0; word < bm_words; ++word) {
+                        uint64_t bits = tt_ex->hash_bitmap[word];
+                        while (bits) {
+                            size_t idx = word * 64 + clx_ctzll(bits);
+                            if (idx >= tt_ex->hash_size)
+                                break;
+                            LValue kv(tt_ex->entries[idx].key, tt_ex->entries[idx].ktype);
+                            for (LValue v : { kv, LValue(tt_ex->entries[idx].val, tt_ex->entries[idx].vtype) }) {
+                                if (LHeader *h = mark_gc(v, 2)) protect_wl.push_back(h);
+                            }
+                            bits &= bits - 1;
+                        }
+                    }
+                } else {
+                    for (size_t _pi = 0; _pi < tt_ex->hash_size; ++_pi) {
+                        if (tt_ex->entries[_pi].ktype == Nil)
+                            continue;
+                        LValue kv(tt_ex->entries[_pi].key, tt_ex->entries[_pi].ktype);
+                        for (LValue v : { kv, LValue(tt_ex->entries[_pi].val, tt_ex->entries[_pi].vtype) }) {
                             if (LHeader *h = mark_gc(v, 2)) protect_wl.push_back(h);
                         }
-                        bits &= bits - 1;
-                    }
-                }
-            } else {
-                for (size_t _pi = 0; _pi < tt->hash_size; ++_pi) {
-                    if (tt->entries[_pi].ktype == Nil)
-                        continue;
-                    LValue kv(tt->entries[_pi].key, tt->entries[_pi].ktype);
-                    for (LValue v : { kv, LValue(tt->entries[_pi].val, tt->entries[_pi].vtype) }) {
-                        if (LHeader *h = mark_gc(v, 2)) protect_wl.push_back(h);
                     }
                 }
             }
@@ -1400,7 +1429,7 @@ MultiValue call_function(LState *L, const LValue &func, const LValue *args, size
     }
 
     if (func.type == Table) {
-        LTable *mt = static_cast<LTable *>(func.as_pointer())->metatable;
+        LTable *mt = tbl_metatable(static_cast<LTable *>(func.as_pointer()));
         if (mt) {
             LValue m = mt->gettable(L->str_call);
             if (m.type != Nil) {
@@ -1482,7 +1511,7 @@ MultiValue call_direct(LState *L, const LValue &func, const LValue *args, size_t
 LValue getmetafield(LState *L, const LValue &obj, const char *field) {
     LTable *mt = nullptr;
     if (obj.type == Table) {
-        mt = static_cast<LTable *>(obj.as_pointer())->metatable;
+        mt = tbl_metatable(static_cast<LTable *>(obj.as_pointer()));
     } else if (obj.type == UserData) {
         mt = static_cast<LUserdata *>(obj.as_pointer())->metatable;
     }
@@ -1496,7 +1525,7 @@ LValue getmetafield(LState *L, const LValue &obj, const char *field) {
 bool callmeta(LState *L, const LValue &obj, const char *event) {
     LTable *mt = nullptr;
     if (obj.type == Table) {
-        mt = static_cast<LTable *>(obj.as_pointer())->metatable;
+        mt = tbl_metatable(static_cast<LTable *>(obj.as_pointer()));
     } else if (obj.type == UserData) {
         mt = static_cast<LUserdata *>(obj.as_pointer())->metatable;
     }
@@ -1516,14 +1545,15 @@ static MultiValue lazy_funcs_index(LState *L, const LValue *args, size_t n) {
 
     const char *name = args[1].as_string();
     LTable *t = static_cast<LTable *>(args[0].as_pointer());
-    if (!t->metatable)
+    LTable *mt = tbl_metatable(t);
+    if (!mt)
         return MultiValue();
 
     LValue regs_key(L->intern_string("__lazy_regs"));
     LValue count_key(L->intern_string("__lazy_count"));
 
-    LValue regs_val = t->metatable->gettable(regs_key);
-    LValue count_val = t->metatable->gettable(count_key);
+    LValue regs_val = mt->gettable(regs_key);
+    LValue count_val = mt->gettable(count_key);
     if (regs_val.type != UserData || regs_val.type == Nil || count_val.type == Nil || count_val.type != Int64)
         return MultiValue();
 
@@ -1547,11 +1577,10 @@ void set_lazy_funcs(LState *L, const LValue &table, const LazyReg *regs, size_t 
         return;
     LTable *t = static_cast<LTable *>(table.as_pointer());
 
-    LTable *mt = t->metatable;
+    LTable *mt = tbl_metatable(t);
     if (!mt) {
         mt = static_cast<LTable *>(L->create_table().as_pointer());
-        t->metatable = mt;
-        t->hash_version++;
+        tbl_set_metatable(t, mt);
     }
     meta_list_add(L, t);    mt->settable(LValue(L->intern_string("__lazy_regs")),
         LValue(UserData, reinterpret_cast<LHeader *>(const_cast<LazyReg *>(regs))));
@@ -1578,19 +1607,20 @@ LValue LState::create_table(size_t asize, size_t hsize) {
     if (free_tables) {
         t = free_tables;
         free_tables = static_cast<LTable *>(free_tables->next);
-        t->hash_count = 0;
-        t->hash_tombs = 0;
-        t->hash_version++;
-        t->array_version = 0;
-        t->metatable = nullptr;
         t->marked = 0;
-        if (t->entries) {
-            for (size_t i = 0; i < t->hash_size; ++i) {
-                t->entries[i].key.payload.u64 = HASH_EMPTY;
-                t->entries[i].ktype = Nil;
+        if (t->ext) {
+            t->ext->hash_count = 0;
+            t->ext->hash_tombs = 0;
+            t->ext->hash_version++;
+            t->ext->metatable = nullptr;
+            if (t->ext->entries) {
+                for (size_t i = 0; i < t->ext->hash_size; ++i) {
+                    t->ext->entries[i].key.payload.u64 = HASH_EMPTY;
+                    t->ext->entries[i].ktype = Nil;
+                }
+                if (t->ext->hash_bitmap)
+                    std::memset(t->ext->hash_bitmap, 0, ((t->ext->hash_size + 63) / 64) * sizeof(uint64_t));
             }
-            if (t->hash_bitmap)
-                std::memset(t->hash_bitmap, 0, ((t->hash_size + 63) / 64) * sizeof(uint64_t));
         }
         allocated_bytes += sizeof(LTable);
     } else {
@@ -1696,6 +1726,7 @@ LValue newuserdata(LState *L, size_t size) {
     LUserdata *ud = reinterpret_cast<LUserdata *>(mem);
     ud->type = static_cast<uint8_t>(UserData);
     ud->marked = 0;
+    ud->flags = 0;
     ud->metatable = nullptr;
     ud->size = size;
 
@@ -1710,11 +1741,11 @@ LValue newuserdata(LState *L, size_t size) {
 LValue call_bin_metamethod(LState *L, const LValue &a, const LValue &b, const char *event) {
     LTable *mt = nullptr;
     if (a.type == Table)
-        mt = static_cast<LTable *>(a.as_pointer())->metatable;
+        mt = tbl_metatable(static_cast<LTable *>(a.as_pointer()));
     else if (a.type == UserData)
         mt = static_cast<LUserdata *>(a.as_pointer())->metatable;
     if (!mt && b.type == Table)
-        mt = static_cast<LTable *>(b.as_pointer())->metatable;
+        mt = tbl_metatable(static_cast<LTable *>(b.as_pointer()));
     else if (!mt && b.type == UserData)
         mt = static_cast<LUserdata *>(b.as_pointer())->metatable;
 

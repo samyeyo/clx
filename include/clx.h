@@ -370,7 +370,7 @@ CLX_INLINE void set_functions(LState *L, const LValue &table, const LReg *regs) 
 CLX_INLINE LValue getmetatable(LState *L, const LValue &obj) {
     LTable *mt = nullptr;
     if (obj.type == ValueType::Table) {
-        mt = static_cast<LTable *>(obj.as_pointer())->metatable;
+        mt = tbl_metatable(static_cast<LTable *>(obj.as_pointer()));
     } else if (obj.type == ValueType::UserData) {
         mt = static_cast<LUserdata *>(obj.as_pointer())->metatable;
     }
@@ -395,14 +395,14 @@ CLX_INLINE void setmetatable(LState *L, const LValue &obj, const LValue &mt) {
     LTable *new_mt = (mt.type == ValueType::Table) ? static_cast<LTable *>(mt.as_pointer()) : nullptr;
     if (obj.type == ValueType::Table) {
         LTable *t = static_cast<LTable *>(obj.as_pointer());
-        if (t->metatable) {
-            LValue protected_mt = t->metatable->gettable(LValue(L->intern_string("__metatable")));
+        LTable *cur_mt = tbl_metatable(t);
+        if (cur_mt) {
+            LValue protected_mt = cur_mt->gettable(LValue(L->intern_string("__metatable")));
             if (protected_mt.type != ValueType::Nil) {
                 throw_runtime_error("cannot change a protected metatable");
             }
         }
-        t->metatable = new_mt;
-        t->hash_version++;
+        tbl_set_metatable(t, new_mt);
         if (new_mt)
             meta_list_add(L, t);
         else
@@ -457,19 +457,20 @@ CLX_INLINE MultiValue next(LState *L, const LValue &table, const LValue &key) {
         }
     }
 
-    if (t->hash_size == 0)
+    LTableExt *ex = t->ext;
+    if (!ex || ex->hash_size == 0)
         return MultiValue();
 
     bool found_key = (key.type == ValueType::Nil);
-    if (t->hash_bitmap) {
-        size_t bm_words = (t->hash_size + 63) / 64;
+    if (ex->hash_bitmap) {
+        size_t bm_words = (ex->hash_size + 63) / 64;
         for (size_t word = 0; word < bm_words; ++word) {
-            uint64_t bits = t->hash_bitmap[word];
+            uint64_t bits = ex->hash_bitmap[word];
             while (bits) {
                 size_t idx = word * 64 + clx_ctzll(bits);
-                if (idx >= t->hash_size)
+                if (idx >= ex->hash_size)
                     break;
-                HashEntry &e = t->entries[idx];
+                HashEntry &e = ex->entries[idx];
                 if (!found_key) {
                     if (lvalue_eq_fast(LValue(e.key, e.ktype), key))
                         found_key = true;
@@ -480,8 +481,8 @@ CLX_INLINE MultiValue next(LState *L, const LValue &table, const LValue &key) {
             }
         }
     } else {
-        for (size_t i = 0; i < t->hash_size; ++i) {
-            HashEntry &e = t->entries[i];
+        for (size_t i = 0; i < ex->hash_size; ++i) {
+            HashEntry &e = ex->entries[i];
             if (e.ktype == ValueType::Nil)
                 continue;
             if (!found_key) {

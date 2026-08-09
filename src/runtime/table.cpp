@@ -15,8 +15,8 @@ namespace clx {
 
 //------------------ get_array_len: returns the length (#) of the array part of a table
 static size_t get_array_len(LState *L, LTable *t) {
-    if (t->metatable) {
-        LValue mm = t->metatable->gettable(LValue(L->intern_string("__len", 5)));
+    if (LTable *mt = tbl_metatable(t)) {
+        LValue mm = mt->gettable(LValue(L->intern_string("__len", 5)));
         if (mm.type != Nil) {
             LValue res = len(L, LValue(t));
             if (res.type == Int64)
@@ -127,7 +127,6 @@ MultiValue table_insert(LState *L, const LValue *args, size_t count) {
             list->array_types[pos - 1] = val.type;
             if (list->array_size <= len)
                 list->array_size = len + 1;
-            list->array_version++;
         } else {
             for (size_t k = len; k >= pos; --k) {
                 set_elem(list, k + 1, get_elem(list, k));
@@ -161,7 +160,6 @@ MultiValue table_remove(LState *L, const LValue *args, size_t count) {
         std::memmove(&list->array_types[pos - 1], &list->array_types[pos], move_n * sizeof(ValueType));
         list->array[len - 1] = TValue();
         list->array_types[len - 1] = Nil;
-        list->array_version++;
     } else {
         res = get_elem(list, pos);
         for (size_t k = pos; k < len; ++k)
@@ -194,7 +192,6 @@ MultiValue table_sort(LState *L, const LValue *args, size_t count) {
                 list->array[k].payload.f64 = nums[k];
                 list->array_types[k] = Double;
             }
-            list->array_version++;
             return MultiValue();
         }
     }
@@ -235,7 +232,6 @@ MultiValue table_sort(LState *L, const LValue *args, size_t count) {
         std::sort(elems.begin(), elems.end(), cmp);
         write_elems(list, elems);
     }
-    list->array_version++;
     return MultiValue();
 }
 
@@ -303,7 +299,6 @@ MultiValue table_move(LState *L, const LValue *args, size_t count) {
         size_t dst_off = static_cast<size_t>(t - 1);
         std::memmove(&dst->array[dst_off], &src->array[src_off], n * sizeof(TValue));
         std::memmove(&dst->array_types[dst_off], &src->array_types[src_off], n * sizeof(ValueType));
-        dst->array_version++;
         return MultiValue(LValue(dst));
     }
 

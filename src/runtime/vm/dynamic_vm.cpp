@@ -209,17 +209,17 @@ int DynamicVM::build_env_table(const LValue &preferred) {
                 lua_rawseti(L_, -2, static_cast<int>(i + 1));
             }
         }
-        if (t->hash_bitmap) {
-            size_t bm_words = (t->hash_size + 63) / 64;
+        if (t->ext && t->ext->hash_bitmap) {
+            size_t bm_words = (t->ext->hash_size + 63) / 64;
             for (size_t word = 0; word < bm_words; ++word) {
-                uint64_t bits = t->hash_bitmap[word];
+                uint64_t bits = t->ext->hash_bitmap[word];
                 while (bits) {
                     size_t i = word * 64 + clx_ctzll(bits);
-                    if (i >= t->hash_size)
+                    if (i >= t->ext->hash_size)
                         break;
-                    if (t->entries[i].ktype != Nil) {
-                        LValue key(t->entries[i].key, t->entries[i].ktype);
-                        LValue val(t->entries[i].val, t->entries[i].vtype);
+                    if (t->ext->entries[i].ktype != Nil) {
+                        LValue key(t->ext->entries[i].key, t->ext->entries[i].ktype);
+                        LValue val(t->ext->entries[i].val, t->ext->entries[i].vtype);
                         clx_to_vm_value_(clx_L_, L_, key);
                         clx_to_vm_value_(clx_L_, L_, val);
                         lua_rawset(L_, -3);
@@ -227,11 +227,11 @@ int DynamicVM::build_env_table(const LValue &preferred) {
                     bits &= bits - 1;
                 }
             }
-        } else {
-            for (size_t i = 0; i < t->hash_size; ++i) {
-                if (t->entries[i].ktype != Nil) {
-                    LValue key(t->entries[i].key, t->entries[i].ktype);
-                    LValue val(t->entries[i].val, t->entries[i].vtype);
+        } else if (t->ext) {
+            for (size_t i = 0; i < t->ext->hash_size; ++i) {
+                if (t->ext->entries[i].ktype != Nil) {
+                    LValue key(t->ext->entries[i].key, t->ext->entries[i].ktype);
+                    LValue val(t->ext->entries[i].val, t->ext->entries[i].vtype);
                     clx_to_vm_value_(clx_L_, L_, key);
                     clx_to_vm_value_(clx_L_, L_, val);
                     lua_rawset(L_, -3);

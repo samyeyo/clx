@@ -242,8 +242,7 @@ LValue vm_to_clx_value_(LState *clx_L, lua_State *L, int idx) {
                 LTable *meta_tbl = static_cast<LTable *>(meta_copy.as_pointer());
 
                 meta_tbl->settable(clx_L->str_gc, LValue());
-                tbl->metatable = meta_tbl;
-                tbl->hash_version++;
+                tbl_set_metatable(tbl, meta_tbl);
             }
         }
 
@@ -490,9 +489,9 @@ extern "C" int clx_vm_proxy_index(lua_State *L) {
     clx::LValue key = clx::vm_to_clx_value_(clx_L, L, 2);
 
     clx::LValue val = tbl->get_value(clx_L, key);
-    if (val.type == clx::Nil && tbl->metatable) {
-
-        val = tbl->metatable->gettable(key);
+    if (val.type == clx::Nil) {
+        if (clx::LTable *mt = tbl_metatable(tbl))
+            val = mt->gettable(key);
     }
     clx::clx_to_vm_value_(clx_L, L, val);
     return 1;
@@ -570,9 +569,10 @@ extern "C" int clx_vm_proxy_call(lua_State *L) {
     if (!h || h->type != static_cast<uint8_t>(clx::Table))
         return 0;
     clx::LTable *tbl = static_cast<clx::LTable *>(h);
-    if (!tbl->metatable)
+    clx::LTable *mt = tbl_metatable(tbl);
+    if (!mt)
         return 0;
-    clx::LValue call_func = tbl->metatable->gettable(clx_L->str_call);
+    clx::LValue call_func = mt->gettable(clx_L->str_call);
     if (call_func.type != clx::Function)
         return 0;
 
@@ -638,9 +638,10 @@ extern "C" int clx_vm_proxy_close(lua_State *L) {
     if (!h || h->type != static_cast<uint8_t>(clx::Table))
         return 0;
     clx::LTable *tbl = static_cast<clx::LTable *>(h);
-    if (!tbl->metatable)
+    clx::LTable *mt = tbl_metatable(tbl);
+    if (!mt)
         return 0;
-    clx::LValue close_func = tbl->metatable->gettable(clx_L->str_close);
+    clx::LValue close_func = mt->gettable(clx_L->str_close);
     if (close_func.type != clx::Function)
         return 0;
     clx::LValue args[2] = { clx::LValue(clx::Table, tbl), clx::LValue() };

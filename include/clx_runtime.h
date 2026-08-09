@@ -153,6 +153,8 @@ struct LHeader {
 };
 
 static constexpr uint8_t LFLAG_VM_PROXY = 0x01;
+static constexpr uint8_t LFLAG_ARENA = 0x02;
+static constexpr uint8_t LFLAG_META_LIST = 0x04;
 
 struct LState;
 struct TValue;
@@ -557,6 +559,30 @@ struct alignas(8) HashEntry {
 
 static_assert(sizeof(HashEntry) == 24, "HashEntry must be 24 bytes");
 
+struct LTable;
+struct LTableExt;
+
+static constexpr int LTABLE_IC_SIZE = 8;
+
+struct LTableInlineCache {
+    uint64_t key_payload = 0;
+    uint32_t entry_idx = 0;
+    uint32_t table_ver = 0;
+};
+
+//------------------ Lazily-allocated hash/metatable state (keeps LTable compact)
+struct LTableExt {
+    HashEntry *entries = nullptr;
+    size_t hash_size = 0;
+    size_t hash_count = 0;
+    size_t hash_tombs = 0;
+    uint64_t *hash_bitmap = nullptr;
+    uint32_t hash_version = 0;
+    LTableInlineCache *ic = nullptr;
+    LTable *metatable = nullptr;
+    LTable *meta_next = nullptr;
+};
+
 struct LTable : public LHeader {
     TValue *array;
     ValueType *array_types;
@@ -565,29 +591,7 @@ struct LTable : public LHeader {
     TValue small_array[2];
     ValueType small_array_types[2];
 
-    HashEntry *entries;
-    size_t hash_size;
-    size_t hash_count;
-    size_t hash_tombs;
-    uint64_t *hash_bitmap;
-
-    uint32_t hash_version;
-    uint32_t array_version;
-
-    LTable *metatable;
-    bool is_arena;
-    bool in_meta_list = false;
-    LTable *meta_next = nullptr;
-
-    static constexpr int IC_SIZE = 8;
-
-    struct InlineCache {
-        uint64_t key_payload = 0;
-        uint32_t entry_idx = 0;
-        uint32_t table_ver = 0;
-    };
-
-    InlineCache *ic = nullptr;
+    LTableExt *ext;
 
     LTable();
     ~LTable();
@@ -605,6 +609,29 @@ struct LTable : public LHeader {
 private:
     void resize_hash(size_t new_size);
 };
+
+static_assert(sizeof(LTable) <= 96, "LTable must be compact (~96 bytes)");
+
+//------------------ LTable accessor helpers (compact-layout indirection)
+CLX_INLINE LTable *tbl_metatable(const LTable *t) {
+    return t->ext ? t->ext->metatable : nullptr;
+}
+
+CLX_INLINE LTableExt *tbl_ensure_ext(LTable *t) {
+    if (t->ext == nullptr)
+        t->ext = new LTableExt();
+    return t->ext;
+}
+
+CLX_INLINE void tbl_set_metatable(LTable *t, LTable *m) {
+    if (t->ext) {
+        t->ext->metatable = m;
+        t->ext->hash_version++;
+    } else if (m) {
+        tbl_ensure_ext(t)->metatable = m;
+        t->ext->hash_version++;
+    }
+}
 
 //------------------ Wyhash secret constants
 static constexpr uint64_t WY_SECRET0 = 0xa0761d6478bd642fULL;
@@ -1065,23 +1092,26 @@ struct LState {
 
 //------------------ Metatabled-tables list (protect-pass fast path)
 CLX_INLINE void meta_list_add(LState *L, LTable *t) {
-    if (t->in_meta_list)
+    if (t->flags & LFLAG_META_LIST)
         return;
-    t->meta_next = L->metatabled_tables;
+    LTableExt *ex = tbl_ensure_ext(t);
+    ex->meta_next = L->metatabled_tables;
     L->metatabled_tables = t;
-    t->in_meta_list = true;
+    t->flags |= LFLAG_META_LIST;
 }
 
 CLX_INLINE void meta_list_remove(LState *L, LTable *t) {
-    if (!t->in_meta_list)
+    if (!(t->flags & LFLAG_META_LIST))
         return;
-    LTable **pp = &L->metatabled_tables;
-    while (*pp && *pp != t)
-        pp = &(*pp)->meta_next;
-    if (*pp == t)
-        *pp = t->meta_next;
-    t->in_meta_list = false;
-    t->meta_next = nullptr;
+    if (t->ext) {
+        LTable **pp = &L->metatabled_tables;
+        while (*pp && *pp != t)
+            pp = &(*pp)->ext->meta_next;
+        if (*pp == t)
+            *pp = t->ext->meta_next;
+        t->ext->meta_next = nullptr;
+    }
+    t->flags &= ~LFLAG_META_LIST;
 }
 
 inline std::string file_line_prefix(LState *L) {
@@ -1440,7 +1470,7 @@ CLX_INLINE_HOT LValue arena_create_table(LState *L, FuncArena *a, size_t asize, 
     size_t total = header_sz + array_sz + types_sz + hash_sz;
     char *mem = static_cast<char *>(arena_alloc(a, total));
     LTable *t = new (mem) LTable();
-    t->is_arena = true;
+    t->flags |= LFLAG_ARENA;
     if (asize > 0) {
         t->array = reinterpret_cast<TValue *>(mem + header_sz);
         t->array_types = reinterpret_cast<ValueType *>(mem + header_sz + array_sz);
@@ -1451,13 +1481,22 @@ CLX_INLINE_HOT LValue arena_create_table(LState *L, FuncArena *a, size_t asize, 
         }
     }
     if (hsize > 0) {
-        t->entries = reinterpret_cast<HashEntry *>(mem + header_sz + array_sz + types_sz);
-        t->hash_size = hsize;
+        LTableExt *ex = static_cast<LTableExt *>(arena_alloc(a, sizeof(LTableExt)));
+        t->ext = ex;
+        ex->entries = reinterpret_cast<HashEntry *>(mem + header_sz + array_sz + types_sz);
+        ex->hash_size = hsize;
+        ex->hash_count = 0;
+        ex->hash_tombs = 0;
+        ex->hash_bitmap = nullptr;
+        ex->hash_version = 0;
+        ex->ic = nullptr;
+        ex->metatable = nullptr;
+        ex->meta_next = nullptr;
         for (size_t i = 0; i < hsize; ++i) {
-            t->entries[i].key.payload.u64 = HASH_EMPTY;
-            t->entries[i].ktype = Nil;
-            t->entries[i].val = TValue();
-            t->entries[i].vtype = Nil;
+            ex->entries[i].key.payload.u64 = HASH_EMPTY;
+            ex->entries[i].ktype = Nil;
+            ex->entries[i].val = TValue();
+            ex->entries[i].vtype = Nil;
         }
     }
     return LValue(Table, t);
@@ -1603,9 +1642,9 @@ CLX_INLINE_HOT LValue eq(LState *L, const LValue &a, const LValue &b) {
         if (a.type == ValueType::Nil)
             return LValue(true);
         if (a.type == ValueType::Table || a.type == ValueType::UserData) {
-            LTable *mt = (a.type == ValueType::Table) ? static_cast<LTable *>(a.as_pointer())->metatable
+            LTable *mt = (a.type == ValueType::Table) ? tbl_metatable(static_cast<LTable *>(a.as_pointer()))
                                                       : static_cast<LUserdata *>(a.as_pointer())->metatable;
-            LTable *mt_b = (b.type == ValueType::Table) ? static_cast<LTable *>(b.as_pointer())->metatable
+            LTable *mt_b = (b.type == ValueType::Table) ? tbl_metatable(static_cast<LTable *>(b.as_pointer()))
                                                         : static_cast<LUserdata *>(b.as_pointer())->metatable;
             if (mt && mt == mt_b) {
                 LValue mm = mt->gettable(LValue(L->intern_string("__eq")));
@@ -1720,8 +1759,8 @@ CLX_INLINE_COLD LValue len(LState *L, const LValue &a) {
         return call_bin_metamethod(L, a, a, "__len");
     LTable *t = static_cast<LTable *>(a.as_pointer());
 
-    if (t->metatable) {
-        LValue mm = t->metatable->gettable(LValue(L->intern_string("__len", 5)));
+    if (LTable *mt = tbl_metatable(t)) {
+        LValue mm = mt->gettable(LValue(L->intern_string("__len", 5)));
         if (mm.type != ValueType::Nil)
             return call_bin_metamethod(L, a, a, "__len");
     }
@@ -1928,16 +1967,17 @@ CLX_INLINE LValue table_get(LState *L, const LValue &obj, const LValue &key) {
             }
         }
         if (direct.type == ValueType::Nil) {
-            if (t->ic) {
+            LTableExt *ex = t->ext;
+            if (ex && ex->ic) {
                 uint32_t ic_idx
                     = static_cast<uint32_t>(key.val.payload.u64 ^ (key.val.payload.u64 >> 17)
                                             ^ (key.val.payload.u64 >> 33) ^ (key.val.payload.u64 >> 5)
                                             ^ (key.val.payload.u64 >> 11))
-                    % LTable::IC_SIZE;
-                LTable::InlineCache &_ic = t->ic[ic_idx];
-                if (_ic.key_payload == key.val.payload.u64 && _ic.table_ver == t->hash_version
-                    && _ic.entry_idx < t->hash_size) {
-                    HashEntry &_e = t->entries[_ic.entry_idx];
+                    % LTABLE_IC_SIZE;
+                LTableInlineCache &_ic = ex->ic[ic_idx];
+                if (_ic.key_payload == key.val.payload.u64 && _ic.table_ver == ex->hash_version
+                    && _ic.entry_idx < ex->hash_size) {
+                    HashEntry &_e = ex->entries[_ic.entry_idx];
                     if (_e.ktype != ValueType::Nil)
                         return LValue(_e.val, _e.vtype);
                 }
@@ -1946,7 +1986,7 @@ CLX_INLINE LValue table_get(LState *L, const LValue &obj, const LValue &key) {
         }
         if (direct.type != ValueType::Nil)
             return direct;
-        mt = t->metatable;
+        mt = tbl_metatable(t);
     } else if (obj.type == ValueType::UserData) {
         LUserdata *ud = static_cast<LUserdata *>(obj.as_pointer());
         mt = ud->metatable;
@@ -2055,7 +2095,7 @@ CLX_INLINE LValue table_get_int(LState *L, const LValue &obj, size_t idx) {
         LValue result = t->get_value(L, key_val);
         if (result.type != ValueType::Nil)
             return result;
-        mt = t->metatable;
+        mt = tbl_metatable(t);
     } else if (obj.type == ValueType::UserData) {
         LUserdata *ud = static_cast<LUserdata *>(obj.as_pointer());
         mt = ud->metatable;
@@ -2124,16 +2164,17 @@ CLX_INLINE void table_set_int(LState *L, const LValue &obj, size_t idx, const LV
 CLX_INLINE_HOT void table_set_direct(LState *L, const LValue &obj, const LValue &key, const LValue &val) {
     if (obj.type == ValueType::Table) {
         LTable *t = static_cast<LTable *>(obj.as_pointer());
-        if (val.type != ValueType::Nil && t->hash_size > 0 && t->ic) {
+        LTableExt *ex = t->ext;
+        if (val.type != ValueType::Nil && ex && ex->hash_size > 0 && ex->ic) {
             uint32_t ic_idx
                 = static_cast<uint32_t>(key.val.payload.u64 ^ (key.val.payload.u64 >> 17)
                                         ^ (key.val.payload.u64 >> 33) ^ (key.val.payload.u64 >> 5)
                                         ^ (key.val.payload.u64 >> 11))
-                % LTable::IC_SIZE;
-            LTable::InlineCache &_ic = t->ic[ic_idx];
-            if (_ic.key_payload == key.val.payload.u64 && _ic.table_ver == t->hash_version
-                && _ic.entry_idx < t->hash_size) {
-                HashEntry &_e = t->entries[_ic.entry_idx];
+                % LTABLE_IC_SIZE;
+            LTableInlineCache &_ic = ex->ic[ic_idx];
+            if (_ic.key_payload == key.val.payload.u64 && _ic.table_ver == ex->hash_version
+                && _ic.entry_idx < ex->hash_size) {
+                HashEntry &_e = ex->entries[_ic.entry_idx];
                 if (_e.ktype != ValueType::Nil) {
                     _e.val = val.val;
                     _e.vtype = val.type;

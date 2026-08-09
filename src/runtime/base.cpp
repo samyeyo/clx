@@ -343,8 +343,8 @@ static MultiValue pairs(LState *L, const LValue *args, size_t count) {
 
     if (clx::is_table(t)) {
         LTable *tbl = static_cast<LTable *>(t.as_pointer());
-        if (tbl->metatable) {
-            LValue mt_pairs = tbl->metatable->gettable(L->str_pairs);
+        if (LTable *mt = tbl_metatable(tbl)) {
+            LValue mt_pairs = mt->gettable(L->str_pairs);
             if (mt_pairs.type == Function) {
                 L->shadow_stack[L->shadow_top++] = TypedSlot(&t.val, &t.type);
                 MultiValue ret = call_function(L, mt_pairs, &t, 1, __FILE__, __LINE__);
@@ -431,8 +431,8 @@ static MultiValue ipairs(LState *L, const LValue *args, size_t count) {
 
     if (clx::is_table(t)) {
         LTable *tbl = static_cast<LTable *>(t.as_pointer());
-        if (tbl->metatable) {
-            LValue mt_ipairs = tbl->metatable->gettable(LValue(L->intern_string("__ipairs")));
+        if (LTable *mt = tbl_metatable(tbl)) {
+            LValue mt_ipairs = mt->gettable(LValue(L->intern_string("__ipairs")));
             if (mt_ipairs.type == Function) {
                 L->shadow_stack[L->shadow_top++] = TypedSlot(&t.val, &t.type);
                 MultiValue ret = call_function(L, mt_ipairs, &t, 1, __FILE__, __LINE__);
