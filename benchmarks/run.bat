@@ -61,8 +61,8 @@ for %%F in (%TEST_DIR%\*.lua) do (
     set "file=%%F"
     set "basename=%%~nF"
 
-    :: Skip *_luajit.lua files and dkjson.lua (dependency) — they are not standalone benchmarks
-    if not "!basename:~-7!"=="_luajit" if not "!basename!"=="dkjson" (
+    :: Skip *_luajit.lua files, dkjson.lua (dependency) and run_load_shim.lua (load() shim)
+    if not "!basename:~-7!"=="_luajit" if not "!basename!"=="dkjson" if not "!basename!"=="run_load_shim" (
 
     :: Determine luajit file: use *_luajit.lua variant if it exists
     set "luajit_file=%TEST_DIR%\!basename!_luajit.lua"

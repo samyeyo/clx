@@ -97,7 +97,8 @@ for file in "$TEST_DIR"/*.lua; do
     basename=$(basename "$file" .lua)
 
     # Skip *_luajit.lua — they are only run with luajit
-    case "$basename" in *_luajit | dkjson) continue ;; esac
+    # Skip run_load_shim.lua — it is the load() loader shim, not a benchmark
+    case "$basename" in *_luajit | dkjson | run_load_shim) continue ;; esac
 
     luajit_file="$TEST_DIR/${basename}_luajit.lua"
     [ -f "$luajit_file" ] || luajit_file="$file"
