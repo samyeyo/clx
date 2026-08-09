@@ -2255,7 +2255,6 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
         }
     }
 
-    //------------------ Detect int-returning functions and int-typed call results
     {
         std::function<bool(uint32_t, std::set<std::string_view> &)> walk_for_int_returns
             = [&](uint32_t bi, std::set<std::string_view> &loop_vars) -> bool {

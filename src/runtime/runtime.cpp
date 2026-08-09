@@ -1630,10 +1630,6 @@ LValue LState::create_table(size_t asize, size_t hsize) {
 
     if (asize > 0) {
         if (asize <= 2) {
-            // Inline buffer: lives inside sizeof(LTable), so it is never
-            // separately accounted and never heap-allocated. This removes the
-            // malloc/free churn for the common small-table case (fresh nodes
-            // in the cold start) even when the free list cannot help.
             t->array = t->small_array;
             t->array_types = t->small_array_types;
             t->array_size = asize;
@@ -1641,20 +1637,11 @@ LValue LState::create_table(size_t asize, size_t hsize) {
             t->array_types[0] = ValueType::Nil;
             t->array_types[1] = ValueType::Nil;
         } else if (t->array_cap >= asize) {
-            // Reuse retained buffers from the free list (avoids new[]/delete[]
-            // churn for the common small-table case). Count asize (logical)
-            // bytes so accounting matches a fresh allocation, independent of
-            // which retained buffer (and its array_cap) is popped. Reset
-            // array_cap to asize so a later sweep subtracts exactly what was
-            // added (the physically larger buffer becomes untracked slack).
             t->array_size = asize;
             std::fill(t->array_types, t->array_types + asize, ValueType::Nil);
             t->array_cap = asize;
             allocated_bytes += sizeof(TValue) * asize + sizeof(ValueType) * asize;
         } else {
-            // Retained buffer too small: free it and allocate fresh. Its bytes
-            // were already subtracted at sweep, so do not subtract again; just
-            // add the new allocation.
             if (t->array && t->array != t->small_array)
                 delete[] t->array;
             if (t->array_types && t->array_types != t->small_array_types)

@@ -65,7 +65,6 @@ static void write_back_table(
         }
     }
 
-    //------------------ Write back metatable
     LTable *mt = tbl_metatable(tbl);
     if (mt && sync_metatable) {
         lua_newtable(L);

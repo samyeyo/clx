@@ -376,7 +376,6 @@ int clx_vm_install_traceback_(lua_State *L) {
     return 0;
 }
 
-//------------------ env-table upvalues (extern "C")
 }
 
 extern "C" {

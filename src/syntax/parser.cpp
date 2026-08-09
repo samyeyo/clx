@@ -1333,7 +1333,6 @@ uint32_t Parser::parse_statement() {
         return targets[0];
     }
 
-    //------------------ PARSE: stmt - fallthrough: treat standalone expression as statement
     uint32_t res = parse_expression();
     if (res == INVALID_NODE && current_token.type != TokEof) {
         throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line)
