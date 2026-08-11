@@ -361,6 +361,91 @@ static CLX_INLINE_COLD size_t next_pow2(size_t n) {
     return n + 1;
 }
 
+//--------- Slow Path (hash table lookup and metamethods)
+LValue table_get_slow(LState *L, const LValue &obj, const LValue &key) {
+    LTable *mt = nullptr;
+    LValue direct;
+
+    if (obj.type == ValueType::Table) {
+        LTable *t = static_cast<LTable *>(obj.as_pointer());
+        if (key.type == ValueType::Int64) {
+            int64_t idx = key.val.payload.i64;
+            if (static_cast<uint64_t>(idx - 1) < t->array_cap) {
+                direct = LValue(t->array[idx - 1], t->array_types[idx - 1]);
+            }
+        } else if (key.type == ValueType::Double) {
+            double d = key.val.payload.f64;
+            int64_t idx = static_cast<int64_t>(d);
+            if (d == static_cast<double>(idx) && static_cast<uint64_t>(idx - 1) < t->array_cap) {
+                direct = LValue(t->array[idx - 1], t->array_types[idx - 1]);
+            }
+        }
+        if (direct.type == ValueType::Nil) {
+            LTableExt *ex = t->ext;
+            if (ex && ex->ic) {
+                uint32_t ic_idx
+                    = static_cast<uint32_t>(key.val.payload.u64 ^ (key.val.payload.u64 >> 17)
+                                            ^ (key.val.payload.u64 >> 33) ^ (key.val.payload.u64 >> 5)
+                                            ^ (key.val.payload.u64 >> 11))
+                    % LTABLE_IC_SIZE;
+                LTableInlineCache &_ic = ex->ic[ic_idx];
+                if (_ic.key_payload == key.val.payload.u64 && _ic.table_ver == ex->hash_version
+                    && _ic.entry_idx < ex->hash_size) {
+                    HashEntry &_e = ex->entries[_ic.entry_idx];
+                    if (_e.ktype != ValueType::Nil)
+                        return LValue(_e.val, _e.vtype);
+                }
+            }
+            direct = t->get_value(L, key);
+        }
+        if (direct.type != ValueType::Nil)
+            return direct;
+        mt = tbl_metatable(t);
+    } else if (obj.type == ValueType::UserData) {
+        LUserdata *ud = static_cast<LUserdata *>(obj.as_pointer());
+        mt = ud->metatable;
+    } else if (obj.type == ValueType::String) {
+        mt = L->string_metatable;
+        if (!mt)
+            return LValue();
+        LValue index = mt->gettable(LValue(L->intern_string("__index")));
+        if (index.type == ValueType::Nil)
+            return LValue();
+        if (index.type == ValueType::Table)
+            return table_get(L, index, key);
+        if (index.type == ValueType::Function) {
+            LValue args[2] = { obj, key };
+            size_t prev = L->shadow_top;
+            L->shadow_stack[L->shadow_top++] = { &args[0].val, &args[0].type };
+            L->shadow_stack[L->shadow_top++] = { &args[1].val, &args[1].type };
+            MultiValue mv = call_function(L, index, args, 2, "__index", 0);
+            L->shadow_top = prev;
+            return mv.count > 0 ? mv[0] : LValue();
+        }
+        return LValue();
+    } else {
+        return LValue();
+    }
+
+    if (!mt)
+        return LValue();
+    LValue index = mt->gettable(LValue(L->intern_string("__index")));
+    if (index.type == ValueType::Nil)
+        return LValue();
+    if (index.type == ValueType::Function) {
+        LValue args[2] = { obj, key };
+        size_t prev = L->shadow_top;
+        L->shadow_stack[L->shadow_top++] = { &args[0].val, &args[0].type };
+        L->shadow_stack[L->shadow_top++] = { &args[1].val, &args[1].type };
+        MultiValue mv = call_function(L, index, args, 2, "__index", 0);
+        L->shadow_top = prev;
+        return mv.count > 0 ? mv[0] : LValue();
+    }
+    if (index.type == ValueType::Table)
+        return table_get(L, index, key);
+    return LValue();
+}
+
 //------------------ LTable::LTable — table constructor
 LTable::LTable()
     : array(nullptr)
