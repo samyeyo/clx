@@ -211,9 +211,10 @@ The top byte stores the length (0–6). Bytes 0–5 store up to 6 characters. By
 
 Longer strings are interned via the StringPool:
 
-- **Baked allocation**: `[uint32_t hash][uint32_t len][char data...\0]`
+- **Baked allocation**: `[uint16 hash hi][uint32 len][char data...\0]` (16-byte header)
 - **One probe on hit**: No double lookup or side map
-- **Pre-hashed strings**: Hash stored at `ptr[-8..ptr[-5]` for zero recompute
+- **Pre-hashed strings**: 64-bit hash stored at `ptr[-16..ptr[-9]` for zero recompute
+- **Arena-backed**: strings are bump-allocated from a 64 KB-block `StringArena`
 - **Intern preallocated**: Supports adopting pre-formatted buffers (zero-allocation concat)
 
 Cross-type safety: `lvalue_hash` and `lvalue_eq_fast` in `runtime.cpp` handle TAG_ISTR↔TAG_STRING lookups correctly — hashes match because both content-types use the same `swar_hash_8()` for strings ≤8 bytes.
@@ -231,29 +232,30 @@ O(n) string concatenation avoiding quadratic blow-up:
 
 ### 13. Per-Table Inline Cache (include/clx_runtime.h)
 
-Per-LTable inline cache for string-keyed hash access (64 bytes per LTable):
+Per-LTable inline cache for string-keyed hash access. The cache lives in the table's lazily
+allocated `LTableExt` (so pure array-part tables never allocate it) and holds **8 entries**:
 
 ```cpp
-struct LTable {
-    static constexpr int IC_SIZE = 4;
+static constexpr int LTABLE_IC_SIZE = 8;
 
-    struct InlineCache {
-        uint64_t key_payload = 0;  // Key's raw payload for fast comparison
-        uint32_t entry_idx = 0;    // Hash entry index
-        uint32_t table_ver = 0;    // Snapshot of hash_version at insertion
-    };
-
-    InlineCache ic[IC_SIZE];       // 4 entries × 16 bytes = 64 bytes
+struct LTableInlineCache {
+    uint64_t key_payload = 0;  // Key's raw payload for fast comparison
+    uint32_t entry_idx = 0;    // Hash entry index
+    uint32_t table_ver = 0;    // Snapshot of hash_version at insertion
 };
 ```
 
-On `gettable()`, the IC is indexed by the key's payload bits. A hit requires:
+On `gettable()`, the IC is indexed by a bit-mix of the key's payload. A hit requires:
 1. `key_payload` matches the key's raw 64-bit payload
 2. `table_ver` matches the table's current `hash_version` (no mutation since cache fill)
 3. The entry at `entry_idx` is not nil (tombstone/empty check)
 
 On miss, a linear-probe hash search runs and populates the IC slot.
 Works for any hash key — no restriction to specific table types or identifiers.
+
+The hot `table_get` fast path (array indexing + inline cache) is kept inline; a miss falls
+through to an out-of-line `table_get_slow` that performs the hash probe and metamethod
+(`__index`) dispatch.
 
 ## Metamethods
 
@@ -289,46 +291,55 @@ CLX supports Lua 5.4+ `<close>` attribute via `CloseGuard` (`clx_runtime.h`). Wh
 
 ### Table Layout
 
+`LTable` is kept **compact (80 bytes)**. Hash, inline-cache, and metatable state are moved
+behind a lazily-allocated `LTableExt` pointer:
+
 ```
 ┌───────────────────────────────────────────────────────┐
 │ LHeader (16 bytes)                                    │
-│   - type, marked, next                               │
+│   - type, marked, flags, next                         │
 ├───────────────────────────────────────────────────────┤
-│ Array fields (32 bytes)                               │
-│   - array pointer (8)                                │
-│   - array_types pointer (8)                          │
-│   - array_size, array_cap (16)                       │
+│ Array fields (40 bytes)                               │
+│   - array pointer (8)                                 │
+│   - array_types pointer (8)                           │
+│   - array_size, array_cap (16)                        │
+│   - small_array[2], small_array_types[2]  (inline)    │
 ├───────────────────────────────────────────────────────┤
-│ Hash fields (40 bytes)                                │
-│   - entries pointer (8)                              │
-│   - hash_size, hash_count, hash_tombs (24)           │
-│   - hash_bitmap pointer (8)                          │
-├───────────────────────────────────────────────────────┤
-│ Version & metadata (16 bytes)                         │
-│   - hash_version, array_version (8)                  │
-│   - metatable pointer (8)                            │
-│   - is_arena (1 + 7 padding)                         │
-├───────────────────────────────────────────────────────┤
-│ Inline cache (64 bytes)                               │
-│   - ic[0..3] (4 × 16 bytes)                         │
-│     - key_payload (8), entry_idx (4), table_ver (4)  │
+│ Indirection (8 bytes)                                 │
+│   - ext pointer → LTableExt (lazily allocated)        │
 └───────────────────────────────────────────────────────┘
+
+LTableExt (lazily allocated, only when hash/ic/metatable needed):
+  - entries, hash_size, hash_count, hash_tombs
+  - hash_bitmap pointer  (slot-occupancy bitmap)
+  - hash_version
+  - ic pointer           (8-entry inline cache)
+  - metatable, meta_next (GC metatable-list link)
 ```
 
-Hash entries are stored in a contiguous `HashEntry` array (24 bytes each: key TValue, val TValue, ktype, vtype) allocated after the LTable struct in the same memory block. A `hash_bitmap` (separately allocated) tracks occupied slots for fast iteration.
+Tables that stay purely array-part never allocate an `LTableExt`, keeping the hot read path
+on a single cache line. Arrays of size ≤ 2 use `small_array`/`small_array_types` inline.
 
-`hash_version` is incremented on every hash mutation to enable InlineCache invalidation.
+Hash entries are stored in a contiguous `HashEntry` array (24 bytes each: key TValue, val
+TValue, ktype, vtype). A `hash_bitmap` tracks occupied slots for fast iteration.
+
+`hash_version` is incremented on structural mutations (inserts, deletes, rehashes) to enable
+InlineCache invalidation; value-only overwrites do not invalidate the cache.
 
 ### String Layout
 
-Interned strings are stored as:
-- 4 bytes: baked wyhash
+Interned strings are stored with a **16-byte baked header** (64-bit wyhash + 32-bit length):
+
+- 8 bytes: baked wyhash (64-bit)
 - 4 bytes: length
+- 4 bytes: padding
 - char data: string content
 - 1 byte: null terminator
 
-The LValue stores a pointer to the char data (skipping the 8-byte header).
-Length is at `ptr[-4..ptr[-1]` and hash is at `ptr[-8..ptr[-5]]`.
+The LValue stores a pointer to the char data (skipping the 16-byte header).
+Length is at `ptr[-8..ptr[-1]` and hash is at `ptr[-16..ptr[-9]]`, so the hash read is a
+single 8-byte load. String storage is backed by a block-based `StringArena` (64 KB blocks, bump
+allocated).
 
 ## Performance Characteristics
 
@@ -346,13 +357,16 @@ Length is at `ptr[-4..ptr[-1]` and hash is at `ptr[-8..ptr[-5]]`.
 
 ## SIMD Runtime Scans
 
-The runtime uses SSE2 (x64) or NEON (ARM64) to accelerate type-array scans where 16 `ValueType`
-bytes fit in a single 128-bit register. Scalar fallback handles non-16-byte-aligned remainders:
+The runtime uses AVX2 (32-byte) with SSE2 (x64) or NEON (ARM64) fallbacks to accelerate
+type-array scans. Scalar fallback handles non-32-byte-aligned remainders:
 
 - **`rawlen()`** — finds first nil in the array part to determine sequence length
 - **`next()`** — finds first non-nil after a given key index
-- **`table_concat` validation** — validates all elements are String/Double/Int64 in 16-byte chunks
+- **`table_concat` validation** — validates all elements are String/Double/Int64 in 32/16-byte chunks
 - **GC mark loop** — skips nil entries in the array part when tracing reachable objects
+
+The `LTableExt` `hash_bitmap` records which hash slots are occupied, letting `next()` and the
+GC skip empty slots directly when scanning the hash part.
 
 ## Pre-interned Metamethods
 
