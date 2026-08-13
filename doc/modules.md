@@ -115,8 +115,11 @@ clx main.lua --modules my_native_mod
 ```
 
 clx looks for `my_native_mod.a` (or `my_native_mod.lib` on Windows) in the current directory,
-then in `<clx-install-dir>/lib/clx/` (i.e. `../lib/clx/` relative to the clx binary),
-and on POSIX also in `/usr/local/lib/clx/`.
+then in `<install-prefix>/lib/clx/` for each candidate prefix, then in `../lib/clx/`
+relative to the clx binary. On POSIX the install prefix is resolved from CMake/GNUInstallDirs
+(typically `/usr/local`), so installed modules live in `/usr/local/lib/clx/`; on Windows it is
+`%ProgramFiles%\clx`, so installed modules live in `%ProgramFiles%\clx\lib\clx\`. You can
+override the search with `-L <dir>` flags, which clx also scans.
 
 ### Linking with external libraries
 
