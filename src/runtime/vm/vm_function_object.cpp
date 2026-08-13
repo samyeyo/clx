@@ -12,10 +12,11 @@
 namespace clx {
 
 //------------------ VMFunction::VMFunction
-VMFunction::VMFunction(DynamicVM *vm_, int ref)
-    : LCFunction([this](LState *clx_L, const LValue *args, size_t nargs) { return this->invoke(clx_L, args, nargs); })
+VMFunction::VMFunction(DynamicVM* vm_, int ref)
+    : LCFunction([this](LState* clx_L, const LValue* args, size_t nargs) { return this->invoke(clx_L, args, nargs); })
     , vm(vm_)
-    , registry_ref(ref) {
+    , registry_ref(ref)
+{
     type = static_cast<uint8_t>(Function);
     marked = 0;
     flags = LFLAG_VM_PROXY;
@@ -23,7 +24,8 @@ VMFunction::VMFunction(DynamicVM *vm_, int ref)
 }
 
 //------------------ VMFunction::~VMFunction - release the registry ref
-VMFunction::~VMFunction() {
+VMFunction::~VMFunction()
+{
     if (vm && registry_ref != LUA_NOREF) {
 
         luaL_unref(vm->lua_L(), LUA_REGISTRYINDEX, registry_ref);
@@ -32,26 +34,29 @@ VMFunction::~VMFunction() {
 }
 
 //------------------ VMFunction::wrap - push aside Lua stack and ref
-LValue VMFunction::wrap(LState *clx_L, lua_State *L, int idx) {
-    DynamicVM *vm = DynamicVM::acquire(clx_L);
+LValue VMFunction::wrap(LState* clx_L, lua_State* L, int idx)
+{
+    DynamicVM* vm = DynamicVM::acquire(clx_L);
 
     lua_pushvalue(L, idx);
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
-    VMFunction *vf = new VMFunction(vm, ref);
+    VMFunction* vf = new VMFunction(vm, ref);
     clx_register_vm_proxy(clx_L, vf, sizeof(VMFunction));
     return LValue(Function, vf);
 }
 
 //------------------ VMFunction::from_ref - already a registry ref
-LValue VMFunction::from_ref(LState *clx_L, int ref) {
-    DynamicVM *vm = DynamicVM::acquire(clx_L);
-    VMFunction *vf = new VMFunction(vm, ref);
+LValue VMFunction::from_ref(LState* clx_L, int ref)
+{
+    DynamicVM* vm = DynamicVM::acquire(clx_L);
+    VMFunction* vf = new VMFunction(vm, ref);
     clx_register_vm_proxy(clx_L, vf, sizeof(VMFunction));
     return LValue(Function, vf);
 }
 
 //------------------ VMFunction::invoke - clx calls this
-MultiValue VMFunction::invoke(LState *clx_L, const LValue *args, size_t nargs) {
+MultiValue VMFunction::invoke(LState* clx_L, const LValue* args, size_t nargs)
+{
 
     bool inside_coro = (clx_L->running_thread && !clx_L->running_thread->is_main);
     if (inside_coro) {
@@ -70,14 +75,16 @@ MultiValue VMFunction::invoke(LState *clx_L, const LValue *args, size_t nargs) {
 }
 
 //------------------ vm_to_clx_function_ - side door for convert.cpp
-LValue vm_to_clx_function_(LState *clx_L, lua_State *L, int stack_idx) {
+LValue vm_to_clx_function_(LState* clx_L, lua_State* L, int stack_idx)
+{
     return VMFunction::wrap(clx_L, L, stack_idx);
 }
 
 //------------------ vm_pcall_function_ - generic clx-to-VM dispatch
-bool vm_pcall_function_(LState *clx_L, int lua_ref, const LValue *args, size_t nargs, MultiValue &out) {
-    DynamicVM *vm = DynamicVM::acquire(clx_L);
-    lua_State *L = vm->lua_L();
+bool vm_pcall_function_(LState* clx_L, int lua_ref, const LValue* args, size_t nargs, MultiValue& out)
+{
+    DynamicVM* vm = DynamicVM::acquire(clx_L);
+    lua_State* L = vm->lua_L();
 
     lua_rawgeti(L, LUA_REGISTRYINDEX, lua_ref);
     int base = lua_gettop(L);

@@ -8,18 +8,18 @@
 #ifndef CLX_RUNTIME_H
 #define CLX_RUNTIME_H
 
-#include <cstdint>
-#include <vector>
-#include <string>
 #include <bit>
-#include <iostream>
-#include <cstdlib>
 #include <cmath>
+#include <cstdint>
+#include <cstdlib>
 #include <cstring>
-#include <memory>
 #include <functional>
-#include <unordered_map>
 #include <initializer_list>
+#include <iostream>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 #if defined(_WIN32)
 #define NOMINMAX
@@ -34,9 +34,9 @@ struct CoroutineContext {
 };
 
 extern "C" {
-void clx_coro_save(CoroutineContext *ctx);
-void clx_coro_switch(CoroutineContext *from, CoroutineContext *to);
-void clx_coro_init(CoroutineContext *ctx, void *stack_top, void *entry);
+void clx_coro_save(CoroutineContext* ctx);
+void clx_coro_switch(CoroutineContext* from, CoroutineContext* to);
+void clx_coro_init(CoroutineContext* ctx, void* stack_top, void* entry);
 }
 #elif defined(__linux__) && defined(__x86_64__)
 struct CoroutineContext {
@@ -44,9 +44,9 @@ struct CoroutineContext {
 };
 
 extern "C" {
-void clx_coro_save(CoroutineContext *ctx);
-void clx_coro_switch(CoroutineContext *from, CoroutineContext *to);
-void clx_coro_init(CoroutineContext *ctx, void *stack_top, void *entry);
+void clx_coro_save(CoroutineContext* ctx);
+void clx_coro_switch(CoroutineContext* from, CoroutineContext* to);
+void clx_coro_init(CoroutineContext* ctx, void* stack_top, void* entry);
 }
 #else
 #if defined(__APPLE__)
@@ -103,13 +103,15 @@ namespace clx {
 #if defined(_MSC_VER)
 
 //------------------ 128-bit multiply helper
-static CLX_INLINE_HOT uint64_t clx_umul128(uint64_t a, uint64_t b, uint64_t *hi) {
+static CLX_INLINE_HOT uint64_t clx_umul128(uint64_t a, uint64_t b, uint64_t* hi)
+{
     return _umul128(a, b, hi);
 }
 #else
 
 //------------------ 128-bit multiply helper
-static CLX_INLINE_HOT uint64_t clx_umul128(uint64_t a, uint64_t b, uint64_t *hi) {
+static CLX_INLINE_HOT uint64_t clx_umul128(uint64_t a, uint64_t b, uint64_t* hi)
+{
     __uint128_t r = static_cast<__uint128_t>(a) * static_cast<__uint128_t>(b);
     *hi = static_cast<uint64_t>(r >> 64);
     return static_cast<uint64_t>(r);
@@ -141,7 +143,7 @@ constexpr auto UserData = ValueType::UserData;
 constexpr auto Thread = ValueType::Thread;
 
 //------------------ Type name strings by ValueType index
-static constexpr const char *VALUE_TYPE_NAMES[]
+static constexpr const char* VALUE_TYPE_NAMES[]
     = { "nil", "boolean", "integer", "number", "string", "table", "function", "userdata", "thread" };
 
 //------------------ GC object header
@@ -149,7 +151,7 @@ struct LHeader {
     uint8_t type;
     uint8_t marked;
     uint8_t flags = 0;
-    LHeader *next;
+    LHeader* next;
 };
 
 static constexpr uint8_t LFLAG_VM_PROXY = 0x01;
@@ -161,14 +163,14 @@ struct TValue;
 struct LValue;
 
 //------------------ Binary metamethod dispatcher
-LValue call_bin_metamethod(LState *L, const LValue &a, const LValue &b, const char *event);
+LValue call_bin_metamethod(LState* L, const LValue& a, const LValue& b, const char* event);
 
 //------------------ 8-byte value payload --- pure data, no type bits
 union alignas(8) TValuePayload {
     uint64_t u64;
     int64_t i64;
     double f64;
-    void *ptr;
+    void* ptr;
 };
 
 struct TValue {
@@ -180,23 +182,27 @@ struct TValue {
 
     CLX_INLINE_HOT TValue(double d) { payload.f64 = d; }
 
-    CLX_INLINE_HOT TValue(void *p) { payload.ptr = p; }
+    CLX_INLINE_HOT TValue(void* p) { payload.ptr = p; }
 
     CLX_INLINE_HOT TValue(uint64_t u) { payload.u64 = u; }
 };
 
 //------------------ Shadow stack slot (payload pointer + type pointer)
 struct TypedSlot {
-    TValue *val;
-    ValueType *type;
+    TValue* val;
+    ValueType* type;
 
     CLX_INLINE_HOT TypedSlot()
         : val(nullptr)
-        , type(nullptr) { }
+        , type(nullptr)
+    {
+    }
 
-    CLX_INLINE_HOT TypedSlot(TValue *v, ValueType *t)
+    CLX_INLINE_HOT TypedSlot(TValue* v, ValueType* t)
         : val(v)
-        , type(t) { }
+        , type(t)
+    {
+    }
 };
 
 //------------------ 16-byte convenience wrapper (runtime C++ API)
@@ -206,47 +212,66 @@ struct LValue {
 
     CLX_INLINE_HOT LValue()
         : val()
-        , type(ValueType::Nil) { }
+        , type(ValueType::Nil)
+    {
+    }
 
     CLX_INLINE_HOT explicit LValue(bool b)
         : val(static_cast<uint64_t>(b ? 1ULL : 0ULL))
-        , type(ValueType::Boolean) { }
+        , type(ValueType::Boolean)
+    {
+    }
 
     CLX_INLINE_HOT explicit LValue(double n)
         : val(n)
-        , type(ValueType::Double) { }
+        , type(ValueType::Double)
+    {
+    }
 
     CLX_INLINE_HOT explicit LValue(int64_t i)
         : val(i)
-        , type(ValueType::Int64) { }
-
-    CLX_INLINE_HOT explicit LValue(const char *s)
-        : type(ValueType::String) {
-        val.payload.ptr = const_cast<char *>(s);
+        , type(ValueType::Int64)
+    {
     }
 
-    CLX_INLINE_HOT LValue(const TValue &v, ValueType t)
+    CLX_INLINE_HOT explicit LValue(const char* s)
+        : type(ValueType::String)
+    {
+        val.payload.ptr = const_cast<char*>(s);
+    }
+
+    CLX_INLINE_HOT LValue(const TValue& v, ValueType t)
         : val(v)
-        , type(t) { }
+        , type(t)
+    {
+    }
 
-    CLX_INLINE_HOT explicit LValue(ValueType t, LHeader *p)
-        : val(static_cast<void *>(p))
-        , type(t) { }
+    CLX_INLINE_HOT explicit LValue(ValueType t, LHeader* p)
+        : val(static_cast<void*>(p))
+        , type(t)
+    {
+    }
 
-    CLX_INLINE_HOT explicit LValue(LHeader *p)
-        : val(static_cast<void *>(p))
-        , type(static_cast<ValueType>(p->type)) { }
+    CLX_INLINE_HOT explicit LValue(LHeader* p)
+        : val(static_cast<void*>(p))
+        , type(static_cast<ValueType>(p->type))
+    {
+    }
 
     CLX_INLINE_HOT explicit LValue(std::nullptr_t)
         : val()
-        , type(ValueType::Nil) { }
+        , type(ValueType::Nil)
+    {
+    }
 
-    CLX_INLINE_HOT bool is_gc_obj() const {
+    CLX_INLINE_HOT bool is_gc_obj() const
+    {
         uint8_t t = static_cast<uint8_t>(type);
         return t >= static_cast<uint8_t>(ValueType::Table) && t <= static_cast<uint8_t>(ValueType::Thread);
     }
 
-    CLX_INLINE_HOT double as_number() const {
+    CLX_INLINE_HOT double as_number() const
+    {
         if (type == ValueType::Int64)
             return static_cast<double>(val.payload.i64);
         if (type == ValueType::Double)
@@ -254,7 +279,8 @@ struct LValue {
         return 0.0;
     }
 
-    CLX_INLINE_HOT int64_t as_integer() const {
+    CLX_INLINE_HOT int64_t as_integer() const
+    {
         if (type == ValueType::Int64)
             return val.payload.i64;
         if (type == ValueType::Double)
@@ -262,7 +288,8 @@ struct LValue {
         return 0;
     }
 
-    CLX_INLINE_HOT bool as_bool() const {
+    CLX_INLINE_HOT bool as_bool() const
+    {
         if (type == ValueType::Nil)
             return false;
         if (type == ValueType::Boolean)
@@ -270,17 +297,19 @@ struct LValue {
         return true;
     }
 
-    CLX_INLINE_HOT const char *as_string() const {
+    CLX_INLINE_HOT const char* as_string() const
+    {
         if (type == ValueType::String && (val.payload.u64 >> 56))
-            return reinterpret_cast<const char *>(&val.payload.u64);
+            return reinterpret_cast<const char*>(&val.payload.u64);
         if (type == ValueType::String && val.payload.u64 == 0)
             return "";
-        return static_cast<const char *>(val.payload.ptr);
+        return static_cast<const char*>(val.payload.ptr);
     }
 
-    CLX_INLINE_HOT LHeader *as_pointer() const { return static_cast<LHeader *>(val.payload.ptr); }
+    CLX_INLINE_HOT LHeader* as_pointer() const { return static_cast<LHeader*>(val.payload.ptr); }
 
-    CLX_INLINE_HOT uint32_t string_len() const {
+    CLX_INLINE_HOT uint32_t string_len() const
+    {
         if (type == ValueType::String) {
             uint64_t top = val.payload.u64 >> 56;
             if (top)
@@ -288,13 +317,14 @@ struct LValue {
             if (val.payload.u64 == 0)
                 return 0;
             uint32_t len;
-            clx_memcpy(&len, static_cast<const char *>(val.payload.ptr) - 8, 4);
+            clx_memcpy(&len, static_cast<const char*>(val.payload.ptr) - 8, 4);
             return len;
         }
         return 0;
     }
 
-    static CLX_INLINE_HOT LValue istr(const char *s, size_t len) {
+    static CLX_INLINE_HOT LValue istr(const char* s, size_t len)
+    {
         LValue v;
         v.type = ValueType::String;
         v.val.payload.u64 = 0;
@@ -304,7 +334,8 @@ struct LValue {
         return v;
     }
 
-    CLX_INLINE_HOT bool to_number(double &out) const {
+    CLX_INLINE_HOT bool to_number(double& out) const
+    {
         if (type == ValueType::Double) {
             out = val.payload.f64;
             return true;
@@ -314,14 +345,15 @@ struct LValue {
             return true;
         }
         if (type == ValueType::String) {
-            char *end;
+            char* end;
             out = std::strtod(as_string(), &end);
             return end != as_string();
         }
         return false;
     }
 
-    CLX_INLINE_HOT LValue operator==(const LValue &other) const {
+    CLX_INLINE_HOT LValue operator==(const LValue& other) const
+    {
         if (val.payload.u64 == other.val.payload.u64 && type == other.type)
             return LValue(true);
         if (type == ValueType::Double && other.type == ValueType::Double)
@@ -335,9 +367,10 @@ struct LValue {
         return slow_eq(other);
     }
 
-    CLX_INLINE_HOT LValue operator!=(const LValue &other) const { return LValue(!(operator==(other)).as_bool()); }
+    CLX_INLINE_HOT LValue operator!=(const LValue& other) const { return LValue(!(operator==(other)).as_bool()); }
 
-    CLX_INLINE_HOT LValue operator<(const LValue &other) const {
+    CLX_INLINE_HOT LValue operator<(const LValue& other) const
+    {
         if (type == ValueType::Int64 && other.type == ValueType::Int64)
             return LValue(val.payload.i64 < other.val.payload.i64);
         if (type == ValueType::Double && other.type == ValueType::Double)
@@ -352,9 +385,10 @@ struct LValue {
         return slow_lt(other);
     }
 
-    CLX_INLINE_HOT LValue operator>(const LValue &other) const { return other.operator<(*this); }
+    CLX_INLINE_HOT LValue operator>(const LValue& other) const { return other.operator<(*this); }
 
-    CLX_INLINE_HOT LValue operator<=(const LValue &other) const {
+    CLX_INLINE_HOT LValue operator<=(const LValue& other) const
+    {
         if (type == ValueType::Int64 && other.type == ValueType::Int64)
             return LValue(val.payload.i64 <= other.val.payload.i64);
         if (type == ValueType::Double && other.type == ValueType::Double)
@@ -369,14 +403,14 @@ struct LValue {
         return slow_le(other);
     }
 
-    CLX_INLINE_HOT LValue operator>=(const LValue &other) const { return other.operator<=(*this); }
+    CLX_INLINE_HOT LValue operator>=(const LValue& other) const { return other.operator<=(*this); }
 
-    std::string to_string(LState *L = nullptr) const;
+    std::string to_string(LState* L = nullptr) const;
 
 private:
-    LValue slow_eq(const LValue &other) const;
-    LValue slow_lt(const LValue &other) const;
-    LValue slow_le(const LValue &other) const;
+    LValue slow_eq(const LValue& other) const;
+    LValue slow_lt(const LValue& other) const;
+    LValue slow_le(const LValue& other) const;
 };
 
 static_assert(sizeof(LValue) == 16, "LValue must be 16 bytes");
@@ -385,33 +419,37 @@ static_assert(sizeof(LValue) == 16, "LValue must be 16 bytes");
 struct MultiValue {
     static constexpr size_t INLINE_CAP = 3;
     size_t count = 0;
-    clx::LValue *overflow = nullptr;
-    LState *alloc_L = nullptr;
+    clx::LValue* overflow = nullptr;
+    LState* alloc_L = nullptr;
     clx::LValue inline_vals[INLINE_CAP];
 
     MultiValue() = default;
 
-    MultiValue(const clx::LValue &single)
-        : count(1) {
+    MultiValue(const clx::LValue& single)
+        : count(1)
+    {
         inline_vals[0] = single;
     }
 
-    MultiValue(const clx::LValue &a, const clx::LValue &b)
-        : count(2) {
+    MultiValue(const clx::LValue& a, const clx::LValue& b)
+        : count(2)
+    {
         inline_vals[0] = a;
         inline_vals[1] = b;
     }
 
-    MultiValue(const clx::LValue &a, const clx::LValue &b, const clx::LValue &c)
-        : count(3) {
+    MultiValue(const clx::LValue& a, const clx::LValue& b, const clx::LValue& c)
+        : count(3)
+    {
         inline_vals[0] = a;
         inline_vals[1] = b;
         inline_vals[2] = c;
     }
 
-    MultiValue(const clx::LValue *arr, size_t c, LState *L = nullptr)
+    MultiValue(const clx::LValue* arr, size_t c, LState* L = nullptr)
         : count(c)
-        , alloc_L(L) {
+        , alloc_L(L)
+    {
         if (c <= INLINE_CAP) {
             for (size_t i = 0; i < c; ++i)
                 inline_vals[i] = arr[i];
@@ -422,25 +460,31 @@ struct MultiValue {
         }
     }
 
-    MultiValue(std::initializer_list<clx::LValue> init, LState *L = nullptr)
-        : MultiValue(init.begin(), init.size(), L) { }
+    MultiValue(std::initializer_list<clx::LValue> init, LState* L = nullptr)
+        : MultiValue(init.begin(), init.size(), L)
+    {
+    }
 
-    MultiValue(const std::vector<clx::LValue> &vec, LState *L = nullptr)
-        : MultiValue(vec.data(), vec.size(), L) { }
+    MultiValue(const std::vector<clx::LValue>& vec, LState* L = nullptr)
+        : MultiValue(vec.data(), vec.size(), L)
+    {
+    }
 
-    MultiValue(const MultiValue &other)
+    MultiValue(const MultiValue& other)
         : count(other.count)
-        , alloc_L(other.alloc_L) {
+        , alloc_L(other.alloc_L)
+    {
         size_t inline_c = (count < INLINE_CAP) ? count : INLINE_CAP;
         for (size_t i = 0; i < inline_c; ++i)
             inline_vals[i] = other.inline_vals[i];
         overflow = other.overflow;
     }
 
-    MultiValue(MultiValue &&other) noexcept
+    MultiValue(MultiValue&& other) noexcept
         : count(other.count)
         , overflow(other.overflow)
-        , alloc_L(other.alloc_L) {
+        , alloc_L(other.alloc_L)
+    {
         size_t inline_c = (count < INLINE_CAP) ? count : INLINE_CAP;
         for (size_t i = 0; i < inline_c; ++i)
             inline_vals[i] = other.inline_vals[i];
@@ -449,7 +493,8 @@ struct MultiValue {
         other.alloc_L = nullptr;
     }
 
-    MultiValue &operator=(MultiValue &&other) noexcept {
+    MultiValue& operator=(MultiValue&& other) noexcept
+    {
         if (this != &other) {
             count = other.count;
             overflow = other.overflow;
@@ -464,7 +509,8 @@ struct MultiValue {
         return *this;
     }
 
-    MultiValue &operator=(const MultiValue &other) {
+    MultiValue& operator=(const MultiValue& other)
+    {
         if (this != &other) {
             count = other.count;
             alloc_L = other.alloc_L;
@@ -478,13 +524,14 @@ struct MultiValue {
 
     ~MultiValue() = default;
 
-    clx::LValue &operator[](size_t i) { return (i < INLINE_CAP) ? inline_vals[i] : overflow[i - INLINE_CAP]; }
+    clx::LValue& operator[](size_t i) { return (i < INLINE_CAP) ? inline_vals[i] : overflow[i - INLINE_CAP]; }
 
-    const clx::LValue &operator[](size_t i) const {
+    const clx::LValue& operator[](size_t i) const
+    {
         return (i < INLINE_CAP) ? inline_vals[i] : overflow[i - INLINE_CAP];
     }
 
-    void overflow_init(const clx::LValue *arr, size_t c);
+    void overflow_init(const clx::LValue* arr, size_t c);
 };
 
 struct LState;
@@ -494,55 +541,50 @@ struct LTable;
 using LUpValue = std::shared_ptr<LValue>;
 
 //------------------ Function call dispatcher (with error context)
-MultiValue call_function(LState *L, const LValue &func, const LValue *args, size_t count, const char *file, int line);
+MultiValue call_function(LState* L, const LValue& func, const LValue* args, size_t count, const char* file, int line);
 //------------------ Protected function call
-MultiValue pcall_function(LState *L, const LValue &func, const LValue *args, size_t count);
-
-//------------------ Gets metafield from object
-LValue getmetafield(LState *L, const LValue &obj, const char *field);
-//------------------ Calls metamethod by event name
-bool callmeta(LState *L, const LValue &obj, const char *event);
+MultiValue pcall_function(LState* L, const LValue& func, const LValue* args, size_t count);
 
 //------------------ Creates a shared upvalue
-CLX_INLINE_HOT LUpValue make_upvalue(const LValue &val) {
+CLX_INLINE_HOT LUpValue make_upvalue(const LValue& val)
+{
     return std::make_shared<LValue>(val);
 }
 
 //------------------ C function type alias
-using CFunctionType = std::function<MultiValue(LState *, const LValue *, size_t)>;
+using CFunctionType = std::function<MultiValue(LState*, const LValue*, size_t)>;
 
 //------------------ C function closure
 struct LCFunction : public LHeader {
     CFunctionType func;
-    MultiValue (*direct)(LState *, const LValue *, size_t) = nullptr;
-    LValue (*direct1)(LState *, const LValue *, size_t) = nullptr;
-    LTable *env = nullptr;
+    MultiValue (*direct)(LState*, const LValue*, size_t) = nullptr;
+    LTable* env = nullptr;
     LCFunction(CFunctionType f);
 };
 
 //------------------ Fast path for LCFunction direct calls
-MultiValue call_direct(LState *L, const LValue &func, const LValue *args, size_t count, const char *file, int line);
+MultiValue call_direct(LState* L, const LValue& func, const LValue* args, size_t count, const char* file, int line);
 
 //------------------ Userdata block
 struct LUserdata : public LHeader {
-    LTable *metatable;
+    LTable* metatable;
     size_t size;
 
-    void *data() { return reinterpret_cast<char *>(this) + sizeof(LUserdata); }
+    void* data() { return reinterpret_cast<char*>(this) + sizeof(LUserdata); }
 };
 
 //------------------ C function registration entry
 struct LReg {
-    const char *name;
+    const char* name;
     CFunctionType func;
 };
 
 //------------------ Raw C function pointer type
-using RawCFunction = MultiValue (*)(LState *, const LValue *, size_t);
+using RawCFunction = MultiValue (*)(LState*, const LValue*, size_t);
 
 //------------------ C function registration (lazy init)
 struct LazyReg {
-    const char *name;
+    const char* name;
     RawCFunction func;
 };
 
@@ -572,39 +614,39 @@ struct LTableInlineCache {
 
 //------------------ Lazily-allocated hash/metatable state (keeps LTable compact)
 struct LTableExt {
-    HashEntry *entries = nullptr;
+    HashEntry* entries = nullptr;
     size_t hash_size = 0;
     size_t hash_count = 0;
     size_t hash_tombs = 0;
-    uint64_t *hash_bitmap = nullptr;
+    uint64_t* hash_bitmap = nullptr;
     uint32_t hash_version = 0;
-    LTableInlineCache *ic = nullptr;
-    LTable *metatable = nullptr;
-    LTable *meta_next = nullptr;
+    LTableInlineCache* ic = nullptr;
+    LTable* metatable = nullptr;
+    LTable* meta_next = nullptr;
 };
 
 struct LTable : public LHeader {
-    TValue *array;
-    ValueType *array_types;
+    TValue* array;
+    ValueType* array_types;
     size_t array_size;
     size_t array_cap;
     TValue small_array[2];
     ValueType small_array_types[2];
 
-    LTableExt *ext;
+    LTableExt* ext;
 
     LTable();
     ~LTable();
 
-    LValue gettable(const LValue &key);
-    void settable(const LValue &key, const LValue &val);
+    LValue gettable(const LValue& key);
+    void settable(const LValue& key, const LValue& val);
 
-    LValue get_value(LState *L, const LValue &key);
-    void set_value(LState *L, const LValue &key, const LValue &val);
+    LValue get_value(LState* L, const LValue& key);
+    void set_value(LState* L, const LValue& key, const LValue& val);
 
-    void bind(const char *name, const LValue &val);
-    void bind(LState *L, const char *name, CFunctionType func);
-    void bind_all(LState *L, std::initializer_list<LReg> funcs);
+    void bind(const char* name, const LValue& val);
+    void bind(LState* L, const char* name, CFunctionType func);
+    void bind_all(LState* L, std::initializer_list<LReg> funcs);
 
 private:
     void resize_hash(size_t new_size);
@@ -613,17 +655,20 @@ private:
 static_assert(sizeof(LTable) <= 96, "LTable must be compact (~96 bytes)");
 
 //------------------ LTable accessor helpers (compact-layout indirection)
-CLX_INLINE LTable *tbl_metatable(const LTable *t) {
+CLX_INLINE LTable* tbl_metatable(const LTable* t)
+{
     return t->ext ? t->ext->metatable : nullptr;
 }
 
-CLX_INLINE LTableExt *tbl_ensure_ext(LTable *t) {
+CLX_INLINE LTableExt* tbl_ensure_ext(LTable* t)
+{
     if (t->ext == nullptr)
         t->ext = new LTableExt();
     return t->ext;
 }
 
-CLX_INLINE void tbl_set_metatable(LTable *t, LTable *m) {
+CLX_INLINE void tbl_set_metatable(LTable* t, LTable* m)
+{
     if (t->ext) {
         t->ext->metatable = m;
         t->ext->hash_version++;
@@ -638,7 +683,8 @@ static constexpr uint64_t WY_SECRET0 = 0xa0761d6478bd642fULL;
 static constexpr uint64_t WY_SECRET1 = 0xe7037ed1a0b428dbULL;
 
 //------------------ 64-bit wyhash mix
-static CLX_INLINE_HOT uint64_t wyhash64(uint64_t v) {
+static CLX_INLINE_HOT uint64_t wyhash64(uint64_t v)
+{
     v ^= WY_SECRET0;
     uint64_t lo, hi;
     lo = clx_umul128(v, v ^ WY_SECRET1, &hi);
@@ -646,7 +692,8 @@ static CLX_INLINE_HOT uint64_t wyhash64(uint64_t v) {
 }
 
 //------------------ SWAR hash for <=8 byte strings
-static CLX_INLINE uint64_t swar_hash_8(const char *p, size_t len) {
+static CLX_INLINE uint64_t swar_hash_8(const char* p, size_t len)
+{
     uint64_t data = 0;
     if (len > 0 && len <= 8)
         clx_memcpy(&data, p, len);
@@ -654,7 +701,8 @@ static CLX_INLINE uint64_t swar_hash_8(const char *p, size_t len) {
 }
 
 //------------------ Wyhash for arbitrary-length strings
-static CLX_INLINE uint64_t wyhash_str(const char *p, size_t len) {
+static CLX_INLINE uint64_t wyhash_str(const char* p, size_t len)
+{
     uint64_t seed = WY_SECRET0 ^ static_cast<uint64_t>(len);
     size_t i = 0;
     for (; i + 8 <= len; i += 8) {
@@ -688,24 +736,18 @@ static CLX_INLINE uint64_t wyhash_str(const char *p, size_t len) {
     return seed ^ (seed >> 32);
 }
 
-//------------------ Reads baked hash from interned string header
-static CLX_INLINE_COLD uint64_t string_baked_hash(const char *ptr) {
-    uint64_t h;
-    clx_memcpy(&h, ptr - 16, 8);
-    return h;
-}
-
 //------------------ Hash an LValue by type
-static CLX_INLINE_HOT uint64_t lvalue_hash(const LValue &key) {
+static CLX_INLINE_HOT uint64_t lvalue_hash(const LValue& key)
+{
     if (key.type == ValueType::String) {
         if (key.val.payload.u64 >> 56) {
             uint32_t len = static_cast<uint32_t>(key.val.payload.u64 >> 56);
-            const char *data = reinterpret_cast<const char *>(&key.val.payload.u64);
+            const char* data = reinterpret_cast<const char*>(&key.val.payload.u64);
             return swar_hash_8(data, len);
         }
         if (key.val.payload.u64 == 0)
             return swar_hash_8("", 0);
-        const char *ptr = static_cast<const char *>(key.val.payload.ptr);
+        const char* ptr = static_cast<const char*>(key.val.payload.ptr);
         uint64_t h;
         clx_memcpy(&h, ptr - 16, 8);
         return h;
@@ -725,7 +767,8 @@ static CLX_INLINE_HOT uint64_t lvalue_hash(const LValue &key) {
 }
 
 //------------------ Fast cross-type equality (string/int/number/double)
-static CLX_INLINE_HOT bool lvalue_eq_fast(const LValue &a, const LValue &b) {
+static CLX_INLINE_HOT bool lvalue_eq_fast(const LValue& a, const LValue& b)
+{
     if (a.val.payload.u64 == b.val.payload.u64 && a.type == b.type)
         return true;
     bool a_str = a.type == ValueType::String;
@@ -746,51 +789,56 @@ static CLX_INLINE_HOT bool lvalue_eq_fast(const LValue &a, const LValue &b) {
 //------------------ Bump arena for interned strings
 struct StringArena {
     struct Block {
-        char *base;
+        char* base;
         size_t used;
         size_t capacity;
-        Block *next;
+        Block* next;
 
         Block(size_t cap)
             : base(new char[cap]())
             , used(0)
             , capacity(cap)
-            , next(nullptr) { }
+            , next(nullptr)
+        {
+        }
 
         ~Block() { delete[] base; }
     };
 
-    Block *head = nullptr;
-    Block *current = nullptr;
+    Block* head = nullptr;
+    Block* current = nullptr;
     size_t block_size;
 
     static constexpr size_t DEFAULT_BLOCK_SIZE = 65536;
 
     StringArena(size_t bs = DEFAULT_BLOCK_SIZE)
-        : block_size(bs) {
+        : block_size(bs)
+    {
         head = current = new Block(block_size);
     }
 
-    ~StringArena() {
-        Block *b = head;
+    ~StringArena()
+    {
+        Block* b = head;
         while (b) {
-            Block *n = b->next;
+            Block* n = b->next;
             delete b;
             b = n;
         }
     }
 
-    StringArena(const StringArena &) = delete;
-    StringArena &operator=(const StringArena &) = delete;
+    StringArena(const StringArena&) = delete;
+    StringArena& operator=(const StringArena&) = delete;
 
-    CLX_INLINE char *allocate(size_t size) {
+    CLX_INLINE char* allocate(size_t size)
+    {
         size = (size + 15) & ~size_t(15);
         if (!current || current->used + size > current->capacity) {
-            Block *b = new Block(std::max(block_size, size));
+            Block* b = new Block(std::max(block_size, size));
             current->next = b;
             current = b;
         }
-        char *result = current->base + current->used;
+        char* result = current->base + current->used;
         current->used += size;
         return result;
     }
@@ -799,39 +847,39 @@ struct StringArena {
 //------------------ String interning pool
 struct StringPool {
     struct Slot {
-        char *baked;
+        char* baked;
         uint64_t hash;
         uint32_t len;
 
         bool empty() const { return baked == nullptr; }
     };
 
-    Slot *slots = nullptr;
+    Slot* slots = nullptr;
     size_t capacity = 0;
     size_t count = 0;
     StringArena arena;
-    uint64_t guard = 0xDEADBEEFCAFEBABEULL;
 
     static constexpr size_t INIT_CAP = 64;
 
     StringPool()
-        : arena(65536) {
-        guard = 0xDEADBEEFCAFEBABEULL;
+        : arena(65536)
+    {
         rehash(INIT_CAP);
     }
 
     ~StringPool() { delete[] slots; }
 
-    StringPool(const StringPool &) = delete;
-    StringPool &operator=(const StringPool &) = delete;
+    StringPool(const StringPool&) = delete;
+    StringPool& operator=(const StringPool&) = delete;
 
-    const char *intern(const char *str, size_t len, uint64_t h) {
+    const char* intern(const char* str, size_t len, uint64_t h)
+    {
         if (count * 2 >= capacity)
             rehash(capacity * 2);
         size_t mask = capacity - 1;
         size_t idx = h & mask;
         for (;;) {
-            Slot &s = slots[idx];
+            Slot& s = slots[idx];
             if (s.empty()) {
                 s = make_slot(str, len, h);
                 count++;
@@ -843,13 +891,14 @@ struct StringPool {
         }
     }
 
-    const char *intern_preallocated(char *prealloc, uint64_t h, size_t len) {
+    const char* intern_preallocated(char* prealloc, uint64_t h, size_t len)
+    {
         if (count * 2 >= capacity)
             rehash(capacity * 2);
         size_t mask = capacity - 1;
         size_t idx = h & mask;
         for (;;) {
-            Slot &s = slots[idx];
+            Slot& s = slots[idx];
             if (s.empty()) {
                 s = make_slot(prealloc, len, h);
                 delete[] (prealloc - 16);
@@ -864,13 +913,14 @@ struct StringPool {
         }
     }
 
-    const char *lookup(const char *str, size_t len, uint64_t h) const {
+    const char* lookup(const char* str, size_t len, uint64_t h) const
+    {
         if (count == 0)
             return nullptr;
         size_t mask = capacity - 1;
         size_t idx = h & mask;
         for (;;) {
-            const Slot &s = slots[idx];
+            const Slot& s = slots[idx];
             if (s.empty())
                 return nullptr;
             if (s.hash == h && s.len == static_cast<uint32_t>(len) && clx_memcmp(s.baked, str, len) == 0)
@@ -879,27 +929,29 @@ struct StringPool {
         }
     }
 
-    void reserve(size_t n) {
+    void reserve(size_t n)
+    {
         if (n > capacity)
             rehash(n);
     }
 
     struct PrecomputedEntry {
-        const char *s;
+        const char* s;
         uint32_t len;
         uint64_t hash;
         uint32_t slot;
     };
 
-    void bulk_fill_precomputed(const PrecomputedEntry *entries, size_t n) {
+    void bulk_fill_precomputed(const PrecomputedEntry* entries, size_t n)
+    {
         size_t total_arena = 0;
         for (size_t i = 0; i < n; ++i) {
             size_t entry_size = 16 + entries[i].len + 1;
             total_arena += (entry_size + 15) & ~size_t(15);
         }
 
-        char *arena_base = arena.allocate(total_arena);
-        char *arena_ptr = arena_base;
+        char* arena_base = arena.allocate(total_arena);
+        char* arena_ptr = arena_base;
 
         for (size_t i = 0; i < n; ++i) {
             uint32_t len32 = entries[i].len;
@@ -909,7 +961,7 @@ struct StringPool {
             clx_memcpy(arena_ptr + 16, entries[i].s, entries[i].len);
             arena_ptr[16 + entries[i].len] = '\0';
 
-            Slot &s = slots[entries[i].slot];
+            Slot& s = slots[entries[i].slot];
             s.baked = arena_ptr + 16;
             s.hash = entries[i].hash;
             s.len = len32;
@@ -921,10 +973,11 @@ struct StringPool {
     }
 
 private:
-    Slot make_slot(const char *str, size_t len, uint64_t h) {
+    Slot make_slot(const char* str, size_t len, uint64_t h)
+    {
         size_t total = 16 + len + 1;
         total = (total + 15) & ~size_t(15);
-        char *mem = arena.allocate(total);
+        char* mem = arena.allocate(total);
         uint32_t len32 = static_cast<uint32_t>(len);
         uint32_t h_low = static_cast<uint32_t>(h);
         clx_memcpy(mem, &h_low, 4);
@@ -934,8 +987,9 @@ private:
         return Slot { mem + 16, h, len32 };
     }
 
-    void rehash(size_t new_cap) {
-        Slot *old = slots;
+    void rehash(size_t new_cap)
+    {
+        Slot* old = slots;
         size_t old_cap = capacity;
         slots = new Slot[new_cap]();
         capacity = new_cap;
@@ -953,14 +1007,17 @@ private:
 };
 
 //------------------ Coroutine thread status enum
-enum ThreadStatus { THREAD_SUSPENDED = 0, THREAD_RUNNING = 1, THREAD_DEAD = 2, THREAD_NORMAL = 3 };
+enum ThreadStatus { THREAD_SUSPENDED = 0,
+    THREAD_RUNNING = 1,
+    THREAD_DEAD = 2,
+    THREAD_NORMAL = 3 };
 
 //------------------ Coroutine thread
 struct LThread : public LHeader {
-    LState *state;
+    LState* state;
     LValue function;
     int status;
-    LThread *caller;
+    LThread* caller;
     MultiValue yield_args;
     MultiValue resume_args;
     bool is_main;
@@ -970,10 +1027,10 @@ struct LThread : public LHeader {
     LPVOID fiber;
 #elif (defined(__APPLE__) || defined(__linux__)) && (defined(__aarch64__) || defined(__x86_64__))
     CoroutineContext ctx;
-    char *stack_memory;
+    char* stack_memory;
 #else
     ucontext_t ctx;
-    char *stack_memory;
+    char* stack_memory;
 #endif
 
     LThread();
@@ -982,25 +1039,21 @@ struct LThread : public LHeader {
 
 //------------------ VM state
 struct LState {
-    LTable *_G;
-    LCFunction *current_func = nullptr;
-    LHeader *allocated_objects;
-    LTable *free_tables;
-    LCFunction *free_functions;
-    LUserdata *finalizable_ud;
-    LTable *metatabled_tables = nullptr;
+    LTable* _G;
+    LCFunction* current_func = nullptr;
+    LHeader* allocated_objects;
+    LTable* free_tables;
+    LCFunction* free_functions;
+    LTable* metatabled_tables = nullptr;
 
-    LThread *main_thread;
-    LThread *running_thread;
+    LThread* main_thread;
+    LThread* running_thread;
 
     static constexpr size_t MAX_SHADOW_STACK = 262144;
     TypedSlot shadow_stack[MAX_SHADOW_STACK];
     size_t shadow_top;
 
-    void *stack_bottom;
-    std::vector<void *> lib_handles;
-    std::unordered_map<std::string, LValue (*)(LState *)> static_modules;
-    const char *current_file;
+    const char* current_file;
     int current_line;
 
     size_t object_count;
@@ -1016,51 +1069,51 @@ struct LState {
     LValue str_close;
     LValue str_pairs;
     LValue str_tostring;
-    LTable *string_metatable;
+    LTable* string_metatable;
 
     StringPool string_pool;
 
-    CLX_INLINE LValue intern_lvalue(const char *str, size_t len) {
+    CLX_INLINE LValue intern_lvalue(const char* str, size_t len)
+    {
         if (len <= 6)
             return LValue::istr(str, len);
         return LValue(intern_string(str, len));
     }
 
-    CLX_INLINE LValue intern_lvalue(const std::string &s) { return intern_lvalue(s.data(), s.size()); }
+    CLX_INLINE LValue intern_lvalue(const std::string& s) { return intern_lvalue(s.data(), s.size()); }
 
-    CLX_INLINE const char *intern_string(const char *str, size_t len) {
+    CLX_INLINE const char* intern_string(const char* str, size_t len)
+    {
         uint64_t h = len <= 8 ? swar_hash_8(str, len) : wyhash_str(str, len);
         return string_pool.intern(str, len, h);
     }
 
-    CLX_INLINE const char *intern_string(const std::string &s) { return intern_string(s.data(), s.size()); }
+    CLX_INLINE const char* intern_string(const std::string& s) { return intern_string(s.data(), s.size()); }
 
-    CLX_INLINE const char *intern_string(const char *str) { return intern_string(str, clx_strlen(str)); }
-
-    CLX_INLINE const char *intern_prehashed(const char *str, size_t len, uint64_t h) {
-        return string_pool.intern(str, len, h);
-    }
+    CLX_INLINE const char* intern_string(const char* str) { return intern_string(str, clx_strlen(str)); }
 
     LState();
     ~LState();
 
     LValue create_table(size_t asize = 0, size_t hsize = 0);
-    LValue create_closure(CFunctionType func, LTable *env = nullptr);
+    LValue create_closure(CFunctionType func, LTable* env = nullptr);
 
-    std::vector<LHeader *> gc_worklist;
+    std::vector<LHeader*> gc_worklist;
     std::vector<LValue> permanent_roots;
 
-    void root_value(const LValue &v) {
+    void root_value(const LValue& v)
+    {
         if (v.is_gc_obj())
             permanent_roots.push_back(v);
     }
 
-    enum class GCPhase : uint8_t { Idle, Sweeping };
+    enum class GCPhase : uint8_t { Idle,
+        Sweeping };
     GCPhase gc_phase = GCPhase::Idle;
-    LHeader *gc_sweep_cursor = nullptr;
-    LHeader *gc_prev = nullptr;
-    LHeader *gc_finalizable = nullptr;
-    LHeader *gc_finalizable_ud = nullptr;
+    LHeader* gc_sweep_cursor = nullptr;
+    LHeader* gc_prev = nullptr;
+    LHeader* gc_finalizable = nullptr;
+    LHeader* gc_finalizable_ud = nullptr;
     static constexpr size_t GC_STEP_BUDGET = 512;
     bool gc_running = true;
     int gc_pause = 200;
@@ -1068,43 +1121,46 @@ struct LState {
     int gc_stepsize = 13;
     void collect_garbage();
     bool gc_step();
-    void invoke_gc_finalizer(LUserdata *ud, const char *tag);
+    void invoke_gc_finalizer(LUserdata* ud, const char* tag);
 
-    LValue *overflow_heap = nullptr;
+    LValue* overflow_heap = nullptr;
     size_t overflow_heap_cap = 0;
     size_t overflow_heap_used = 0;
 
-    CLX_INLINE_HOT LValue *alloc_overflow(size_t n) {
+    CLX_INLINE_HOT LValue* alloc_overflow(size_t n)
+    {
         if (overflow_heap_used + n > overflow_heap_cap) {
             size_t new_cap = overflow_heap_cap ? overflow_heap_cap * 2 : 64;
             while (new_cap < overflow_heap_used + n)
                 new_cap *= 2;
-            overflow_heap = static_cast<LValue *>(std::realloc(overflow_heap, new_cap * sizeof(LValue)));
+            overflow_heap = static_cast<LValue*>(std::realloc(overflow_heap, new_cap * sizeof(LValue)));
             overflow_heap_cap = new_cap;
         }
-        LValue *result = overflow_heap + overflow_heap_used;
+        LValue* result = overflow_heap + overflow_heap_used;
         overflow_heap_used += n;
         return result;
     }
 
-    void register_module(const std::string &name, LValue (*func)(LState *));
+    void register_module(const std::string& name, LValue (*func)(LState*));
 };
 
 //------------------ Metatabled-tables list (protect-pass fast path)
-CLX_INLINE void meta_list_add(LState *L, LTable *t) {
+CLX_INLINE void meta_list_add(LState* L, LTable* t)
+{
     if (t->flags & LFLAG_META_LIST)
         return;
-    LTableExt *ex = tbl_ensure_ext(t);
+    LTableExt* ex = tbl_ensure_ext(t);
     ex->meta_next = L->metatabled_tables;
     L->metatabled_tables = t;
     t->flags |= LFLAG_META_LIST;
 }
 
-CLX_INLINE void meta_list_remove(LState *L, LTable *t) {
+CLX_INLINE void meta_list_remove(LState* L, LTable* t)
+{
     if (!(t->flags & LFLAG_META_LIST))
         return;
     if (t->ext) {
-        LTable **pp = &L->metatabled_tables;
+        LTable** pp = &L->metatabled_tables;
         while (*pp && *pp != t)
             pp = &(*pp)->ext->meta_next;
         if (*pp == t)
@@ -1114,13 +1170,15 @@ CLX_INLINE void meta_list_remove(LState *L, LTable *t) {
     t->flags &= ~LFLAG_META_LIST;
 }
 
-inline std::string file_line_prefix(LState *L) {
+inline std::string file_line_prefix(LState* L)
+{
     if (L->current_file && L->current_file[0] != '\0')
         return std::string(L->current_file) + ":" + std::to_string(L->current_line) + ": ";
     return "";
 }
 
-inline void MultiValue::overflow_init(const clx::LValue *arr, size_t c) {
+inline void MultiValue::overflow_init(const clx::LValue* arr, size_t c)
+{
     overflow = alloc_L->alloc_overflow(c - INLINE_CAP);
     for (size_t i = INLINE_CAP; i < c; ++i)
         overflow[i - INLINE_CAP] = arr[i];
@@ -1131,23 +1189,24 @@ class StringBuilder {
     static constexpr size_t INLINE_CAP = 8;
     static constexpr size_t ARENA_BLOCK = 4096;
 
-    const char *parts_[INLINE_CAP];
+    const char* parts_[INLINE_CAP];
     uint32_t lens_[INLINE_CAP];
-    const char **parts;
-    uint32_t *lens;
+    const char** parts;
+    uint32_t* lens;
     size_t count;
     size_t cap;
     size_t total_len;
-    mutable const char *cached;
+    mutable const char* cached;
 
     std::vector<std::unique_ptr<char[]>> arena_blocks;
-    char *arena_cur = nullptr;
-    char *arena_end = nullptr;
+    char* arena_cur = nullptr;
+    char* arena_end = nullptr;
 
-    void grow() {
+    void grow()
+    {
         size_t new_cap = cap * 2;
-        auto *np = new const char *[new_cap];
-        auto *nl = new uint32_t[new_cap];
+        auto* np = new const char*[new_cap];
+        auto* nl = new uint32_t[new_cap];
         for (size_t i = 0; i < count; ++i) {
             np[i] = parts[i];
             nl[i] = lens[i];
@@ -1161,14 +1220,15 @@ class StringBuilder {
         cap = new_cap;
     }
 
-    char *arena_alloc(size_t n) {
+    char* arena_alloc(size_t n)
+    {
         if (static_cast<size_t>(arena_end - arena_cur) < n) {
             size_t blk = n > ARENA_BLOCK ? n : ARENA_BLOCK;
             arena_blocks.push_back(std::make_unique<char[]>(blk));
             arena_cur = arena_blocks.back().get();
             arena_end = arena_cur + blk;
         }
-        char *p = arena_cur;
+        char* p = arena_cur;
         arena_cur += n;
         return p;
     }
@@ -1180,27 +1240,32 @@ public:
         , count(0)
         , cap(INLINE_CAP)
         , total_len(0)
-        , cached(nullptr) { }
+        , cached(nullptr)
+    {
+    }
 
-    ~StringBuilder() {
+    ~StringBuilder()
+    {
         if (parts != parts_) {
             delete[] parts;
             delete[] lens;
         }
     }
 
-    StringBuilder(const StringBuilder &o)
+    StringBuilder(const StringBuilder& o)
         : parts(parts_)
         , lens(lens_)
         , count(0)
         , cap(INLINE_CAP)
         , total_len(0)
-        , cached(nullptr) {
+        , cached(nullptr)
+    {
         for (size_t i = 0; i < o.count; ++i)
             append_owned(o.parts[i], o.lens[i]);
     }
 
-    StringBuilder &operator=(const StringBuilder &o) {
+    StringBuilder& operator=(const StringBuilder& o)
+    {
         if (this != &o) {
             if (parts != parts_) {
                 delete[] parts;
@@ -1221,7 +1286,7 @@ public:
         return *this;
     }
 
-    StringBuilder(StringBuilder &&o) noexcept
+    StringBuilder(StringBuilder&& o) noexcept
         : parts(o.parts == o.parts_ ? parts_ : o.parts)
         , lens(o.lens == o.lens_ ? lens_ : o.lens)
         , count(o.count)
@@ -1230,7 +1295,8 @@ public:
         , cached(o.cached)
         , arena_blocks(std::move(o.arena_blocks))
         , arena_cur(o.arena_cur)
-        , arena_end(o.arena_end) {
+        , arena_end(o.arena_end)
+    {
         if (o.parts == o.parts_) {
             for (size_t i = 0; i < count; ++i) {
                 parts_[i] = o.parts_[i];
@@ -1247,7 +1313,8 @@ public:
         o.arena_end = nullptr;
     }
 
-    StringBuilder &operator=(StringBuilder &&o) noexcept {
+    StringBuilder& operator=(StringBuilder&& o) noexcept
+    {
         if (parts != parts_) {
             delete[] parts;
             delete[] lens;
@@ -1278,7 +1345,8 @@ public:
         return *this;
     }
 
-    CLX_INLINE_HOT void clear() {
+    CLX_INLINE_HOT void clear()
+    {
         cached = nullptr;
         count = 0;
         total_len = 0;
@@ -1286,11 +1354,12 @@ public:
         arena_end = nullptr;
     }
 
-    void reserve(size_t n) {
+    void reserve(size_t n)
+    {
         if (n <= cap)
             return;
-        auto *np = new const char *[n];
-        auto *nl = new uint32_t[n];
+        auto* np = new const char*[n];
+        auto* nl = new uint32_t[n];
         for (size_t i = 0; i < count; ++i) {
             np[i] = parts[i];
             nl[i] = lens[i];
@@ -1304,7 +1373,8 @@ public:
         cap = n;
     }
 
-    CLX_INLINE StringBuilder &append(const char *s, uint32_t len) {
+    CLX_INLINE StringBuilder& append(const char* s, uint32_t len)
+    {
         cached = nullptr;
         if (count >= cap)
             grow();
@@ -1315,23 +1385,26 @@ public:
         return *this;
     }
 
-    CLX_INLINE StringBuilder &append_owned(const char *s, uint32_t len) {
-        char *p = arena_alloc(len);
+    CLX_INLINE StringBuilder& append_owned(const char* s, uint32_t len)
+    {
+        char* p = arena_alloc(len);
         clx_memcpy(p, s, len);
         return append(p, len);
     }
 
-    CLX_INLINE StringBuilder &append(StringBuilder &other) {
+    CLX_INLINE StringBuilder& append(StringBuilder& other)
+    {
         cached = nullptr;
         for (size_t i = 0; i < other.count; ++i)
             append(other.parts[i], other.lens[i]);
         return *this;
     }
 
-    CLX_INLINE StringBuilder &append(LState *L, const LValue &v) {
+    CLX_INLINE StringBuilder& append(LState* L, const LValue& v)
+    {
         if (v.type == ValueType::String) {
             if (v.val.payload.u64 >> 56) {
-                const char *s = L->intern_string(v.as_string(), v.string_len());
+                const char* s = L->intern_string(v.as_string(), v.string_len());
                 return append(s, v.string_len());
             }
             return append(v.as_string(), v.string_len());
@@ -1354,7 +1427,8 @@ public:
         return append("(unknown)", 9);
     }
 
-    const char *to_string(LState *L) const {
+    const char* to_string(LState* L) const
+    {
         if (cached)
             return cached;
         if (count == 0) {
@@ -1362,9 +1436,9 @@ public:
             return cached;
         }
         uint32_t len32 = static_cast<uint32_t>(total_len);
-        char *mem = new char[16 + total_len + 1]();
+        char* mem = new char[16 + total_len + 1]();
         clx_memcpy(mem + 8, &len32, 4);
-        char *p = mem + 16;
+        char* p = mem + 16;
         for (size_t i = 0; i < count; ++i) {
             clx_memcpy(p, parts[i], lens[i]);
             p += lens[i];
@@ -1380,12 +1454,13 @@ public:
 
     CLX_INLINE_HOT bool empty() const { return count == 0; }
 
-    CLX_INLINE LValue to_lvalue(LState *L) const {
+    CLX_INLINE LValue to_lvalue(LState* L) const
+    {
         if (count == 0)
             return LValue::istr("", 0);
         if (total_len <= 6) {
             char buf[8];
-            char *p = buf;
+            char* p = buf;
             for (size_t i = 0; i < count; ++i) {
                 clx_memcpy(p, parts[i], lens[i]);
                 p += lens[i];
@@ -1404,22 +1479,25 @@ public:
 
     LRuntimeException(clx::LValue err);
     virtual ~LRuntimeException() noexcept;
-    virtual const char *what() const noexcept override;
+    virtual const char* what() const noexcept override;
 };
 
 //------------------ Throws an LRuntimeException
-[[noreturn]] CLX_INLINE_COLD void throw_runtime_error(const char *msg) {
+[[noreturn]] CLX_INLINE_COLD void throw_runtime_error(const char* msg)
+{
     throw LRuntimeException(LValue(msg));
 }
 
 //------------------ Stack scope guard
 struct ScopeGuard {
-    LState *L;
+    LState* L;
     size_t prev_top;
 
-    CLX_INLINE_HOT ScopeGuard(LState *state)
+    CLX_INLINE_HOT ScopeGuard(LState* state)
         : L(state)
-        , prev_top(state->shadow_top) { }
+        , prev_top(state -> shadow_top)
+    {
+    }
 
     CLX_INLINE_HOT ~ScopeGuard() { L->shadow_top = prev_top; }
 };
@@ -1430,25 +1508,28 @@ struct ScopeGuard {
 #endif
 
 struct FuncArena {
-    char *base;
-    char *ptr;
+    char* base;
+    char* ptr;
     size_t capacity;
 };
 
-CLX_INLINE_HOT void arena_init(FuncArena *a, size_t size) {
-    a->base = static_cast<char *>(std::malloc(size));
+CLX_INLINE_HOT void arena_init(FuncArena* a, size_t size)
+{
+    a->base = static_cast<char*>(std::malloc(size));
     a->ptr = a->base;
     a->capacity = size;
 }
 
-CLX_INLINE_HOT void *arena_alloc(FuncArena *a, size_t bytes, size_t align = 8) {
+CLX_INLINE_HOT void* arena_alloc(FuncArena* a, size_t bytes, size_t align = 8)
+{
     uintptr_t current = reinterpret_cast<uintptr_t>(a->ptr);
     uintptr_t aligned = (current + align - 1) & ~(align - 1);
-    a->ptr = reinterpret_cast<char *>(aligned + bytes);
-    return reinterpret_cast<char *>(aligned);
+    a->ptr = reinterpret_cast<char*>(aligned + bytes);
+    return reinterpret_cast<char*>(aligned);
 }
 
-CLX_INLINE_HOT void arena_reset(FuncArena *a) {
+CLX_INLINE_HOT void arena_reset(FuncArena* a)
+{
     if (a->base)
         std::free(a->base);
     a->base = nullptr;
@@ -1456,7 +1537,8 @@ CLX_INLINE_HOT void arena_reset(FuncArena *a) {
     a->capacity = 0;
 }
 
-CLX_INLINE_HOT LValue arena_create_table(LState *L, FuncArena *a, size_t asize, size_t hsize) {
+CLX_INLINE_HOT LValue arena_create_table(LState* L, FuncArena* a, size_t asize, size_t hsize)
+{
 #if CLX_ARENA_DEFAULT_FIELDS > 0
     if (asize < CLX_ARENA_DEFAULT_FIELDS)
         asize = CLX_ARENA_DEFAULT_FIELDS;
@@ -1468,12 +1550,12 @@ CLX_INLINE_HOT LValue arena_create_table(LState *L, FuncArena *a, size_t asize, 
     size_t types_sz = asize > 0 ? ((sizeof(ValueType) * asize + 7) & ~static_cast<size_t>(7)) : 0;
     size_t hash_sz = hsize > 0 ? ((sizeof(HashEntry) * hsize + 7) & ~static_cast<size_t>(7)) : 0;
     size_t total = header_sz + array_sz + types_sz + hash_sz;
-    char *mem = static_cast<char *>(arena_alloc(a, total));
-    LTable *t = new (mem) LTable();
+    char* mem = static_cast<char*>(arena_alloc(a, total));
+    LTable* t = new (mem) LTable();
     t->flags |= LFLAG_ARENA;
     if (asize > 0) {
-        t->array = reinterpret_cast<TValue *>(mem + header_sz);
-        t->array_types = reinterpret_cast<ValueType *>(mem + header_sz + array_sz);
+        t->array = reinterpret_cast<TValue*>(mem + header_sz);
+        t->array_types = reinterpret_cast<ValueType*>(mem + header_sz + array_sz);
         t->array_cap = asize;
         for (size_t i = 0; i < asize; ++i) {
             t->array[i] = TValue();
@@ -1481,9 +1563,9 @@ CLX_INLINE_HOT LValue arena_create_table(LState *L, FuncArena *a, size_t asize, 
         }
     }
     if (hsize > 0) {
-        LTableExt *ex = static_cast<LTableExt *>(arena_alloc(a, sizeof(LTableExt)));
+        LTableExt* ex = static_cast<LTableExt*>(arena_alloc(a, sizeof(LTableExt)));
         t->ext = ex;
-        ex->entries = reinterpret_cast<HashEntry *>(mem + header_sz + array_sz + types_sz);
+        ex->entries = reinterpret_cast<HashEntry*>(mem + header_sz + array_sz + types_sz);
         ex->hash_size = hsize;
         ex->hash_count = 0;
         ex->hash_tombs = 0;
@@ -1504,46 +1586,37 @@ CLX_INLINE_HOT LValue arena_create_table(LState *L, FuncArena *a, size_t asize, 
 
 //------------------ Close guard (for <close> vars)
 struct CloseGuard {
-    LState *L;
+    LState* L;
     LValue val;
 
-    CLX_INLINE_HOT CloseGuard(LState *state, const LValue &v)
+    CLX_INLINE_HOT CloseGuard(LState* state, const LValue& v)
         : L(state)
-        , val(v) { }
+        , val(v)
+    {
+    }
 
     ~CloseGuard();
 };
 
-//------------------ Reads a variable from environment table (shared_ptr upvalue)
-CLX_INLINE_HOT LValue get_env_var(LState *L, LUpValue env, const char *name) {
-    LTable *t = static_cast<LTable *>((*env).val.payload.ptr);
-    LValue key = LValue(L->intern_string(name));
-    return t->gettable(key);
-}
-
 //------------------ Reads a variable from environment table (direct LValue)
-CLX_INLINE_HOT LValue get_env_var(LState *L, const LValue &env, const char *name) {
-    LTable *t = static_cast<LTable *>(env.val.payload.ptr);
+CLX_INLINE_HOT LValue get_env_var(LState* L, const LValue& env, const char* name)
+{
+    LTable* t = static_cast<LTable*>(env.val.payload.ptr);
     LValue key = LValue(L->intern_string(name));
     return t->gettable(key);
-}
-
-//------------------ Writes a variable to environment table (shared_ptr upvalue)
-CLX_INLINE_HOT void set_env_var(LState *L, LUpValue env, const char *name, const LValue &val) {
-    LTable *t = static_cast<LTable *>((*env).val.payload.ptr);
-    LValue key = LValue(L->intern_string(name));
-    t->settable(key, val);
 }
 
 //------------------ Writes a variable to environment table (direct LValue)
-CLX_INLINE_HOT void set_env_var(LState *L, const LValue &env, const char *name, const LValue &val) {
-    LTable *t = static_cast<LTable *>(env.val.payload.ptr);
+CLX_INLINE_HOT void set_env_var(LState* L, const LValue& env, const char* name, const LValue& val)
+{
+    LTable* t = static_cast<LTable*>(env.val.payload.ptr);
     LValue key = LValue(L->intern_string(name));
     t->settable(key, val);
 }
 
 //------------------ Addition with metamethod fallback
-CLX_INLINE_HOT LValue add(LState *L, const LValue &a, const LValue &b) {
+CLX_INLINE_HOT LValue add(LState* L, const LValue& a, const LValue& b)
+{
     if (a.type == ValueType::Int64 && b.type == ValueType::Int64) [[likely]] {
         int64_t ai = a.val.payload.i64, bi = b.val.payload.i64;
         int64_t r = ai + bi;
@@ -1563,7 +1636,8 @@ CLX_INLINE_HOT LValue add(LState *L, const LValue &a, const LValue &b) {
     return call_bin_metamethod(L, a, b, "__add");
 }
 
-CLX_INLINE_HOT LValue sub(LState *L, const LValue &a, const LValue &b) {
+CLX_INLINE_HOT LValue sub(LState* L, const LValue& a, const LValue& b)
+{
     if (a.type == ValueType::Int64 && b.type == ValueType::Int64) [[likely]] {
         int64_t ai = a.val.payload.i64, bi = b.val.payload.i64;
         int64_t r = ai - bi;
@@ -1583,7 +1657,8 @@ CLX_INLINE_HOT LValue sub(LState *L, const LValue &a, const LValue &b) {
     return call_bin_metamethod(L, a, b, "__sub");
 }
 
-CLX_INLINE_HOT LValue mul(LState *L, const LValue &a, const LValue &b) {
+CLX_INLINE_HOT LValue mul(LState* L, const LValue& a, const LValue& b)
+{
     if (a.type == ValueType::Int64 && b.type == ValueType::Int64) [[likely]] {
         int64_t ai = a.val.payload.i64, bi = b.val.payload.i64;
         if (ai == 0 || bi == 0)
@@ -1607,7 +1682,8 @@ CLX_INLINE_HOT LValue mul(LState *L, const LValue &a, const LValue &b) {
     return call_bin_metamethod(L, a, b, "__mul");
 }
 
-CLX_INLINE_HOT LValue div(LState *L, const LValue &a, const LValue &b) {
+CLX_INLINE_HOT LValue div(LState* L, const LValue& a, const LValue& b)
+{
     if ((a.type == ValueType::Double || a.type == ValueType::Int64)
         && (b.type == ValueType::Double || b.type == ValueType::Int64)) [[likely]] {
         double l = (a.type == ValueType::Int64) ? static_cast<double>(a.val.payload.i64) : a.val.payload.f64;
@@ -1621,7 +1697,8 @@ CLX_INLINE_HOT LValue div(LState *L, const LValue &a, const LValue &b) {
 }
 
 //------------------ Equality with metamethod fallback
-CLX_INLINE_HOT LValue eq(LState *L, const LValue &a, const LValue &b) {
+CLX_INLINE_HOT LValue eq(LState* L, const LValue& a, const LValue& b)
+{
     if (a.val.payload.u64 == b.val.payload.u64 && a.type == b.type)
         return LValue(true);
     if (a.type == ValueType::Int64 && b.type == ValueType::Double)
@@ -1642,10 +1719,10 @@ CLX_INLINE_HOT LValue eq(LState *L, const LValue &a, const LValue &b) {
         if (a.type == ValueType::Nil)
             return LValue(true);
         if (a.type == ValueType::Table || a.type == ValueType::UserData) {
-            LTable *mt = (a.type == ValueType::Table) ? tbl_metatable(static_cast<LTable *>(a.as_pointer()))
-                                                      : static_cast<LUserdata *>(a.as_pointer())->metatable;
-            LTable *mt_b = (b.type == ValueType::Table) ? tbl_metatable(static_cast<LTable *>(b.as_pointer()))
-                                                        : static_cast<LUserdata *>(b.as_pointer())->metatable;
+            LTable* mt = (a.type == ValueType::Table) ? tbl_metatable(static_cast<LTable*>(a.as_pointer()))
+                                                      : static_cast<LUserdata*>(a.as_pointer())->metatable;
+            LTable* mt_b = (b.type == ValueType::Table) ? tbl_metatable(static_cast<LTable*>(b.as_pointer()))
+                                                        : static_cast<LUserdata*>(b.as_pointer())->metatable;
             if (mt && mt == mt_b) {
                 LValue mm = mt->gettable(LValue(L->intern_string("__eq")));
                 if (mm.type != ValueType::Nil)
@@ -1658,7 +1735,8 @@ CLX_INLINE_HOT LValue eq(LState *L, const LValue &a, const LValue &b) {
 }
 
 //------------------ Safe integer conversion (no metamethods)
-CLX_INLINE bool to_integer(const LValue &v, int64_t &out) {
+CLX_INLINE bool to_integer(const LValue& v, int64_t& out)
+{
     if (v.type == ValueType::Int64) {
         out = v.val.payload.i64;
         return true;
@@ -1674,7 +1752,8 @@ CLX_INLINE bool to_integer(const LValue &v, int64_t &out) {
 }
 
 //------------------ Bitwise AND with metamethod fallback
-CLX_INLINE LValue band(LState *L, const LValue &a, const LValue &b) {
+CLX_INLINE LValue band(LState* L, const LValue& a, const LValue& b)
+{
     int64_t l, r;
     if (to_integer(a, l) && to_integer(b, r)) [[likely]]
         return LValue(l & r);
@@ -1682,7 +1761,8 @@ CLX_INLINE LValue band(LState *L, const LValue &a, const LValue &b) {
 }
 
 //------------------ Bitwise OR with metamethod fallback
-CLX_INLINE LValue bor(LState *L, const LValue &a, const LValue &b) {
+CLX_INLINE LValue bor(LState* L, const LValue& a, const LValue& b)
+{
     int64_t l, r;
     if (to_integer(a, l) && to_integer(b, r)) [[likely]]
         return LValue(l | r);
@@ -1690,7 +1770,8 @@ CLX_INLINE LValue bor(LState *L, const LValue &a, const LValue &b) {
 }
 
 //------------------ Bitwise XOR with metamethod fallback
-CLX_INLINE LValue bxor(LState *L, const LValue &a, const LValue &b) {
+CLX_INLINE LValue bxor(LState* L, const LValue& a, const LValue& b)
+{
     int64_t l, r;
     if (to_integer(a, l) && to_integer(b, r)) [[likely]]
         return LValue(l ^ r);
@@ -1698,7 +1779,8 @@ CLX_INLINE LValue bxor(LState *L, const LValue &a, const LValue &b) {
 }
 
 //------------------ Bitwise SHL with metamethod fallback
-CLX_INLINE LValue shl(LState *L, const LValue &a, const LValue &b) {
+CLX_INLINE LValue shl(LState* L, const LValue& a, const LValue& b)
+{
     int64_t l, r;
     if (to_integer(a, l) && to_integer(b, r)) [[likely]]
         return LValue(l << r);
@@ -1706,7 +1788,8 @@ CLX_INLINE LValue shl(LState *L, const LValue &a, const LValue &b) {
 }
 
 //------------------ Bitwise SHR with metamethod fallback
-CLX_INLINE LValue shr(LState *L, const LValue &a, const LValue &b) {
+CLX_INLINE LValue shr(LState* L, const LValue& a, const LValue& b)
+{
     int64_t l, r;
     if (to_integer(a, l) && to_integer(b, r)) [[likely]]
         return LValue(l >> r);
@@ -1714,14 +1797,16 @@ CLX_INLINE LValue shr(LState *L, const LValue &a, const LValue &b) {
 }
 
 //------------------ Bitwise NOT with metamethod fallback
-CLX_INLINE LValue bnot(LState *L, const LValue &a) {
+CLX_INLINE LValue bnot(LState* L, const LValue& a)
+{
     int64_t v;
     if (to_integer(a, v)) [[likely]]
         return LValue(~v);
     return call_bin_metamethod(L, a, a, "__bnot");
 }
 
-CLX_INLINE LValue lt(LState *L, const LValue &a, const LValue &b) {
+CLX_INLINE LValue lt(LState* L, const LValue& a, const LValue& b)
+{
     if (a.type == ValueType::Int64 && b.type == ValueType::Int64) [[likely]]
         return LValue(a.val.payload.i64 < b.val.payload.i64);
     if ((a.type == ValueType::Double || a.type == ValueType::Int64)
@@ -1735,7 +1820,8 @@ CLX_INLINE LValue lt(LState *L, const LValue &a, const LValue &b) {
     return call_bin_metamethod(L, a, b, "__lt");
 }
 
-CLX_INLINE LValue le(LState *L, const LValue &a, const LValue &b) {
+CLX_INLINE LValue le(LState* L, const LValue& a, const LValue& b)
+{
     if (a.type == ValueType::Int64 && b.type == ValueType::Int64) [[likely]]
         return LValue(a.val.payload.i64 <= b.val.payload.i64);
     if ((a.type == ValueType::Double || a.type == ValueType::Int64)
@@ -1750,16 +1836,17 @@ CLX_INLINE LValue le(LState *L, const LValue &a, const LValue &b) {
 }
 
 //------------------ Length operator with metamethod fallback
-CLX_INLINE_COLD LValue len(LState *L, const LValue &a) {
+CLX_INLINE_COLD LValue len(LState* L, const LValue& a)
+{
     if (a.type == ValueType::String) {
         return LValue(static_cast<int64_t>(a.string_len()));
     }
 
     if (a.type != ValueType::Table)
         return call_bin_metamethod(L, a, a, "__len");
-    LTable *t = static_cast<LTable *>(a.as_pointer());
+    LTable* t = static_cast<LTable*>(a.as_pointer());
 
-    if (LTable *mt = tbl_metatable(t)) {
+    if (LTable* mt = tbl_metatable(t)) {
         LValue mm = mt->gettable(LValue(L->intern_string("__len", 5)));
         if (mm.type != ValueType::Nil)
             return call_bin_metamethod(L, a, a, "__len");
@@ -1786,7 +1873,8 @@ CLX_INLINE_COLD LValue len(LState *L, const LValue &a) {
 }
 
 //------------------ Modulo with metamethod fallback
-CLX_INLINE LValue mod(LState *L, const LValue &a, const LValue &b) {
+CLX_INLINE LValue mod(LState* L, const LValue& a, const LValue& b)
+{
     if ((a.type == ValueType::Double || a.type == ValueType::Int64)
         && (b.type == ValueType::Double || b.type == ValueType::Int64)) {
         double l = (a.type == ValueType::Int64) ? static_cast<double>(a.val.payload.i64) : a.val.payload.f64;
@@ -1800,7 +1888,8 @@ CLX_INLINE LValue mod(LState *L, const LValue &a, const LValue &b) {
 }
 
 //------------------ Floor-division with metamethod fallback
-CLX_INLINE LValue idiv(LState *L, const LValue &a, const LValue &b) {
+CLX_INLINE LValue idiv(LState* L, const LValue& a, const LValue& b)
+{
     if ((a.type == ValueType::Double || a.type == ValueType::Int64)
         && (b.type == ValueType::Double || b.type == ValueType::Int64)) {
         double l = (a.type == ValueType::Int64) ? static_cast<double>(a.val.payload.i64) : a.val.payload.f64;
@@ -1814,7 +1903,8 @@ CLX_INLINE LValue idiv(LState *L, const LValue &a, const LValue &b) {
 }
 
 //------------------ Power with metamethod fallback
-CLX_INLINE LValue pow(LState *L, const LValue &a, const LValue &b) {
+CLX_INLINE LValue pow(LState* L, const LValue& a, const LValue& b)
+{
     if ((a.type == ValueType::Double || a.type == ValueType::Int64)
         && (b.type == ValueType::Double || b.type == ValueType::Int64)) {
         double l = (a.type == ValueType::Int64) ? static_cast<double>(a.val.payload.i64) : a.val.payload.f64;
@@ -1828,7 +1918,8 @@ CLX_INLINE LValue pow(LState *L, const LValue &a, const LValue &b) {
 }
 
 //------------------ Unary minus with metamethod fallback
-CLX_INLINE LValue unm(LState *L, const LValue &a) {
+CLX_INLINE LValue unm(LState* L, const LValue& a)
+{
     if (a.type == ValueType::Int64)
         return LValue(-static_cast<double>(a.val.payload.i64));
     if (a.type == ValueType::Double)
@@ -1840,14 +1931,16 @@ CLX_INLINE LValue unm(LState *L, const LValue &a) {
 }
 
 //------------------ Logical NOT
-CLX_INLINE LValue logical_not(const LValue &a) {
+CLX_INLINE LValue logical_not(const LValue& a)
+{
     return LValue(!a.as_bool());
 }
 
 //------------------ Multi-value concat (string builder fast path)
-CLX_INLINE_COLD LValue concat_multi(LState *L, const LValue *args, size_t count) {
+CLX_INLINE_COLD LValue concat_multi(LState* L, const LValue* args, size_t count)
+{
     if (count <= 8) [[likely]] {
-        const char *ptrs[8];
+        const char* ptrs[8];
         size_t lens[8];
         size_t total_len = 0;
         for (size_t i = 0; i < count; ++i) {
@@ -1866,7 +1959,7 @@ CLX_INLINE_COLD LValue concat_multi(LState *L, const LValue *args, size_t count)
                 } else {
                     lens[i] = static_cast<size_t>(std::snprintf(buf, sizeof(buf), "%.14g", args[i].val.payload.f64));
                 }
-                char *s = new char[lens[i]];
+                char* s = new char[lens[i]];
                 clx_memcpy(s, buf, lens[i]);
                 ptrs[i] = s;
             }
@@ -1874,7 +1967,7 @@ CLX_INLINE_COLD LValue concat_multi(LState *L, const LValue *args, size_t count)
         }
         if (total_len <= 6) {
             char buf[8];
-            char *bp = buf;
+            char* bp = buf;
             for (size_t i = 0; i < count; ++i) {
                 clx_memcpy(bp, ptrs[i], lens[i]);
                 bp += lens[i];
@@ -1884,10 +1977,10 @@ CLX_INLINE_COLD LValue concat_multi(LState *L, const LValue *args, size_t count)
             return LValue::istr(buf, static_cast<uint32_t>(total_len));
         }
         uint32_t len32 = static_cast<uint32_t>(total_len);
-        char *mem = new char[16 + total_len + 1]();
+        char* mem = new char[16 + total_len + 1]();
         clx_memcpy(mem, &len32, 4);
         clx_memcpy(mem + 8, &len32, 4);
-        char *p = mem + 16;
+        char* p = mem + 16;
         for (size_t i = 0; i < count; ++i) {
             clx_memcpy(p, ptrs[i], lens[i]);
             p += lens[i];
@@ -1897,7 +1990,7 @@ CLX_INLINE_COLD LValue concat_multi(LState *L, const LValue *args, size_t count)
         *p = '\0';
         uint64_t h = total_len <= 8 ? swar_hash_8(mem + 16, total_len) : wyhash_str(mem + 16, total_len);
         clx_memcpy(mem, &h, 8);
-        const char *result = L->string_pool.intern_preallocated(mem + 16, h, total_len);
+        const char* result = L->string_pool.intern_preallocated(mem + 16, h, total_len);
         return LValue(result);
     }
 
@@ -1914,35 +2007,39 @@ CLX_INLINE_COLD LValue concat_multi(LState *L, const LValue *args, size_t count)
     }
     std::string res;
     res.reserve(total_len);
-    for (const auto &p : parts)
+    for (const auto& p : parts)
         res += p;
     return LValue(L->intern_string(res));
 }
 
 //------------------ Creates a string LValue with inline encoding for short strings
-CLX_INLINE LValue make_string(LState *L, const char *s, size_t len) {
+CLX_INLINE LValue make_string(LState* L, const char* s, size_t len)
+{
     if (len <= 6)
         return LValue::istr(s, len);
     return LValue(L->intern_string(s, len));
 }
 
-CLX_INLINE LValue make_string(LState *L, const char *s) {
+CLX_INLINE LValue make_string(LState* L, const char* s)
+{
     size_t len = clx_strlen(s);
     if (len <= 6)
         return LValue::istr(s, len);
     return LValue(L->intern_string(s, len));
 }
 
-CLX_INLINE_HOT LValue make_string(LState *L, const std::string &s) {
+CLX_INLINE_HOT LValue make_string(LState* L, const std::string& s)
+{
     return make_string(L, s.data(), s.size());
 }
 
 //------------------ Creates a string LValue, trying pool lookup before heap allocation
-CLX_INLINE LValue make_string_pooled(LState *L, const char *s, size_t len) {
+CLX_INLINE LValue make_string_pooled(LState* L, const char* s, size_t len)
+{
     if (len <= 6)
         return LValue::istr(s, len);
     uint64_t h = len <= 8 ? swar_hash_8(s, len) : wyhash_str(s, len);
-    if (const char *hit = L->string_pool.lookup(s, len, h))
+    if (const char* hit = L->string_pool.lookup(s, len, h))
         return LValue(hit);
     return LValue(L->intern_string(s, len));
 }
@@ -1950,12 +2047,13 @@ CLX_INLINE LValue make_string_pooled(LState *L, const char *s, size_t len) {
 //------------------ Table read with __index fallback
 
 //--------- Slow Path (hash table lookup and metamethods)
-LValue table_get_slow(LState *L, const LValue &obj, const LValue &key);
+LValue table_get_slow(LState* L, const LValue& obj, const LValue& key);
 
 //---- fast path for array and inline cache, slow path for hash table lookup and metamethods
-CLX_INLINE_HOT LValue table_get(LState *L, const LValue &obj, const LValue &key) {
+CLX_INLINE_HOT LValue table_get(LState* L, const LValue& obj, const LValue& key)
+{
     if (obj.type == ValueType::Table) {
-        LTable *t = static_cast<LTable *>(obj.as_pointer());
+        LTable* t = static_cast<LTable*>(obj.as_pointer());
 
         if (key.type == ValueType::Int64) {
             int64_t idx = key.val.payload.i64;
@@ -1974,17 +2072,17 @@ CLX_INLINE_HOT LValue table_get(LState *L, const LValue &obj, const LValue &key)
             }
         }
 
-        LTableExt *ex = t->ext;
+        LTableExt* ex = t->ext;
         if (ex && ex->ic) {
             uint32_t ic_idx
                 = static_cast<uint32_t>(key.val.payload.u64 ^ (key.val.payload.u64 >> 17)
-                                        ^ (key.val.payload.u64 >> 33) ^ (key.val.payload.u64 >> 5)
-                                        ^ (key.val.payload.u64 >> 11))
+                      ^ (key.val.payload.u64 >> 33) ^ (key.val.payload.u64 >> 5)
+                      ^ (key.val.payload.u64 >> 11))
                 % LTABLE_IC_SIZE;
-            LTableInlineCache &_ic = ex->ic[ic_idx];
+            LTableInlineCache& _ic = ex->ic[ic_idx];
             if (_ic.key_payload == key.val.payload.u64 && _ic.table_ver == ex->hash_version
                 && _ic.entry_idx < ex->hash_size) {
-                HashEntry &_e = ex->entries[_ic.entry_idx];
+                HashEntry& _e = ex->entries[_ic.entry_idx];
                 if (_e.ktype != ValueType::Nil)
                     return LValue(_e.val, _e.vtype);
             }
@@ -1993,96 +2091,13 @@ CLX_INLINE_HOT LValue table_get(LState *L, const LValue &obj, const LValue &key)
     return table_get_slow(L, obj, key);
 }
 
-// CLX_INLINE LValue table_get(LState *L, const LValue &obj, const LValue &key) {
-//     LTable *mt = nullptr;
-//     LValue direct;
-
-//     if (obj.type == ValueType::Table) {
-//         LTable *t = static_cast<LTable *>(obj.as_pointer());
-//         if (key.type == ValueType::Int64) {
-//             int64_t idx = key.val.payload.i64;
-//             if (static_cast<uint64_t>(idx - 1) < t->array_cap) {
-//                 direct = LValue(t->array[idx - 1], t->array_types[idx - 1]);
-//             }
-//         } else if (key.type == ValueType::Double) {
-//             double d = key.val.payload.f64;
-//             int64_t idx = static_cast<int64_t>(d);
-//             if (d == static_cast<double>(idx) && static_cast<uint64_t>(idx - 1) < t->array_cap) {
-//                 direct = LValue(t->array[idx - 1], t->array_types[idx - 1]);
-//             }
-//         }
-//         if (direct.type == ValueType::Nil) {
-//             LTableExt *ex = t->ext;
-//             if (ex && ex->ic) {
-//                 uint32_t ic_idx
-//                     = static_cast<uint32_t>(key.val.payload.u64 ^ (key.val.payload.u64 >> 17)
-//                                             ^ (key.val.payload.u64 >> 33) ^ (key.val.payload.u64 >> 5)
-//                                             ^ (key.val.payload.u64 >> 11))
-//                     % LTABLE_IC_SIZE;
-//                 LTableInlineCache &_ic = ex->ic[ic_idx];
-//                 if (_ic.key_payload == key.val.payload.u64 && _ic.table_ver == ex->hash_version
-//                     && _ic.entry_idx < ex->hash_size) {
-//                     HashEntry &_e = ex->entries[_ic.entry_idx];
-//                     if (_e.ktype != ValueType::Nil)
-//                         return LValue(_e.val, _e.vtype);
-//                 }
-//             }
-//             direct = t->get_value(L, key);
-//         }
-//         if (direct.type != ValueType::Nil)
-//             return direct;
-//         mt = tbl_metatable(t);
-//     } else if (obj.type == ValueType::UserData) {
-//         LUserdata *ud = static_cast<LUserdata *>(obj.as_pointer());
-//         mt = ud->metatable;
-//     } else if (obj.type == ValueType::String) {
-//         mt = L->string_metatable;
-//         if (!mt)
-//             return LValue();
-//         LValue index = mt->gettable(LValue(L->intern_string("__index")));
-//         if (index.type == ValueType::Nil)
-//             return LValue();
-//         if (index.type == ValueType::Table)
-//             return table_get(L, index, key);
-//         if (index.type == ValueType::Function) {
-//             LValue args[2] = { obj, key };
-//             size_t prev = L->shadow_top;
-//             L->shadow_stack[L->shadow_top++] = { &args[0].val, &args[0].type };
-//             L->shadow_stack[L->shadow_top++] = { &args[1].val, &args[1].type };
-//             MultiValue mv = call_function(L, index, args, 2, "__index", 0);
-//             L->shadow_top = prev;
-//             return mv.count > 0 ? mv[0] : LValue();
-//         }
-//         return LValue();
-//     } else {
-//         return LValue();
-//     }
-
-//     if (!mt)
-//         return LValue();
-//     LValue index = mt->gettable(LValue(L->intern_string("__index")));
-//     if (index.type == ValueType::Nil)
-//         return LValue();
-//     if (index.type == ValueType::Function) {
-//         LValue args[2] = { obj, key };
-//         size_t prev = L->shadow_top;
-//         L->shadow_stack[L->shadow_top++] = { &args[0].val, &args[0].type };
-//         L->shadow_stack[L->shadow_top++] = { &args[1].val, &args[1].type };
-//         MultiValue mv = call_function(L, index, args, 2, "__index", 0);
-//         L->shadow_top = prev;
-//         return mv.count > 0 ? mv[0] : LValue();
-//     }
-//     if (index.type == ValueType::Table)
-//         return table_get(L, index, key);
-//     return LValue();
-// }
-
 //------------------ Table write with __newindex fallback
-CLX_INLINE void table_set(LState *L, const LValue &obj, const LValue &key, const LValue &val) {
-    LTable *mt = nullptr;
+CLX_INLINE void table_set(LState* L, const LValue& obj, const LValue& key, const LValue& val)
+{
+    LTable* mt = nullptr;
 
     if (obj.type == ValueType::Table) {
-        LTable *t = static_cast<LTable *>(obj.as_pointer());
+        LTable* t = static_cast<LTable*>(obj.as_pointer());
         if (key.type == ValueType::Int64) {
             int64_t k = key.val.payload.i64;
             if (static_cast<uint64_t>(k - 1) < t->array_cap) {
@@ -2106,7 +2121,7 @@ CLX_INLINE void table_set(LState *L, const LValue &obj, const LValue &key, const
         t->set_value(L, key, val);
         return;
     } else if (obj.type == ValueType::UserData) {
-        LUserdata *ud = static_cast<LUserdata *>(obj.as_pointer());
+        LUserdata* ud = static_cast<LUserdata*>(obj.as_pointer());
         mt = ud->metatable;
         if (!mt)
             return;
@@ -2129,12 +2144,13 @@ CLX_INLINE void table_set(LState *L, const LValue &obj, const LValue &key, const
 }
 
 //------------------ Integer-key table read (fast path)
-CLX_INLINE LValue table_get_int(LState *L, const LValue &obj, size_t idx) {
-    LTable *mt = nullptr;
+CLX_INLINE LValue table_get_int(LState* L, const LValue& obj, size_t idx)
+{
+    LTable* mt = nullptr;
     LValue key_val = LValue(static_cast<int64_t>(idx));
 
     if (obj.type == ValueType::Table) {
-        LTable *t = static_cast<LTable *>(obj.as_pointer());
+        LTable* t = static_cast<LTable*>(obj.as_pointer());
         if (idx - 1 < t->array_cap)
             return LValue(t->array[idx - 1], t->array_types[idx - 1]);
         LValue result = t->get_value(L, key_val);
@@ -2142,7 +2158,7 @@ CLX_INLINE LValue table_get_int(LState *L, const LValue &obj, size_t idx) {
             return result;
         mt = tbl_metatable(t);
     } else if (obj.type == ValueType::UserData) {
-        LUserdata *ud = static_cast<LUserdata *>(obj.as_pointer());
+        LUserdata* ud = static_cast<LUserdata*>(obj.as_pointer());
         mt = ud->metatable;
     } else {
         return LValue();
@@ -2168,11 +2184,12 @@ CLX_INLINE LValue table_get_int(LState *L, const LValue &obj, size_t idx) {
 }
 
 //------------------ Integer-key table write (fast path)
-CLX_INLINE void table_set_int(LState *L, const LValue &obj, size_t idx, const LValue &val) {
+CLX_INLINE void table_set_int(LState* L, const LValue& obj, size_t idx, const LValue& val)
+{
     LValue key_val = LValue(static_cast<int64_t>(idx));
 
     if (obj.type == ValueType::Table) {
-        LTable *t = static_cast<LTable *>(obj.as_pointer());
+        LTable* t = static_cast<LTable*>(obj.as_pointer());
         if (idx - 1 < t->array_cap) {
             t->array[idx - 1] = val.val;
             t->array_types[idx - 1] = val.type;
@@ -2185,7 +2202,7 @@ CLX_INLINE void table_set_int(LState *L, const LValue &obj, size_t idx, const LV
     }
 
     if (obj.type == ValueType::UserData) {
-        LUserdata *ud = static_cast<LUserdata *>(obj.as_pointer());
+        LUserdata* ud = static_cast<LUserdata*>(obj.as_pointer());
         if (!ud->metatable)
             return;
         LValue newindex = ud->metatable->gettable(LValue(L->intern_string("__newindex")));
@@ -2206,20 +2223,21 @@ CLX_INLINE void table_set_int(LState *L, const LValue &obj, size_t idx, const LV
 }
 
 //------------------ Direct table write (skips existence check / metatable)
-CLX_INLINE_HOT void table_set_direct(LState *L, const LValue &obj, const LValue &key, const LValue &val) {
+CLX_INLINE_HOT void table_set_direct(LState* L, const LValue& obj, const LValue& key, const LValue& val)
+{
     if (obj.type == ValueType::Table) {
-        LTable *t = static_cast<LTable *>(obj.as_pointer());
-        LTableExt *ex = t->ext;
+        LTable* t = static_cast<LTable*>(obj.as_pointer());
+        LTableExt* ex = t->ext;
         if (val.type != ValueType::Nil && ex && ex->hash_size > 0 && ex->ic) {
             uint32_t ic_idx
                 = static_cast<uint32_t>(key.val.payload.u64 ^ (key.val.payload.u64 >> 17)
-                                        ^ (key.val.payload.u64 >> 33) ^ (key.val.payload.u64 >> 5)
-                                        ^ (key.val.payload.u64 >> 11))
+                      ^ (key.val.payload.u64 >> 33) ^ (key.val.payload.u64 >> 5)
+                      ^ (key.val.payload.u64 >> 11))
                 % LTABLE_IC_SIZE;
-            LTableInlineCache &_ic = ex->ic[ic_idx];
+            LTableInlineCache& _ic = ex->ic[ic_idx];
             if (_ic.key_payload == key.val.payload.u64 && _ic.table_ver == ex->hash_version
                 && _ic.entry_idx < ex->hash_size) {
-                HashEntry &_e = ex->entries[_ic.entry_idx];
+                HashEntry& _e = ex->entries[_ic.entry_idx];
                 if (_e.ktype != ValueType::Nil) {
                     _e.val = val.val;
                     _e.vtype = val.type;
@@ -2234,11 +2252,12 @@ CLX_INLINE_HOT void table_set_direct(LState *L, const LValue &obj, const LValue 
 }
 
 //------------------ Direct table arithmetic: t[k] = t[k] op amount
-template<typename Op, typename NilCase>
-CLX_INLINE_HOT void table_op(LState *L, const LValue &obj, const LValue &key, double amount, Op op, NilCase nil_case,
-    LValue (*fallback)(LState *, const LValue &, const LValue &)) {
+template <typename Op, typename NilCase>
+CLX_INLINE_HOT void table_op(LState* L, const LValue& obj, const LValue& key, double amount, Op op, NilCase nil_case,
+    LValue (*fallback)(LState*, const LValue&, const LValue&))
+{
     if (obj.type == ValueType::Table) {
-        LTable *t = static_cast<LTable *>(obj.val.payload.ptr);
+        LTable* t = static_cast<LTable*>(obj.val.payload.ptr);
         LValue val = t->gettable(key);
         if (val.type == ValueType::Nil) {
             t->settable(key, nil_case(amount));
@@ -2256,85 +2275,88 @@ CLX_INLINE_HOT void table_op(LState *L, const LValue &obj, const LValue &key, do
     table_set(L, obj, key, fallback(L, table_get(L, obj, key), LValue(amount)));
 }
 
-CLX_INLINE_HOT void table_increment(LState *L, const LValue &obj, const LValue &key, double amount) {
+CLX_INLINE_HOT void table_increment(LState* L, const LValue& obj, const LValue& key, double amount)
+{
     table_op(L, obj, key, amount, [](double a, double b) { return a + b; }, [](double b) { return LValue(b); }, add);
 }
 
-CLX_INLINE_HOT void table_decrement(LState *L, const LValue &obj, const LValue &key, double amount) {
+CLX_INLINE_HOT void table_decrement(LState* L, const LValue& obj, const LValue& key, double amount)
+{
     table_op(L, obj, key, amount, [](double a, double b) { return a - b; }, [](double b) { return LValue(-b); }, sub);
 }
 
-CLX_INLINE_HOT void table_multiply(LState *L, const LValue &obj, const LValue &key, double amount) {
+CLX_INLINE_HOT void table_multiply(LState* L, const LValue& obj, const LValue& key, double amount)
+{
     table_op(L, obj, key, amount, [](double a, double b) { return a * b; }, [](double b) { return LValue(0.0); }, mul);
 }
 
-CLX_INLINE_HOT void table_divide(LState *L, const LValue &obj, const LValue &key, double amount) {
+CLX_INLINE_HOT void table_divide(LState* L, const LValue& obj, const LValue& key, double amount)
+{
     table_op(
         L, obj, key, amount, [](double a, double b) { return a / b; }, [](double b) { return LValue(0.0 / b); }, div);
 }
 
-MultiValue str_len(LState *, const LValue *, size_t);
-MultiValue str_sub(LState *, const LValue *, size_t);
-MultiValue str_reverse(LState *, const LValue *, size_t);
-MultiValue str_lower(LState *, const LValue *, size_t);
-MultiValue str_upper(LState *, const LValue *, size_t);
-MultiValue str_rep(LState *, const LValue *, size_t);
-MultiValue str_byte(LState *, const LValue *, size_t);
-MultiValue str_char(LState *, const LValue *, size_t);
-MultiValue str_dump(LState *, const LValue *, size_t);
-MultiValue str_format(LState *, const LValue *, size_t);
-MultiValue str_find(LState *, const LValue *, size_t);
-MultiValue str_match(LState *, const LValue *, size_t);
-MultiValue str_gmatch(LState *, const LValue *, size_t);
-MultiValue str_gsub(LState *, const LValue *, size_t);
-MultiValue str_pack(LState *, const LValue *, size_t);
-MultiValue str_packsize(LState *, const LValue *, size_t);
-MultiValue str_unpack(LState *, const LValue *, size_t);
+MultiValue str_len(LState*, const LValue*, size_t);
+MultiValue str_sub(LState*, const LValue*, size_t);
+MultiValue str_reverse(LState*, const LValue*, size_t);
+MultiValue str_lower(LState*, const LValue*, size_t);
+MultiValue str_upper(LState*, const LValue*, size_t);
+MultiValue str_rep(LState*, const LValue*, size_t);
+MultiValue str_byte(LState*, const LValue*, size_t);
+MultiValue str_char(LState*, const LValue*, size_t);
+MultiValue str_dump(LState*, const LValue*, size_t);
+MultiValue str_format(LState*, const LValue*, size_t);
+MultiValue str_find(LState*, const LValue*, size_t);
+MultiValue str_match(LState*, const LValue*, size_t);
+MultiValue str_gmatch(LState*, const LValue*, size_t);
+MultiValue str_gsub(LState*, const LValue*, size_t);
+MultiValue str_pack(LState*, const LValue*, size_t);
+MultiValue str_packsize(LState*, const LValue*, size_t);
+MultiValue str_unpack(LState*, const LValue*, size_t);
 
-MultiValue table_concat(LState *, const LValue *, size_t);
-MultiValue table_insert(LState *, const LValue *, size_t);
-MultiValue table_remove(LState *, const LValue *, size_t);
-MultiValue table_sort(LState *, const LValue *, size_t);
-MultiValue table_pack(LState *, const LValue *, size_t);
-MultiValue table_unpack(LState *, const LValue *, size_t);
-MultiValue table_move(LState *, const LValue *, size_t);
+MultiValue table_concat(LState*, const LValue*, size_t);
+MultiValue table_insert(LState*, const LValue*, size_t);
+MultiValue table_remove(LState*, const LValue*, size_t);
+MultiValue table_sort(LState*, const LValue*, size_t);
+MultiValue table_pack(LState*, const LValue*, size_t);
+MultiValue table_unpack(LState*, const LValue*, size_t);
+MultiValue table_move(LState*, const LValue*, size_t);
 
-void luastd_base(LState *L);
-void luastd_package(LState *L);
-void luastd_math(LState *L);
-void luastd_coroutine(LState *L);
-void luastd_string(LState *L);
-void luastd_table(LState *L);
-void luastd_os(LState *L);
-void luastd_utf8(LState *L);
-void luastd_io(LState *L);
-void luastd_debug(LState *L);
+void luastd_base(LState* L);
+void luastd_package(LState* L);
+void luastd_math(LState* L);
+void luastd_coroutine(LState* L);
+void luastd_string(LState* L);
+void luastd_table(LState* L);
+void luastd_os(LState* L);
+void luastd_utf8(LState* L);
+void luastd_io(LState* L);
 
 //------------------ Gets a global variable
-LValue get_global(LState *L, const char *name);
+LValue get_global(LState* L, const char* name);
 //------------------ Sets a global variable
-void set_global(LState *L, const char *name, const LValue &val);
+void set_global(LState* L, const char* name, const LValue& val);
 
 //------------------ Creates a new coroutine thread
-LValue create_thread(LState *L, const LValue &func, double stack_size = 1048576.0);
+LValue create_thread(LState* L, const LValue& func, double stack_size = 1048576.0);
 //------------------ Allocates a new userdata
-LValue newuserdata(LState *L, size_t size);
+LValue newuserdata(LState* L, size_t size);
 //------------------ Resumes a coroutine
-MultiValue resume(LState *L, const LValue &thread, const LValue *args, size_t count);
+MultiValue resume(LState* L, const LValue& thread, const LValue* args, size_t count);
 //------------------ Yields from a coroutine
-MultiValue yield(LState *L, const LValue *args, size_t count);
+MultiValue yield(LState* L, const LValue* args, size_t count);
 //------------------ Closes a coroutine
-MultiValue close_thread(LState *L, const LValue &thread);
+MultiValue close_thread(LState* L, const LValue& thread);
 
 //------------------ Opens CLX state
-LState *open(int argc = 0, char *argv[] = nullptr);
+LState* open(int argc = 0, char* argv[] = nullptr);
 //------------------ Opens all standard libraries
-void openlibs(LState *L);
+void openlibs(LState* L);
 //------------------ Closes CLX state
-void close(LState *L);
+void close(LState* L);
 
 //------------------ Sets lazy-initialized functions on a table
-void set_lazy_funcs(LState *L, const LValue &table, const LazyReg *regs, size_t count);
+void set_lazy_funcs(LState* L, const LValue& table, const LazyReg* regs, size_t count);
 
 }
 

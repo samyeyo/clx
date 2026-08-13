@@ -5,24 +5,25 @@
 // │  load_builtin.cpp · load/loadfile/dofile    │
 // └─────────────────────────────────────────────┘
 
-#include <clx.h>
-#include "vm_function_object.h"
 #include "dynamic_vm.h"
 #include "vm_convert.h"
+#include "vm_function_object.h"
+#include <clx.h>
 #include <cstdio>
 #include <fstream>
 
 namespace clx {
 
 //------------------ sync_vm_package_path - copy clx's package.path to Lua VM
-static void sync_vm_package_path(LState *L, DynamicVM *vm) {
-    lua_State *luaL = vm->lua_L();
+static void sync_vm_package_path(LState* L, DynamicVM* vm)
+{
+    lua_State* luaL = vm->lua_L();
     if (!luaL)
         return;
     LValue pkg = get_global(L, "package");
     if (pkg.type != Table)
         return;
-    LTable *pkg_tbl = static_cast<LTable *>(pkg.as_pointer());
+    LTable* pkg_tbl = static_cast<LTable*>(pkg.as_pointer());
     LValue path = pkg_tbl->gettable(L->intern_lvalue("path", 4));
     if (path.type != String)
         return;
@@ -37,14 +38,15 @@ static void sync_vm_package_path(LState *L, DynamicVM *vm) {
 }
 
 //------------------ clx_load - load([chunk [, chunkname [, mode [, env]]]])
-static MultiValue clx_load(LState *L, const LValue *args, size_t count) {
-    DynamicVM *vm = DynamicVM::acquire(L);
+static MultiValue clx_load(LState* L, const LValue* args, size_t count)
+{
+    DynamicVM* vm = DynamicVM::acquire(L);
     if (!vm) {
         return MultiValue(LValue(false), LValue(L->intern_string("dynamic loading disabled")));
     }
     sync_vm_package_path(L, vm);
 
-    const char *src = nullptr;
+    const char* src = nullptr;
     size_t len = 0;
     if (count > 0 && args[0].type != Nil) {
         LValue sv = args[0];
@@ -57,13 +59,13 @@ static MultiValue clx_load(LState *L, const LValue *args, size_t count) {
         return MultiValue(LValue(false), LValue(L->intern_string("load(): no chunk given")));
     }
 
-    const char *chunkname = nullptr;
+    const char* chunkname = nullptr;
     if (count > 1 && args[1].type != Nil) {
         if (args[1].type != String)
             throw_runtime_error("bad argument #2 to 'load' (string expected)");
         chunkname = args[1].as_string();
     }
-    const char *mode = "bt";
+    const char* mode = "bt";
     if (count > 2 && args[2].type != Nil) {
         if (args[2].type != String)
             throw_runtime_error("bad argument #3 to 'load' (string expected)");
@@ -84,13 +86,14 @@ static MultiValue clx_load(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ clx_loadfile - loadfile([path [, mode [, env]]])
-static MultiValue clx_loadfile(LState *L, const LValue *args, size_t count) {
-    DynamicVM *vm = DynamicVM::acquire(L);
+static MultiValue clx_loadfile(LState* L, const LValue* args, size_t count)
+{
+    DynamicVM* vm = DynamicVM::acquire(L);
     if (!vm) {
         return MultiValue(LValue(false), LValue(L->intern_string("dynamic loading disabled")));
     }
-    const char *path = nullptr;
-    const char *mode = "bt";
+    const char* path = nullptr;
+    const char* mode = "bt";
     int env_ref = vm->default_env_registry_ref();
 
     if (count > 0 && args[0].type != Nil) {
@@ -116,7 +119,8 @@ static MultiValue clx_loadfile(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ clx_dofile - loadfile(path)() with error propagation
-static MultiValue clx_dofile(LState *L, const LValue *args, size_t count) {
+static MultiValue clx_dofile(LState* L, const LValue* args, size_t count)
+{
     MultiValue loaded = clx_loadfile(L, args, count);
     if (loaded.count < 1 || loaded[0].type != Function)
         return MultiValue(LValue(false), loaded.count > 1 ? loaded[1] : LValue());
@@ -128,10 +132,11 @@ static MultiValue clx_dofile(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ register_load_builtins - called from openlibs.cpp
-extern "C" void clx_register_load_builtins(clx::LState *L) {
+extern "C" void clx_register_load_builtins(clx::LState* L)
+{
     using namespace clx;
     LValue pkg = get_global(L, "package");
-    LTable *pkg_tbl = (pkg.type == Table) ? static_cast<LTable *>(pkg.as_pointer()) : nullptr;
+    LTable* pkg_tbl = (pkg.type == Table) ? static_cast<LTable*>(pkg.as_pointer()) : nullptr;
 
     LValue load_fn = L->create_closure(clx_load);
     LValue loadfile_fn = L->create_closure(clx_loadfile);

@@ -14,18 +14,18 @@ namespace clx {
 
 //------------------ NativeBridge - opaque handle exposed to Lua as a C closure
 struct NativeBridge {
-    DynamicVM *vm;
+    DynamicVM* vm;
     LValue clx_callable;
     int registry_ref;
 };
 
 //------------------ create_bridge - wrap a clx LValue as a Lua C closure
-NativeBridge *create_bridge(LState *clx_L, lua_State *L, const LValue &callable);
+NativeBridge* create_bridge(LState* clx_L, lua_State* L, const LValue& callable);
 
 }
 
 extern "C" {
-int clx_vm_native_bridge_call(lua_State *L);
+int clx_vm_native_bridge_call(lua_State* L);
 }
 
 #endif

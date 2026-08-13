@@ -8,32 +8,32 @@
 #include "vm_convert.h"
 #include "dynamic_vm.h"
 #include "vm_function_object.h"
-#include "vm_table_proxy.h"
 #include "vm_native_bridge.h"
+#include "vm_table_proxy.h"
 
 #include <clx.h>
 
-#include <cstring>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 
-extern "C" int clx_vm_userdata_index(lua_State *L);
-extern "C" int clx_vm_proxy_index(lua_State *L);
-extern "C" int clx_vm_proxy_newindex(lua_State *L);
-extern "C" int clx_vm_proxy_pairs(lua_State *L);
-extern "C" int clx_vm_proxy_len(lua_State *L);
-extern "C" int clx_vm_proxy_gc(lua_State *L);
-extern "C" int clx_vm_proxy_close(lua_State *L);
-extern "C" int clx_vm_proxy_call(lua_State *L);
-extern "C" int clx_vm_env_index(lua_State *L);
-extern "C" int clx_vm_env_newindex(lua_State *L);
-extern "C" int clx_vm_env_pairs(lua_State *L);
-extern "C" int clx_vm_env_pairs_iter(lua_State *L);
+extern "C" int clx_vm_userdata_index(lua_State* L);
+extern "C" int clx_vm_proxy_index(lua_State* L);
+extern "C" int clx_vm_proxy_newindex(lua_State* L);
+extern "C" int clx_vm_proxy_pairs(lua_State* L);
+extern "C" int clx_vm_proxy_len(lua_State* L);
+extern "C" int clx_vm_proxy_gc(lua_State* L);
+extern "C" int clx_vm_proxy_close(lua_State* L);
+extern "C" int clx_vm_proxy_call(lua_State* L);
+extern "C" int clx_vm_env_index(lua_State* L);
+extern "C" int clx_vm_env_newindex(lua_State* L);
+extern "C" int clx_vm_env_pairs(lua_State* L);
+extern "C" int clx_vm_env_pairs_iter(lua_State* L);
 
 //------------------ Thread-local conversion cache - circular reference detection during Lua table-to-clx LTable conversion
 namespace {
 struct ConvertCache {
-    std::unordered_map<const void *, clx::LValue> map;
+    std::unordered_map<const void*, clx::LValue> map;
     int depth = 0;
 };
 
@@ -43,7 +43,8 @@ thread_local ConvertCache s_convert_cache;
 namespace clx {
 
 //------------------ clx_to_vm_value_
-void clx_to_vm_value_(LState *clx_L, lua_State *L, const LValue &v) {
+void clx_to_vm_value_(LState* clx_L, lua_State* L, const LValue& v)
+{
     switch (v.type) {
     case Nil:
         lua_pushnil(L);
@@ -69,7 +70,7 @@ void clx_to_vm_value_(LState *clx_L, lua_State *L, const LValue &v) {
         }
         return;
     case String: {
-        const char *s = v.as_string();
+        const char* s = v.as_string();
         uint32_t len = v.string_len();
         lua_pushlstring(L, s ? s : "", len);
         return;
@@ -77,42 +78,42 @@ void clx_to_vm_value_(LState *clx_L, lua_State *L, const LValue &v) {
     case Table:
         if (v.as_pointer()) {
 
-            LHeader *h = v.as_pointer();
-            ProxyNode *node = static_cast<ProxyNode *>(lua_newuserdata(L, sizeof(ProxyNode)));
+            LHeader* h = v.as_pointer();
+            ProxyNode* node = static_cast<ProxyNode*>(lua_newuserdata(L, sizeof(ProxyNode)));
             node->header = h;
             node->prev = nullptr;
             node->next = nullptr;
 
-            DynamicVM *vm = DynamicVM::acquire(clx_L);
+            DynamicVM* vm = DynamicVM::acquire(clx_L);
             vm->link_proxy(node);
 
             if (luaL_newmetatable(L, "clx_proxy")) {
 
-                lua_pushlightuserdata(L, static_cast<void *>(clx_L));
+                lua_pushlightuserdata(L, static_cast<void*>(clx_L));
                 lua_pushcclosure(L, clx_vm_proxy_index, 1);
                 lua_setfield(L, -2, "__index");
 
-                lua_pushlightuserdata(L, static_cast<void *>(clx_L));
+                lua_pushlightuserdata(L, static_cast<void*>(clx_L));
                 lua_pushcclosure(L, clx_vm_proxy_newindex, 1);
                 lua_setfield(L, -2, "__newindex");
 
-                lua_pushlightuserdata(L, static_cast<void *>(clx_L));
+                lua_pushlightuserdata(L, static_cast<void*>(clx_L));
                 lua_pushcclosure(L, clx_vm_proxy_pairs, 1);
                 lua_setfield(L, -2, "__pairs");
 
-                lua_pushlightuserdata(L, static_cast<void *>(clx_L));
+                lua_pushlightuserdata(L, static_cast<void*>(clx_L));
                 lua_pushcclosure(L, clx_vm_proxy_len, 1);
                 lua_setfield(L, -2, "__len");
 
-                lua_pushlightuserdata(L, static_cast<void *>(clx_L));
+                lua_pushlightuserdata(L, static_cast<void*>(clx_L));
                 lua_pushcclosure(L, clx_vm_proxy_call, 1);
                 lua_setfield(L, -2, "__call");
 
-                lua_pushlightuserdata(L, static_cast<void *>(clx_L));
+                lua_pushlightuserdata(L, static_cast<void*>(clx_L));
                 lua_pushcclosure(L, clx_vm_proxy_close, 1);
                 lua_setfield(L, -2, "__close");
 
-                lua_pushlightuserdata(L, static_cast<void *>(clx_L));
+                lua_pushlightuserdata(L, static_cast<void*>(clx_L));
                 lua_pushcclosure(L, clx_vm_proxy_gc, 1);
                 lua_setfield(L, -2, "__gc");
 
@@ -129,7 +130,7 @@ void clx_to_vm_value_(LState *clx_L, lua_State *L, const LValue &v) {
     case Function:
         if (v.as_pointer()) {
 
-            NativeBridge *nb = create_bridge(clx_L, L, v);
+            NativeBridge* nb = create_bridge(clx_L, L, v);
             lua_rawgeti(L, LUA_REGISTRYINDEX, nb->registry_ref);
         } else {
             lua_pushnil(L);
@@ -138,20 +139,20 @@ void clx_to_vm_value_(LState *clx_L, lua_State *L, const LValue &v) {
     case UserData: {
 
         if (v.as_pointer()) {
-            LHeader *h = v.as_pointer();
-            ProxyNode *node = static_cast<ProxyNode *>(lua_newuserdata(L, sizeof(ProxyNode)));
+            LHeader* h = v.as_pointer();
+            ProxyNode* node = static_cast<ProxyNode*>(lua_newuserdata(L, sizeof(ProxyNode)));
             node->header = h;
             node->prev = nullptr;
             node->next = nullptr;
-            DynamicVM *vm = DynamicVM::acquire(clx_L);
+            DynamicVM* vm = DynamicVM::acquire(clx_L);
             vm->link_proxy(node);
             if (luaL_newmetatable(L, "clx_userdata")) {
 
-                lua_pushlightuserdata(L, static_cast<void *>(clx_L));
+                lua_pushlightuserdata(L, static_cast<void*>(clx_L));
                 lua_pushcclosure(L, clx_vm_userdata_index, 1);
                 lua_setfield(L, -2, "__index");
 
-                lua_pushlightuserdata(L, static_cast<void *>(clx_L));
+                lua_pushlightuserdata(L, static_cast<void*>(clx_L));
                 lua_pushcclosure(L, clx_vm_proxy_gc, 1);
                 lua_setfield(L, -2, "__gc");
                 lua_setmetatable(L, -2);
@@ -175,7 +176,8 @@ void clx_to_vm_value_(LState *clx_L, lua_State *L, const LValue &v) {
 }
 
 //------------------ vm_to_clx_value_
-LValue vm_to_clx_value_(LState *clx_L, lua_State *L, int idx) {
+LValue vm_to_clx_value_(LState* clx_L, lua_State* L, int idx)
+{
     int t = lua_type(L, idx);
     switch (t) {
     case LUA_TNIL:
@@ -191,7 +193,7 @@ LValue vm_to_clx_value_(LState *clx_L, lua_State *L, int idx) {
     }
     case LUA_TSTRING: {
         size_t len = 0;
-        const char *s = lua_tolstring(L, idx, &len);
+        const char* s = lua_tolstring(L, idx, &len);
         if (!s)
             return LValue();
         if (len <= 6) {
@@ -204,7 +206,7 @@ LValue vm_to_clx_value_(LState *clx_L, lua_State *L, int idx) {
         static constexpr int MAX_CONVERT_DEPTH = 128;
         if (s_convert_cache.depth >= MAX_CONVERT_DEPTH) {
             char buf[256];
-            const void *tp = lua_topointer(L, idx);
+            const void* tp = lua_topointer(L, idx);
             std::snprintf(buf, sizeof(buf), "vm_to_clx_value_ maximum conversion depth (%d) exceeded at table %p",
                 MAX_CONVERT_DEPTH, tp);
             throw clx::LRuntimeException(clx::LValue(clx_L->intern_string(buf)));
@@ -214,7 +216,7 @@ LValue vm_to_clx_value_(LState *clx_L, lua_State *L, int idx) {
             s_convert_cache.map.clear();
         s_convert_cache.depth++;
 
-        const void *tbl_key = lua_topointer(L, idx);
+        const void* tbl_key = lua_topointer(L, idx);
         if (tbl_key) {
             auto it = s_convert_cache.map.find(tbl_key);
             if (it != s_convert_cache.map.end()) {
@@ -224,7 +226,7 @@ LValue vm_to_clx_value_(LState *clx_L, lua_State *L, int idx) {
         }
 
         LValue t = clx_L->create_table();
-        LTable *tbl = static_cast<LTable *>(t.as_pointer());
+        LTable* tbl = static_cast<LTable*>(t.as_pointer());
 
         if (tbl_key)
             s_convert_cache.map[tbl_key] = t;
@@ -239,7 +241,7 @@ LValue vm_to_clx_value_(LState *clx_L, lua_State *L, int idx) {
             LValue meta_copy = vm_to_clx_value_(clx_L, L, -1);
             lua_pop(L, 1);
             if (meta_copy.type == Table) {
-                LTable *meta_tbl = static_cast<LTable *>(meta_copy.as_pointer());
+                LTable* meta_tbl = static_cast<LTable*>(meta_copy.as_pointer());
 
                 meta_tbl->settable(clx_L->str_gc, LValue());
                 tbl_set_metatable(tbl, meta_tbl);
@@ -295,9 +297,9 @@ LValue vm_to_clx_value_(LState *clx_L, lua_State *L, int idx) {
 
             if (lua_rawequal(L, -1, -2) == 1) {
                 lua_pop(L, 2);
-                void *ud = lua_touserdata(L, idx);
+                void* ud = lua_touserdata(L, idx);
                 if (ud) {
-                    LHeader *h = *static_cast<LHeader **>(ud);
+                    LHeader* h = *static_cast<LHeader**>(ud);
                     return LValue(h);
                 }
                 return LValue();
@@ -309,9 +311,9 @@ LValue vm_to_clx_value_(LState *clx_L, lua_State *L, int idx) {
 
             if (lua_rawequal(L, -1, -2) == 1) {
                 lua_pop(L, 2);
-                void *ud = lua_touserdata(L, idx);
+                void* ud = lua_touserdata(L, idx);
                 if (ud) {
-                    LHeader *h = *static_cast<LHeader **>(ud);
+                    LHeader* h = *static_cast<LHeader**>(ud);
                     return LValue(Thread, h);
                 }
                 return LValue();
@@ -322,9 +324,9 @@ LValue vm_to_clx_value_(LState *clx_L, lua_State *L, int idx) {
 
             if (lua_rawequal(L, -1, -2) == 1) {
                 lua_pop(L, 2);
-                void *ud = lua_touserdata(L, idx);
+                void* ud = lua_touserdata(L, idx);
                 if (ud) {
-                    LHeader *h = *static_cast<LHeader **>(ud);
+                    LHeader* h = *static_cast<LHeader**>(ud);
                     return LValue(UserData, h);
                 }
                 return LValue();
@@ -335,10 +337,10 @@ LValue vm_to_clx_value_(LState *clx_L, lua_State *L, int idx) {
 
             if (lua_rawequal(L, -1, -2) == 1) {
                 lua_pop(L, 2);
-                LHeader *h = nullptr;
-                void *ud = lua_touserdata(L, idx);
+                LHeader* h = nullptr;
+                void* ud = lua_touserdata(L, idx);
                 if (ud)
-                    h = *static_cast<LHeader **>(ud);
+                    h = *static_cast<LHeader**>(ud);
                 if (h)
                     return LValue(h);
                 return LValue();
@@ -360,8 +362,9 @@ LValue vm_to_clx_value_(LState *clx_L, lua_State *L, int idx) {
 }
 
 //------------------ clx_vm_capture_error_
-LValue clx_vm_capture_error_(LState *clx_L, lua_State *L) {
-    const char *msg = lua_tostring(L, -1);
+LValue clx_vm_capture_error_(LState* clx_L, lua_State* L)
+{
+    const char* msg = lua_tostring(L, -1);
     if (!msg)
         return LValue();
     size_t len = std::strlen(msg);
@@ -371,7 +374,8 @@ LValue clx_vm_capture_error_(LState *clx_L, lua_State *L) {
 }
 
 //------------------ clx_vm_install_traceback_
-int clx_vm_install_traceback_(lua_State *L) {
+int clx_vm_install_traceback_(lua_State* L)
+{
 
     return 0;
 }
@@ -380,9 +384,10 @@ int clx_vm_install_traceback_(lua_State *L) {
 
 extern "C" {
 
-int clx_vm_env_index(lua_State *L) {
-    clx::LState *clx_L = static_cast<clx::LState *>(lua_touserdata(L, lua_upvalueindex(1)));
-    clx::LTable *tbl = static_cast<clx::LTable *>(lua_touserdata(L, lua_upvalueindex(2)));
+int clx_vm_env_index(lua_State* L)
+{
+    clx::LState* clx_L = static_cast<clx::LState*>(lua_touserdata(L, lua_upvalueindex(1)));
+    clx::LTable* tbl = static_cast<clx::LTable*>(lua_touserdata(L, lua_upvalueindex(2)));
     if (!clx_L || !tbl) {
         lua_pushnil(L);
         return 1;
@@ -394,9 +399,10 @@ int clx_vm_env_index(lua_State *L) {
     return 1;
 }
 
-extern "C" int clx_vm_env_newindex(lua_State *L) {
-    clx::LState *clx_L = static_cast<clx::LState *>(lua_touserdata(L, lua_upvalueindex(1)));
-    clx::LTable *tbl = static_cast<clx::LTable *>(lua_touserdata(L, lua_upvalueindex(2)));
+extern "C" int clx_vm_env_newindex(lua_State* L)
+{
+    clx::LState* clx_L = static_cast<clx::LState*>(lua_touserdata(L, lua_upvalueindex(1)));
+    clx::LTable* tbl = static_cast<clx::LTable*>(lua_touserdata(L, lua_upvalueindex(2)));
     if (!clx_L || !tbl)
         return 0;
     clx::LValue key = vm_to_clx_value_(clx_L, L, 2);
@@ -405,9 +411,10 @@ extern "C" int clx_vm_env_newindex(lua_State *L) {
     return 0;
 }
 
-extern "C" int clx_vm_env_pairs(lua_State *L) {
-    clx::LState *clx_L = static_cast<clx::LState *>(lua_touserdata(L, lua_upvalueindex(1)));
-    clx::LTable *tbl = static_cast<clx::LTable *>(lua_touserdata(L, lua_upvalueindex(2)));
+extern "C" int clx_vm_env_pairs(lua_State* L)
+{
+    clx::LState* clx_L = static_cast<clx::LState*>(lua_touserdata(L, lua_upvalueindex(1)));
+    clx::LTable* tbl = static_cast<clx::LTable*>(lua_touserdata(L, lua_upvalueindex(2)));
     if (!clx_L || !tbl) {
 
         lua_pushnil(L);
@@ -416,8 +423,8 @@ extern "C" int clx_vm_env_pairs(lua_State *L) {
         return 3;
     }
 
-    lua_pushlightuserdata(L, static_cast<void *>(clx_L));
-    lua_pushlightuserdata(L, static_cast<void *>(tbl));
+    lua_pushlightuserdata(L, static_cast<void*>(clx_L));
+    lua_pushlightuserdata(L, static_cast<void*>(tbl));
     lua_pushinteger(L, 0);
     lua_pushcclosure(L, clx_vm_env_pairs_iter, 3);
 
@@ -426,9 +433,10 @@ extern "C" int clx_vm_env_pairs(lua_State *L) {
     return 3;
 }
 
-extern "C" int clx_vm_env_pairs_iter(lua_State *L) {
-    clx::LState *clx_L = static_cast<clx::LState *>(lua_touserdata(L, lua_upvalueindex(1)));
-    clx::LTable *tbl = static_cast<clx::LTable *>(lua_touserdata(L, lua_upvalueindex(2)));
+extern "C" int clx_vm_env_pairs_iter(lua_State* L)
+{
+    clx::LState* clx_L = static_cast<clx::LState*>(lua_touserdata(L, lua_upvalueindex(1)));
+    clx::LTable* tbl = static_cast<clx::LTable*>(lua_touserdata(L, lua_upvalueindex(2)));
     if (!clx_L || !tbl)
         return 0;
     size_t idx = static_cast<size_t>(lua_tointeger(L, lua_upvalueindex(3)));
@@ -448,19 +456,20 @@ extern "C" int clx_vm_env_pairs_iter(lua_State *L) {
 }
 
 //------------------ clx_userdata __index
-extern "C" int clx_vm_userdata_index(lua_State *L) {
-    clx::LState *clx_L = static_cast<clx::LState *>(lua_touserdata(L, lua_upvalueindex(1)));
-    void *ud_raw = lua_touserdata(L, 1);
+extern "C" int clx_vm_userdata_index(lua_State* L)
+{
+    clx::LState* clx_L = static_cast<clx::LState*>(lua_touserdata(L, lua_upvalueindex(1)));
+    void* ud_raw = lua_touserdata(L, 1);
     if (!clx_L || !ud_raw) {
         lua_pushnil(L);
         return 1;
     }
-    clx::LHeader *h = *static_cast<clx::LHeader **>(ud_raw);
+    clx::LHeader* h = *static_cast<clx::LHeader**>(ud_raw);
     if (!h || h->type != static_cast<uint8_t>(clx::UserData)) {
         lua_pushnil(L);
         return 1;
     }
-    clx::LUserdata *ud = static_cast<clx::LUserdata *>(h);
+    clx::LUserdata* ud = static_cast<clx::LUserdata*>(h);
     if (!ud->metatable) {
         lua_pushnil(L);
         return 1;
@@ -472,71 +481,75 @@ extern "C" int clx_vm_userdata_index(lua_State *L) {
 }
 
 //------------------ clx_proxy metamethods
-extern "C" int clx_vm_proxy_index(lua_State *L) {
-    clx::LState *clx_L = static_cast<clx::LState *>(lua_touserdata(L, lua_upvalueindex(1)));
-    void *ud_raw = lua_touserdata(L, 1);
+extern "C" int clx_vm_proxy_index(lua_State* L)
+{
+    clx::LState* clx_L = static_cast<clx::LState*>(lua_touserdata(L, lua_upvalueindex(1)));
+    void* ud_raw = lua_touserdata(L, 1);
     if (!clx_L || !ud_raw) {
         lua_pushnil(L);
         return 1;
     }
-    clx::LHeader *h = *static_cast<clx::LHeader **>(ud_raw);
+    clx::LHeader* h = *static_cast<clx::LHeader**>(ud_raw);
     if (!h || h->type != static_cast<uint8_t>(clx::Table)) {
         lua_pushnil(L);
         return 1;
     }
-    clx::LTable *tbl = static_cast<clx::LTable *>(h);
+    clx::LTable* tbl = static_cast<clx::LTable*>(h);
     clx::LValue key = clx::vm_to_clx_value_(clx_L, L, 2);
 
     clx::LValue val = tbl->get_value(clx_L, key);
     if (val.type == clx::Nil) {
-        if (clx::LTable *mt = tbl_metatable(tbl))
+        if (clx::LTable* mt = tbl_metatable(tbl))
             val = mt->gettable(key);
     }
     clx::clx_to_vm_value_(clx_L, L, val);
     return 1;
 }
 
-extern "C" int clx_vm_proxy_newindex(lua_State *L) {
-    clx::LState *clx_L = static_cast<clx::LState *>(lua_touserdata(L, lua_upvalueindex(1)));
-    void *ud_raw = lua_touserdata(L, 1);
+extern "C" int clx_vm_proxy_newindex(lua_State* L)
+{
+    clx::LState* clx_L = static_cast<clx::LState*>(lua_touserdata(L, lua_upvalueindex(1)));
+    void* ud_raw = lua_touserdata(L, 1);
     if (!clx_L || !ud_raw)
         return 0;
-    clx::LHeader *h = *static_cast<clx::LHeader **>(ud_raw);
+    clx::LHeader* h = *static_cast<clx::LHeader**>(ud_raw);
     if (!h || h->type != static_cast<uint8_t>(clx::Table))
         return 0;
-    clx::LTable *tbl = static_cast<clx::LTable *>(h);
+    clx::LTable* tbl = static_cast<clx::LTable*>(h);
     clx::LValue key = clx::vm_to_clx_value_(clx_L, L, 2);
     clx::LValue val = clx::vm_to_clx_value_(clx_L, L, 3);
     tbl->settable(key, val);
     return 0;
 }
 
-extern "C" int clx_vm_proxy_len(lua_State *L) {
-    clx::LState *clx_L = static_cast<clx::LState *>(lua_touserdata(L, lua_upvalueindex(1)));
-    void *ud_raw = lua_touserdata(L, 1);
+extern "C" int clx_vm_proxy_len(lua_State* L)
+{
+    clx::LState* clx_L = static_cast<clx::LState*>(lua_touserdata(L, lua_upvalueindex(1)));
+    void* ud_raw = lua_touserdata(L, 1);
     if (!clx_L || !ud_raw) {
         lua_pushinteger(L, 0);
         return 1;
     }
-    clx::LHeader *h = *static_cast<clx::LHeader **>(ud_raw);
+    clx::LHeader* h = *static_cast<clx::LHeader**>(ud_raw);
     if (!h || h->type != static_cast<uint8_t>(clx::Table)) {
         lua_pushinteger(L, 0);
         return 1;
     }
-    clx::LValue t(clx::Table, static_cast<clx::LTable *>(h));
+    clx::LValue t(clx::Table, static_cast<clx::LTable*>(h));
     lua_pushinteger(L, static_cast<lua_Integer>(clx::rawlen(t)));
     return 1;
 }
 
-extern "C" int clx_vm_proxy_pairs_iter(lua_State *L) {
-    clx::LState *clx_L = static_cast<clx::LState *>(lua_touserdata(L, lua_upvalueindex(1)));
-    void *ud_raw = lua_touserdata(L, 1);
+extern "C" int clx_vm_proxy_pairs_iter(lua_State* L)
+{
+    clx::LState* clx_L = static_cast<clx::LState*>(lua_touserdata(L, lua_upvalueindex(1)));
+    void* ud_raw = lua_touserdata(L, 1);
     if (!clx_L || !ud_raw)
         return 0;
-    clx::LHeader *h = *static_cast<clx::LHeader **>(ud_raw);
+    clx::LHeader* h = *static_cast<clx::LHeader**>(ud_raw);
     if (!h || h->type != static_cast<uint8_t>(clx::Table))
         return 0;
-    clx::LTable *tbl = static_cast<clx::LTable *>(h);
+    clx::LTable* tbl = static_cast<clx::LTable*>(h);
     clx::LValue t(clx::Table, tbl);
     clx::LValue k = clx::vm_to_clx_value_(clx_L, L, 2);
     clx::MultiValue res = clx::next(clx_L, t, k);
@@ -547,11 +560,12 @@ extern "C" int clx_vm_proxy_pairs_iter(lua_State *L) {
     return 2;
 }
 
-extern "C" int clx_vm_proxy_pairs(lua_State *L) {
-    clx::LState *clx_L = static_cast<clx::LState *>(lua_touserdata(L, lua_upvalueindex(1)));
+extern "C" int clx_vm_proxy_pairs(lua_State* L)
+{
+    clx::LState* clx_L = static_cast<clx::LState*>(lua_touserdata(L, lua_upvalueindex(1)));
     if (!clx_L)
         return 0;
-    lua_pushlightuserdata(L, static_cast<void *>(clx_L));
+    lua_pushlightuserdata(L, static_cast<void*>(clx_L));
     lua_pushcclosure(L, clx_vm_proxy_pairs_iter, 1);
     lua_pushvalue(L, 1);
     lua_pushnil(L);
@@ -559,16 +573,17 @@ extern "C" int clx_vm_proxy_pairs(lua_State *L) {
 }
 
 //------------------ clx_vm_proxy_call - Lua __call metamethod
-extern "C" int clx_vm_proxy_call(lua_State *L) {
-    clx::LState *clx_L = static_cast<clx::LState *>(lua_touserdata(L, lua_upvalueindex(1)));
-    void *ud_raw = lua_touserdata(L, 1);
+extern "C" int clx_vm_proxy_call(lua_State* L)
+{
+    clx::LState* clx_L = static_cast<clx::LState*>(lua_touserdata(L, lua_upvalueindex(1)));
+    void* ud_raw = lua_touserdata(L, 1);
     if (!clx_L || !ud_raw)
         return 0;
-    clx::LHeader *h = *static_cast<clx::LHeader **>(ud_raw);
+    clx::LHeader* h = *static_cast<clx::LHeader**>(ud_raw);
     if (!h || h->type != static_cast<uint8_t>(clx::Table))
         return 0;
-    clx::LTable *tbl = static_cast<clx::LTable *>(h);
-    clx::LTable *mt = tbl_metatable(tbl);
+    clx::LTable* tbl = static_cast<clx::LTable*>(h);
+    clx::LTable* mt = tbl_metatable(tbl);
     if (!mt)
         return 0;
     clx::LValue call_func = mt->gettable(clx_L->str_call);
@@ -577,7 +592,7 @@ extern "C" int clx_vm_proxy_call(lua_State *L) {
 
     int nargs = lua_gettop(L) - 1;
     const size_t clx_nargs = static_cast<size_t>(nargs) + 1;
-    clx::LValue *clx_args;
+    clx::LValue* clx_args;
     clx::LValue stack_buf[16];
     bool heap = clx_nargs > 16;
     if (heap)
@@ -596,14 +611,14 @@ extern "C" int clx_vm_proxy_call(lua_State *L) {
     clx::MultiValue ret;
     try {
         ret = clx::call_function(clx_L, call_func, clx_args, clx_nargs, "__call", 0);
-    } catch (const clx::LRuntimeException &e) {
+    } catch (const clx::LRuntimeException& e) {
         clx_L->shadow_top = prev_shadow;
         if (heap)
             delete[] clx_args;
         lua_pushstring(L, e.what());
         lua_error(L);
         return 0;
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         clx_L->shadow_top = prev_shadow;
         if (heap)
             delete[] clx_args;
@@ -628,16 +643,17 @@ extern "C" int clx_vm_proxy_call(lua_State *L) {
 }
 
 //------------------ clx_vm_proxy_close - Lua __close metamethod
-extern "C" int clx_vm_proxy_close(lua_State *L) {
-    clx::LState *clx_L = static_cast<clx::LState *>(lua_touserdata(L, lua_upvalueindex(1)));
-    void *ud_raw = lua_touserdata(L, 1);
+extern "C" int clx_vm_proxy_close(lua_State* L)
+{
+    clx::LState* clx_L = static_cast<clx::LState*>(lua_touserdata(L, lua_upvalueindex(1)));
+    void* ud_raw = lua_touserdata(L, 1);
     if (!clx_L || !ud_raw)
         return 0;
-    clx::LHeader *h = *static_cast<clx::LHeader **>(ud_raw);
+    clx::LHeader* h = *static_cast<clx::LHeader**>(ud_raw);
     if (!h || h->type != static_cast<uint8_t>(clx::Table))
         return 0;
-    clx::LTable *tbl = static_cast<clx::LTable *>(h);
-    clx::LTable *mt = tbl_metatable(tbl);
+    clx::LTable* tbl = static_cast<clx::LTable*>(h);
+    clx::LTable* mt = tbl_metatable(tbl);
     if (!mt)
         return 0;
     clx::LValue close_func = mt->gettable(clx_L->str_close);
@@ -649,9 +665,9 @@ extern "C" int clx_vm_proxy_close(lua_State *L) {
     clx_L->shadow_stack[clx_L->shadow_top++] = clx::TypedSlot(&args[1].val, &args[1].type);
     try {
         clx::call_function(clx_L, close_func, args, 2, "__close", 0);
-    } catch (const clx::LRuntimeException &e) {
+    } catch (const clx::LRuntimeException& e) {
         std::fprintf(stderr, "error in __close metamethod: %s\n", e.what());
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         std::fprintf(stderr, "error in __close metamethod: %s\n", e.what());
     } catch (...) {
         std::fprintf(stderr, "error in __close metamethod\n");
@@ -661,15 +677,16 @@ extern "C" int clx_vm_proxy_close(lua_State *L) {
 }
 
 //------------------ clx_vm_proxy_gc - Lua __gc metamethod
-extern "C" int clx_vm_proxy_gc(lua_State *L) {
-    clx::ProxyNode *node = static_cast<clx::ProxyNode *>(lua_touserdata(L, 1));
+extern "C" int clx_vm_proxy_gc(lua_State* L)
+{
+    clx::ProxyNode* node = static_cast<clx::ProxyNode*>(lua_touserdata(L, 1));
     if (!node || !node->header)
         return 0;
 
-    clx::LState *clx_L = static_cast<clx::LState *>(lua_touserdata(L, lua_upvalueindex(1)));
+    clx::LState* clx_L = static_cast<clx::LState*>(lua_touserdata(L, lua_upvalueindex(1)));
     if (!clx_L)
         return 0;
-    clx::DynamicVM *vm = clx::DynamicVM::find(clx_L);
+    clx::DynamicVM* vm = clx::DynamicVM::find(clx_L);
     if (vm)
         vm->unlink_proxy(node);
     return 0;

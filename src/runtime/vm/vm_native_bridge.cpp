@@ -2,7 +2,7 @@
 // │  clx — Lua to C++ Native Compiler           │
 // │  Copyright (c) 2026 Tine Samir. MIT License.│
 // ├─────────────────────────────────────────────┤
-// │  vm_native_bridge.cpp · Bridge Dispatcher    │
+// │  vm_native_bridge.cpp · Bridge Dispatcher   │
 // └─────────────────────────────────────────────┘
 
 #include "vm_native_bridge.h"
@@ -12,13 +12,14 @@
 namespace clx {
 
 //------------------ create_bridge
-NativeBridge *create_bridge(LState *clx_L, lua_State *L, const LValue &callable) {
-    DynamicVM *vm = DynamicVM::acquire(clx_L);
-    NativeBridge *nb = new NativeBridge();
+NativeBridge* create_bridge(LState* clx_L, lua_State* L, const LValue& callable)
+{
+    DynamicVM* vm = DynamicVM::acquire(clx_L);
+    NativeBridge* nb = new NativeBridge();
     nb->vm = vm;
     nb->clx_callable = callable;
-    void *ud = lua_newuserdata(L, sizeof(NativeBridge *));
-    *static_cast<NativeBridge **>(ud) = nb;
+    void* ud = lua_newuserdata(L, sizeof(NativeBridge*));
+    *static_cast<NativeBridge**>(ud) = nb;
     luaL_newmetatable(L, "clx_callable");
     lua_setmetatable(L, -2);
     lua_pushcclosure(L, clx_vm_native_bridge_call, 1);
@@ -29,7 +30,8 @@ NativeBridge *create_bridge(LState *clx_L, lua_State *L, const LValue &callable)
 
 //------------------ write_back_table - sync clx LTable back to Lua VM table
 static void write_back_table(
-    LState *clx_L, lua_State *L, LTable *tbl, int reg_ref, size_t orig_len, bool sync_metatable = true) {
+    LState* clx_L, lua_State* L, LTable* tbl, int reg_ref, size_t orig_len, bool sync_metatable = true)
+{
 
     lua_rawgeti(L, LUA_REGISTRYINDEX, reg_ref);
     int tbl_idx = lua_gettop(L);
@@ -65,7 +67,7 @@ static void write_back_table(
         }
     }
 
-    LTable *mt = tbl_metatable(tbl);
+    LTable* mt = tbl_metatable(tbl);
     if (mt && sync_metatable) {
         lua_newtable(L);
         int mt_idx = lua_gettop(L);
@@ -106,13 +108,14 @@ static void write_back_table(
 }
 
 //------------------ clx_vm_native_bridge_call - Lua-visible entrypoint
-extern "C" int clx_vm_native_bridge_call(lua_State *L) {
-    NativeBridge *nb = *static_cast<NativeBridge **>(lua_touserdata(L, lua_upvalueindex(1)));
+extern "C" int clx_vm_native_bridge_call(lua_State* L)
+{
+    NativeBridge* nb = *static_cast<NativeBridge**>(lua_touserdata(L, lua_upvalueindex(1)));
     if (!nb) {
         lua_pushnil(L);
         return 1;
     }
-    LState *clx_L = nb->vm->clx_L();
+    LState* clx_L = nb->vm->clx_L();
 
     int nargs = lua_gettop(L);
     std::vector<LValue> cv_args(static_cast<size_t>(nargs));
@@ -122,7 +125,7 @@ extern "C" int clx_vm_native_bridge_call(lua_State *L) {
         int reg_ref;
         LValue clx_table;
         size_t orig_len;
-        LTable *saved_metatable;
+        LTable* saved_metatable;
     };
 
     std::vector<TableTrack> table_tracks;
@@ -133,9 +136,9 @@ extern "C" int clx_vm_native_bridge_call(lua_State *L) {
             int reg_ref = luaL_ref(L, LUA_REGISTRYINDEX);
             size_t orig_len = static_cast<size_t>(lua_rawlen(L, i + 1));
             cv_args[i] = vm_to_clx_value_(clx_L, L, i + 1);
-            LTable *initial_mt = nullptr;
+            LTable* initial_mt = nullptr;
             if (cv_args[i].type == Table && cv_args[i].as_pointer()) {
-                LTable *ct = static_cast<LTable *>(cv_args[i].as_pointer());
+                LTable* ct = static_cast<LTable*>(cv_args[i].as_pointer());
                 initial_mt = tbl_metatable(ct);
             }
             table_tracks.push_back({ reg_ref, cv_args[i], orig_len, initial_mt });
@@ -155,8 +158,8 @@ extern "C" int clx_vm_native_bridge_call(lua_State *L) {
 
         //------------------ Phase 2 - write back modified tables
         for (size_t t = 0; t < table_tracks.size(); ++t) {
-            auto &trk = table_tracks[t];
-            LTable *tbl = static_cast<LTable *>(trk.clx_table.as_pointer());
+            auto& trk = table_tracks[t];
+            LTable* tbl = static_cast<LTable*>(trk.clx_table.as_pointer());
             if (tbl) {
                 bool mt_was_modified = (tbl_metatable(tbl) != trk.saved_metatable);
                 write_back_table(clx_L, L, tbl, trk.reg_ref, trk.orig_len, mt_was_modified);
@@ -170,7 +173,7 @@ extern "C" int clx_vm_native_bridge_call(lua_State *L) {
         for (size_t i = 0; i < nret; ++i)
             clx_to_vm_value_(clx_L, L, mv[i]);
         return static_cast<int>(nret);
-    } catch (const LRuntimeException &e) {
+    } catch (const LRuntimeException& e) {
 
         for (size_t t = 0; t < table_tracks.size(); ++t)
             luaL_unref(L, LUA_REGISTRYINDEX, table_tracks[t].reg_ref);

@@ -13,21 +13,24 @@ namespace clx {
 using enum TokenType;
 
 //------------------ LEXER: constructor - initializes lexer with source text and filename
-Lexer::Lexer(std::string_view source, const char *filename)
+Lexer::Lexer(std::string_view source, const char* filename)
     : src(source)
     , pos(0)
     , current_line(1)
-    , filename_str(filename) {
+    , filename_str(filename)
+{
     advance();
 }
 
 //------------------ LEXER: remaining_source - returns unprocessed source text after current position
-std::string_view Lexer::remaining_source() const {
+std::string_view Lexer::remaining_source() const
+{
     return src.substr(pos);
 }
 
 //------------------ LEXER: advance - scans next token, skipping whitespace and comments
-void Lexer::advance() {
+void Lexer::advance()
+{
     while (pos < src.length()) {
         if (src[pos] == '\n') {
             current_line++;
@@ -134,7 +137,7 @@ void Lexer::advance() {
         return;
     }
     if (std::isdigit(src[pos])) {
-        char *end;
+        char* end;
         double val = std::strtod(src.data() + pos, &end);
         size_t len = end - (src.data() + pos);
         std::string_view text(src.data() + pos, len);
@@ -239,7 +242,7 @@ void Lexer::advance() {
             pos++;
             current_token = { TokConcat, "..", 0, current_line };
         } else if (pos < src.length() && std::isdigit(src[pos])) {
-            char *end = nullptr;
+            char* end = nullptr;
             double val = std::strtod(src.data() + pos - 1, &end);
             size_t len = end - (src.data() + pos - 1);
             current_token = { TokNumber, std::string_view(src.data() + pos - 1, len), val, current_line };
@@ -308,22 +311,26 @@ void Lexer::advance() {
 }
 
 //------------------ LEXER: current - returns current token
-const Token &Lexer::current() const {
+const Token& Lexer::current() const
+{
     return current_token;
 }
 
 //------------------ LEXER: position - returns current source byte position
-size_t Lexer::position() const {
+size_t Lexer::position() const
+{
     return pos;
 }
 
 //------------------ LEXER: line - returns current line number
-int Lexer::line() const {
+int Lexer::line() const
+{
     return current_line;
 }
 
 //------------------ LEXER: filename - returns source filename
-const char *Lexer::filename() const {
+const char* Lexer::filename() const
+{
     return filename_str.c_str();
 }
 }

@@ -7,8 +7,8 @@
 
 #ifndef SYNTAX_NODES_H
 #define SYNTAX_NODES_H
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -50,7 +50,11 @@ enum class NodeType {
 };
 
 //------------------ SymbolType: classification of variable symbols (local, const, close, etc)
-enum class SymbolType { Local, Const, Close, ExplicitGlobal, ConstGlobal };
+enum class SymbolType { Local,
+    Const,
+    Close,
+    ExplicitGlobal,
+    ConstGlobal };
 
 //------------------ Symbol: represents a variable in the symbol table with scope info
 struct Symbol {
@@ -62,9 +66,14 @@ struct Symbol {
 };
 
 //------------------ Attribute: variable attribute qualifiers
-enum class Attribute { None, Const, Close };
+enum class Attribute { None,
+    Const,
+    Close };
 //------------------ ImplicitGlobalMode: controls implicit global variable access
-enum class ImplicitGlobalMode { None, ReadWrite, ReadOnly, Default };
+enum class ImplicitGlobalMode { None,
+    ReadWrite,
+    ReadOnly,
+    Default };
 
 //------------------ BinaryOp: binary operator codes mapped to Lua opcodes
 enum class BinaryOp : int {
@@ -92,7 +101,10 @@ enum class BinaryOp : int {
 };
 
 //------------------ UnaryOp: unary operator codes
-enum class UnaryOp : int { Len = 1, Minus = 2, BNot = 3, Not = 4 };
+enum class UnaryOp : int { Len = 1,
+    Minus = 2,
+    BNot = 3,
+    Not = 4 };
 
 //------------------ ASTNode: tagged union node in the arena-allocated AST
 struct ASTNode {
@@ -153,7 +165,7 @@ struct ASTNode {
 
         //------------------ ident: identifier with capture/global/attribute info
         struct {
-            const char *name;
+            const char* name;
             size_t length;
             bool is_captured;
             bool is_global;
@@ -162,7 +174,7 @@ struct ASTNode {
 
         //------------------ string: string literal content
         struct {
-            const char *text;
+            const char* text;
             size_t length;
         } string;
 
@@ -250,7 +262,7 @@ struct ASTNode {
 
         //------------------ intrinsic_call: call to an intrinsic function (cname = C++ name, e.g. "std::sin" or "__clx_type")
         struct {
-            const char *cname;
+            const char* cname;
             uint32_t first_arg;
             uint32_t arg_count;
         } intrinsic_call;

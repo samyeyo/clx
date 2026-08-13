@@ -74,10 +74,11 @@ struct AnalysisState {
 };
 
 //------------------ is_purely_integer_expr: returns true if a node always evaluates to an integer.
-inline bool is_purely_integer_expr(const ASTContext &ctx, const AnalysisState &state, uint32_t node_idx) {
+inline bool is_purely_integer_expr(const ASTContext& ctx, const AnalysisState& state, uint32_t node_idx)
+{
     if (node_idx == 0xFFFFFFFF || node_idx >= ctx.nodes.size())
         return false;
-    const auto &n = ctx.nodes[node_idx];
+    const auto& n = ctx.nodes[node_idx];
     if (n.type == NodeType::Integer)
         return true;
     if (n.type == NodeType::Number) {

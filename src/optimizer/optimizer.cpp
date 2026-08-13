@@ -6,8 +6,8 @@
 // └─────────────────────────────────────────────┘
 
 #include "optimizer.h"
-#include "../codegen/codegen.h"
 #include "../../include/clx_runtime.h"
+#include "../codegen/codegen.h"
 #include <algorithm>
 #include <map>
 #include <set>
@@ -16,15 +16,18 @@
 namespace clx {
 
 //------------------ Optimizer constructor
-Optimizer::Optimizer(const ASTContext &context, AnalysisState &analysis)
+Optimizer::Optimizer(const ASTContext& context, AnalysisState& analysis)
     : ctx(&context)
-    , state(analysis) { }
+    , state(analysis)
+{
+}
 
 //------------------ get_ast_string — convert AST node to string for analysis
-static std::string get_ast_string(const ASTContext &ctx, uint32_t node_idx) {
+static std::string get_ast_string(const ASTContext& ctx, uint32_t node_idx)
+{
     if (node_idx == 0xFFFFFFFF || node_idx >= ctx.nodes.size())
         return "";
-    const auto &n = ctx.nodes[node_idx];
+    const auto& n = ctx.nodes[node_idx];
     if (n.type == NodeType::Identifier)
         return std::string(n.as.ident.name, n.as.ident.length);
     if (n.type == NodeType::TableAccess) {
@@ -48,17 +51,18 @@ static std::string get_ast_string(const ASTContext &ctx, uint32_t node_idx) {
 }
 
 //------------------ function_returns_native — check if function always returns native number
-static bool function_returns_native(const ASTContext &ctx, const AnalysisState &state, uint32_t func_idx,
-    std::string_view self_name, const std::set<std::string_view> *known_numbers) {
+static bool function_returns_native(const ASTContext& ctx, const AnalysisState& state, uint32_t func_idx,
+    std::string_view self_name, const std::set<std::string_view>* known_numbers)
+{
     if (func_idx >= ctx.nodes.size())
         return false;
-    const auto &fn = ctx.nodes[func_idx];
+    const auto& fn = ctx.nodes[func_idx];
     if (fn.type != NodeType::FunctionDef)
         return false;
 
     std::set<std::string_view> param_numbers;
     if (!self_name.empty() && state.func_param_native.count(self_name)) {
-        const auto &pn = state.func_param_native.at(self_name);
+        const auto& pn = state.func_param_native.at(self_name);
         for (size_t p = 0; p < fn.as.func_def.param_count; ++p) {
             if (p < pn.size() && pn[p]) {
                 uint32_t p_idx = ctx.block_statements[fn.as.func_def.first_param + p];
@@ -71,10 +75,10 @@ static bool function_returns_native(const ASTContext &ctx, const AnalysisState &
     bool has_return = false;
     bool all_returns_native = true;
 
-    auto check_block = [&](auto &self, uint32_t block_idx) -> void {
+    auto check_block = [&](auto& self, uint32_t block_idx) -> void {
         if (block_idx == 0xFFFFFFFF || block_idx >= ctx.nodes.size())
             return;
-        const auto &block = ctx.nodes[block_idx];
+        const auto& block = ctx.nodes[block_idx];
         if (block.type != NodeType::Block)
             return;
 
@@ -83,7 +87,7 @@ static bool function_returns_native(const ASTContext &ctx, const AnalysisState &
             if (si >= ctx.nodes.size())
                 continue;
 
-            const auto &stmt = ctx.nodes[si];
+            const auto& stmt = ctx.nodes[si];
             if (stmt.type == NodeType::ReturnStatement) {
                 has_return = true;
                 if (stmt.as.return_stmt.value_count != 1) {
@@ -129,10 +133,11 @@ static bool function_returns_native(const ASTContext &ctx, const AnalysisState &
 
 //------------------ is_literal_number — check if node is a literal integer or number
 static bool is_literal_number(
-    const ASTContext &ctx, uint32_t node_idx, double &out_d, int64_t &out_i, bool &out_is_int) {
+    const ASTContext& ctx, uint32_t node_idx, double& out_d, int64_t& out_i, bool& out_is_int)
+{
     if (node_idx == 0xFFFFFFFF || node_idx >= ctx.nodes.size())
         return false;
-    const auto &n = ctx.nodes[node_idx];
+    const auto& n = ctx.nodes[node_idx];
     if (n.type == NodeType::Integer) {
         out_i = n.as.integer.val;
         out_d = static_cast<double>(out_i);
@@ -149,7 +154,8 @@ static bool is_literal_number(
 }
 
 //------------------ Optimizer::run — main optimization entry point
-void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
+void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
+{
 
     state.native_numbers.clear();
     state.string_pool.clear();
@@ -170,10 +176,10 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
     std::map<std::string, bool> loop_limit_conflicts;
 
     state.goto_targets.clear();
-    auto resolve_labels = [&](auto &self, uint32_t n_idx, std::map<std::string_view, uint32_t> visible) -> void {
+    auto resolve_labels = [&](auto& self, uint32_t n_idx, std::map<std::string_view, uint32_t> visible) -> void {
         if (n_idx == 0xFFFFFFFF || n_idx >= ctx.nodes.size())
             return;
-        const auto &n = ctx.nodes[n_idx];
+        const auto& n = ctx.nodes[n_idx];
 
         if (n.type == NodeType::Block) {
             for (uint32_t i = 0; i < n.as.block.count; ++i) {
@@ -190,7 +196,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                 uint32_t stmt_idx = ctx.block_statements[n.as.block.first_statement + i];
                 if (stmt_idx >= ctx.nodes.size())
                     continue;
-                const auto &stmt = ctx.nodes[stmt_idx];
+                const auto& stmt = ctx.nodes[stmt_idx];
                 if (stmt.type == NodeType::GotoStatement) {
                     uint32_t name_idx = stmt.as.goto_stmt.name_ident;
                     std::string_view lname(ctx.nodes[name_idx].as.ident.name, ctx.nodes[name_idx].as.ident.length);
@@ -256,7 +262,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
 
     state.reassigned_vars.clear();
     std::map<std::string_view, uint32_t> var_assign_counts;
-    for (const auto &node : ctx.nodes) {
+    for (const auto& node : ctx.nodes) {
         if (node.type == NodeType::LocalDecl || node.type == NodeType::GlobalDeclStatement
             || node.type == NodeType::Assignment) {
             uint32_t t_count = (node.type == NodeType::LocalDecl)
@@ -276,21 +282,21 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
             }
         }
     }
-    for (const auto &pair : var_assign_counts) {
+    for (const auto& pair : var_assign_counts) {
         if (pair.second > 1)
             state.reassigned_vars.insert(pair.first);
     }
 
     std::set<std::string_view> for_vars;
-    for (const auto &node : ctx.nodes) {
+    for (const auto& node : ctx.nodes) {
         if (node.type == NodeType::ForStatement && node.as.for_stmt.var_ident < ctx.nodes.size()) {
-            const auto &vn = ctx.nodes[node.as.for_stmt.var_ident];
+            const auto& vn = ctx.nodes[node.as.for_stmt.var_ident];
             if (vn.type == NodeType::Identifier)
                 for_vars.insert(std::string_view(vn.as.ident.name, vn.as.ident.length));
         }
     }
     state.constant_upvalues.clear();
-    for (const auto &node : ctx.nodes) {
+    for (const auto& node : ctx.nodes) {
         if (node.type == NodeType::Identifier && node.as.ident.is_captured) {
             std::string_view name(node.as.ident.name, node.as.ident.length);
             if (state.reassigned_vars.count(name) == 0 && for_vars.count(name) == 0)
@@ -298,17 +304,17 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
         }
     }
 
-    for (const auto &node : ctx.nodes) {
+    for (const auto& node : ctx.nodes) {
         if (node.type == NodeType::Identifier && (node.as.ident.is_captured || node.as.ident.is_global)) {
             disqualified.insert(std::string_view(node.as.ident.name, node.as.ident.length));
         }
     }
 
     if (root_node < ctx.nodes.size() && ctx.nodes[root_node].type == NodeType::Block) {
-        const ASTNode &root_block = ctx.nodes[root_node];
+        const ASTNode& root_block = ctx.nodes[root_node];
         for (uint32_t i = 0; i < root_block.as.block.count; ++i) {
             uint32_t stmt_idx = ctx.block_statements[root_block.as.block.first_statement + i];
-            const ASTNode &stmt = ctx.nodes[stmt_idx];
+            const ASTNode& stmt = ctx.nodes[stmt_idx];
 
             if (stmt.type == NodeType::GlobalDeclStatement && !stmt.as.global_decl.is_wildcard) {
                 if (stmt.as.global_decl.ident_count == 1 && stmt.as.global_decl.value_count == 1) {
@@ -340,13 +346,13 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
         }
     }
 
-    for (const auto &node : ctx.nodes) {
+    for (const auto& node : ctx.nodes) {
         if (node.type == NodeType::Block) {
             std::map<uint32_t, uint32_t> pending_tables;
 
             for (uint32_t i = 0; i < node.as.block.count; ++i) {
                 uint32_t stmt_idx = ctx.block_statements[node.as.block.first_statement + i];
-                const ASTNode &stmt = ctx.nodes[stmt_idx];
+                const ASTNode& stmt = ctx.nodes[stmt_idx];
 
                 if (stmt.type == NodeType::LocalDecl && stmt.as.local_decl.value_count == 1) {
                     uint32_t val_idx = ctx.block_statements[stmt.as.local_decl.first_value];
@@ -362,15 +368,15 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                     }
                 } else if (stmt.type == NodeType::ForStatement) {
                     auto has_forward_ref
-                        = [&](uint32_t expr_node, const std::vector<std::string> &pending_names) -> bool {
+                        = [&](uint32_t expr_node, const std::vector<std::string>& pending_names) -> bool {
                         std::vector<uint32_t> stack = { expr_node };
                         while (!stack.empty()) {
                             uint32_t nid = stack.back();
                             stack.pop_back();
-                            const auto &n = ctx.nodes[nid];
+                            const auto& n = ctx.nodes[nid];
                             if (n.type == NodeType::Identifier && !n.as.ident.is_global) {
                                 std::string_view nm(n.as.ident.name, n.as.ident.length);
-                                for (auto &pn : pending_names) {
+                                for (auto& pn : pending_names) {
                                     if (nm == pn)
                                         return true;
                                 }
@@ -413,10 +419,10 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                         return false;
                     };
                     std::vector<std::string> _pending_names;
-                    for (auto &_pp : pending_tables) {
+                    for (auto& _pp : pending_tables) {
                         _pending_names.push_back(get_ast_string(ctx, _pp.first));
                     }
-                    for (auto &pair : pending_tables) {
+                    for (auto& pair : pending_tables) {
                         uint32_t table_node = pair.second;
                         if (state.table_presize.find(table_node) == state.table_presize.end()) {
                             if (!has_forward_ref(stmt.as.for_stmt.limit_expr, _pending_names)) {
@@ -457,7 +463,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
     }
 
     std::vector<std::pair<std::string_view, uint32_t>> func_defs;
-    for (const auto &node : ctx.nodes) {
+    for (const auto& node : ctx.nodes) {
         if (node.type == NodeType::LocalDecl || node.type == NodeType::GlobalDeclStatement) {
             uint32_t i_count
                 = (node.type == NodeType::LocalDecl) ? node.as.local_decl.ident_count : node.as.global_decl.ident_count;
@@ -498,11 +504,11 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
         }
     }
 
-    auto traverse_node = [&](auto &self, uint32_t node_idx, auto &cb) -> void {
+    auto traverse_node = [&](auto& self, uint32_t node_idx, auto& cb) -> void {
         if (node_idx == 0xFFFFFFFF || node_idx >= ctx.nodes.size())
             return;
         cb(node_idx);
-        const auto &n = ctx.nodes[node_idx];
+        const auto& n = ctx.nodes[node_idx];
         if (n.type == NodeType::Block) {
             for (uint32_t i = 0; i < n.as.block.count; ++i)
                 self(self, ctx.block_statements[n.as.block.first_statement + i], cb);
@@ -565,7 +571,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
     };
 
     std::map<uint32_t, std::string_view> call_to_func;
-    for (const auto &fdef : func_defs) {
+    for (const auto& fdef : func_defs) {
         auto cb = [&](uint32_t idx) {
             if (ctx.nodes[idx].type == NodeType::CallExpression)
                 call_to_func[idx] = fdef.first;
@@ -575,7 +581,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
 
     std::set<std::string_view> escaped_funcs;
     for (uint32_t i = 0; i < ctx.nodes.size(); ++i) {
-        const auto &n = ctx.nodes[i];
+        const auto& n = ctx.nodes[i];
 
         auto check_escape = [&](uint32_t idx) {
             while (idx != 0xFFFFFFFF && idx < ctx.nodes.size() && ctx.nodes[idx].type == NodeType::ParenExpression) {
@@ -623,10 +629,10 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
     }
 
     for (auto fname : escaped_funcs) {
-        for (const auto &fdef : func_defs) {
+        for (const auto& fdef : func_defs) {
             if (fdef.first == fname) {
                 uint32_t f_idx = fdef.second;
-                const auto &fn = ctx.nodes[f_idx];
+                const auto& fn = ctx.nodes[f_idx];
                 for (size_t p = 0; p < fn.as.func_def.param_count; ++p) {
                     uint32_t p_idx = ctx.block_statements[fn.as.func_def.first_param + p];
                     std::string_view pname(ctx.nodes[p_idx].as.ident.name, ctx.nodes[p_idx].as.ident.length);
@@ -644,7 +650,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
         if (--safety_limit <= 0)
             break;
 
-        for (const auto &node : ctx.nodes) {
+        for (const auto& node : ctx.nodes) {
             if (node.type == NodeType::LocalDecl || node.type == NodeType::GlobalDeclStatement) {
                 if (node.type == NodeType::GlobalDeclStatement && node.as.global_decl.is_wildcard)
                     continue;
@@ -681,7 +687,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
             } else if (node.type == NodeType::Assignment) {
                 for (uint32_t i = 0; i < node.as.assign.target_count; ++i) {
                     uint32_t t_idx = ctx.block_statements[node.as.assign.first_target + i];
-                    const auto &t_node = ctx.nodes[t_idx];
+                    const auto& t_node = ctx.nodes[t_idx];
                     if (t_node.type == NodeType::Identifier) {
                         std::string_view name(t_node.as.ident.name, t_node.as.ident.length);
                         uint32_t val_idx = (i < node.as.assign.value_count)
@@ -720,11 +726,11 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
         }
     } while (changed);
 
-    for (auto &[fname, is_native_vec] : state.func_param_native) {
-        for (const auto &fdef : func_defs) {
+    for (auto& [fname, is_native_vec] : state.func_param_native) {
+        for (const auto& fdef : func_defs) {
             if (fdef.first == fname) {
                 uint32_t f_idx = fdef.second;
-                const auto &fn = ctx.nodes[f_idx];
+                const auto& fn = ctx.nodes[f_idx];
                 for (size_t p = 0; p < fn.as.func_def.param_count && p < is_native_vec.size(); ++p) {
                     uint32_t p_idx = ctx.block_statements[fn.as.func_def.first_param + p];
                     if (ctx.nodes[p_idx].type == NodeType::Identifier) {
@@ -738,11 +744,11 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
         }
     }
 
-    for (auto &[fname, is_native_vec] : state.func_param_native) {
-        for (const auto &fdef : func_defs) {
+    for (auto& [fname, is_native_vec] : state.func_param_native) {
+        for (const auto& fdef : func_defs) {
             if (fdef.first != fname)
                 continue;
-            const auto &fn = ctx.nodes[fdef.second];
+            const auto& fn = ctx.nodes[fdef.second];
             std::set<std::string_view> pnames;
             for (size_t p = 0; p < fn.as.func_def.param_count && p < is_native_vec.size(); ++p) {
                 uint32_t pi = ctx.block_statements[fn.as.func_def.first_param + p];
@@ -751,10 +757,10 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
             }
             if (pnames.empty())
                 continue;
-            auto nil_scan = [&](auto &self, uint32_t nidx) -> void {
+            auto nil_scan = [&](auto& self, uint32_t nidx) -> void {
                 if (nidx >= ctx.nodes.size())
                     return;
-                const auto &n = ctx.nodes[nidx];
+                const auto& n = ctx.nodes[nidx];
                 if (n.type == NodeType::BinaryOp && n.as.bin_op.op == static_cast<int>(BinaryOp::Eq)) {
                     auto try_disqualify = [&](uint32_t a, uint32_t b) {
                         if (ctx.nodes[a].type != NodeType::Identifier || ctx.nodes[b].type != NodeType::NilLiteral)
@@ -786,7 +792,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
     do {
         params_changed = false;
         for (uint32_t n_idx = 0; n_idx < ctx.nodes.size(); ++n_idx) {
-            const auto &node = ctx.nodes[n_idx];
+            const auto& node = ctx.nodes[n_idx];
             if (node.type == NodeType::CallExpression) {
                 uint32_t tgt = node.as.call_expr.target;
                 if (ctx.nodes[tgt].type == NodeType::Identifier && !ctx.nodes[tgt].as.ident.is_global) {
@@ -800,7 +806,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                                 if (fd.first == current_func)
                                     c_fdef_idx = fd.second;
                             if (c_fdef_idx != 0xFFFFFFFF) {
-                                const auto &fn = ctx.nodes[c_fdef_idx];
+                                const auto& fn = ctx.nodes[c_fdef_idx];
                                 for (size_t p = 0; p < fn.as.func_def.param_count; ++p) {
                                     if (state.func_param_native[current_func][p]) {
                                         uint32_t p_idx = ctx.block_statements[fn.as.func_def.first_param + p];
@@ -832,12 +838,12 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
         }
     } while (params_changed);
 
-    for (const auto &fdef : func_defs) {
+    for (const auto& fdef : func_defs) {
         if (function_returns_native(ctx, state, fdef.second, fdef.first, &known_numbers)) {
             state.native_return_funcs.insert(fdef.first);
         }
         if (state.func_param_native.count(fdef.first)) {
-            const auto &fn = ctx.nodes[fdef.second].as.func_def;
+            const auto& fn = ctx.nodes[fdef.second].as.func_def;
             for (size_t p = 0; p < fn.param_count; ++p) {
                 if (state.func_param_native[fdef.first][p]) {
                     uint32_t p_idx = ctx.block_statements[fn.first_param + p];
@@ -892,7 +898,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
         }
     }
 
-    for (const auto &node : ctx.nodes) {
+    for (const auto& node : ctx.nodes) {
         if (node.type == NodeType::String) {
             std::string_view s(node.as.string.text, node.as.string.length);
             if (std::find(state.string_pool.begin(), state.string_pool.end(), s) == state.string_pool.end())
@@ -913,7 +919,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
     auto purity_cb = [&](uint32_t idx) {
         if (idx == 0xFFFFFFFF || idx >= ctx.nodes.size())
             return;
-        const auto &n = ctx.nodes[idx];
+        const auto& n = ctx.nodes[idx];
         if (n.type == NodeType::LocalDecl) {
             if (n.as.local_decl.ident_count == 1 && n.as.local_decl.value_count == 1) {
                 uint32_t t_idx = ctx.block_statements[n.as.local_decl.first_ident];
@@ -921,7 +927,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                 if (ctx.nodes[t_idx].type == NodeType::Identifier
                     && ctx.nodes[v_idx].type == NodeType::TableConstructor) {
                     std::string_view name(ctx.nodes[t_idx].as.ident.name, ctx.nodes[t_idx].as.ident.length);
-                    const auto &tc = ctx.nodes[v_idx].as.table_cons;
+                    const auto& tc = ctx.nodes[v_idx].as.table_cons;
                     if (tc.count > 0 && state.known_table_lengths.find(name) == state.known_table_lengths.end()) {
                         state.known_table_lengths[name] = tc.count;
                     }
@@ -970,7 +976,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                 uint32_t v_idx = ctx.block_statements[n.as.assign.first_value];
                 if (ctx.nodes[t_idx].type == NodeType::Identifier && v_idx < ctx.nodes.size()
                     && ctx.nodes[v_idx].type == NodeType::BinaryOp) {
-                    const auto &bin = ctx.nodes[v_idx].as.bin_op;
+                    const auto& bin = ctx.nodes[v_idx].as.bin_op;
                     int op = bin.op;
                     if (op == static_cast<int>(BinaryOp::Add) || op == static_cast<int>(BinaryOp::Sub)) {
                         uint32_t left = bin.left;
@@ -1002,11 +1008,11 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                         if (!key_ok) {
 
                             std::unordered_set<uint32_t> _opt_visited;
-                            auto key_depends_on_self = [&](auto &self, uint32_t nid) -> bool {
+                            auto key_depends_on_self = [&](auto& self, uint32_t nid) -> bool {
                                 if (nid >= ctx.nodes.size() || _opt_visited.count(nid))
                                     return false;
                                 _opt_visited.insert(nid);
-                                const auto &nn = ctx.nodes[nid];
+                                const auto& nn = ctx.nodes[nid];
                                 if (nn.type == NodeType::TableAccess) {
                                     uint32_t stbl = nn.as.table_access.table;
                                     if (stbl < ctx.nodes.size() && ctx.nodes[stbl].type == NodeType::Identifier
@@ -1018,7 +1024,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                                 if (nn.type == NodeType::Identifier) {
 
                                     std::string_view vn(nn.as.ident.name, nn.as.ident.length);
-                                    for (const auto &nd : ctx.nodes) {
+                                    for (const auto& nd : ctx.nodes) {
                                         if (nd.type != NodeType::Assignment)
                                             continue;
                                         if (nd.as.assign.target_count != 1)
@@ -1032,7 +1038,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                                         uint32_t vi = ctx.block_statements[nd.as.assign.first_value];
                                         return self(self, vi);
                                     }
-                                    for (const auto &nd : ctx.nodes) {
+                                    for (const auto& nd : ctx.nodes) {
                                         if (nd.type != NodeType::LocalDecl)
                                             continue;
                                         for (uint32_t ii = 0; ii < nd.as.local_decl.ident_count; ++ii) {
@@ -1114,7 +1120,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                         std::string_view name(ctx.nodes[v].as.ident.name, ctx.nodes[v].as.ident.length);
                         disqualified_arrays.insert(name);
                     } else if (ctx.nodes[v].type == NodeType::TableConstructor) {
-                        const auto &tc = ctx.nodes[v].as.table_cons;
+                        const auto& tc = ctx.nodes[v].as.table_cons;
                         for (uint32_t ei = 0; ei < tc.count; ++ei) {
                             uint32_t ev = ctx.block_statements[tc.first_item + ei * 2 + 1];
                             if (ev < ctx.nodes.size() && ctx.nodes[ev].type == NodeType::Identifier) {
@@ -1166,14 +1172,14 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
     }
 
     std::set<std::string_view> captured_bases;
-    for (const auto &nd : ctx.nodes) {
+    for (const auto& nd : ctx.nodes) {
         if (nd.type == NodeType::Identifier && nd.as.ident.is_captured) {
             captured_bases.insert(std::string_view(nd.as.ident.name, nd.as.ident.length));
         }
     }
 
     std::set<std::string_view> promote_ready;
-    for (const auto &nd : ctx.nodes) {
+    for (const auto& nd : ctx.nodes) {
         if (nd.type != NodeType::TableAccess)
             continue;
         if (nd.as.table_access.table >= ctx.nodes.size())
@@ -1203,7 +1209,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
     }
 
     state.numeric_table_fields.clear();
-    for (const auto &node : ctx.nodes) {
+    for (const auto& node : ctx.nodes) {
         if (node.type != NodeType::LocalDecl)
             continue;
         if (node.as.local_decl.ident_count != 1 || node.as.local_decl.value_count != 1)
@@ -1215,7 +1221,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
         std::string_view nm(ctx.nodes[id_idx].as.ident.name, ctx.nodes[id_idx].as.ident.length);
         if (ctx.nodes[val_idx].type != NodeType::TableConstructor)
             continue;
-        const auto &tc = ctx.nodes[val_idx].as.table_cons;
+        const auto& tc = ctx.nodes[val_idx].as.table_cons;
         if (tc.count == 0)
             continue;
 
@@ -1229,7 +1235,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                 valid = false;
                 break;
             }
-            const auto &inner = ctx.nodes[ev].as.table_cons;
+            const auto& inner = ctx.nodes[ev].as.table_cons;
             std::set<std::string_view> entry_fields;
             for (uint32_t fi = 0; fi < inner.count; ++fi) {
                 uint32_t fk = ctx.block_statements[inner.first_item + fi * 2];
@@ -1242,7 +1248,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                 if (!is_num && ctx.nodes[fv].type == NodeType::Identifier) {
 
                     std::string_view vname(ctx.nodes[fv].as.ident.name, ctx.nodes[fv].as.ident.length);
-                    for (const auto &nd : ctx.nodes) {
+                    for (const auto& nd : ctx.nodes) {
                         if (nd.type != NodeType::LocalDecl)
                             continue;
                         for (uint32_t ii = 0; ii < nd.as.local_decl.ident_count; ++ii) {
@@ -1272,7 +1278,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                 all_fields = entry_fields;
             else {
                 std::set<std::string_view> intersect;
-                for (auto &f : all_fields)
+                for (auto& f : all_fields)
                     if (entry_fields.count(f))
                         intersect.insert(f);
                 all_fields = intersect;
@@ -1281,7 +1287,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
         }
         if (valid && !all_fields.empty()) {
             std::set<std::string_view> numeric_fields;
-            for (auto &f : all_fields) {
+            for (auto& f : all_fields) {
                 auto it = field_numeric.find(f);
                 if (it != field_numeric.end() && it->second)
                     numeric_fields.insert(it->first);
@@ -1289,7 +1295,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
             if (!numeric_fields.empty()) {
                 state.numeric_table_fields[nm] = numeric_fields;
 
-                for (auto &fld : numeric_fields) {
+                for (auto& fld : numeric_fields) {
                     if (std::find(state.string_pool.begin(), state.string_pool.end(), fld) == state.string_pool.end())
                         state.string_pool.push_back(fld);
                 }
@@ -1297,7 +1303,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
         }
     }
 
-    for (const auto &node : ctx.nodes) {
+    for (const auto& node : ctx.nodes) {
         if (node.type != NodeType::LocalDecl)
             continue;
         if (node.as.local_decl.ident_count != 1 || node.as.local_decl.value_count != 1)
@@ -1313,7 +1319,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
             continue;
         if (state.numeric_table_fields.count(nm))
             continue;
-        const auto &tc = ctx.nodes[val_idx].as.table_cons;
+        const auto& tc = ctx.nodes[val_idx].as.table_cons;
         if (tc.count == 0)
             continue;
 
@@ -1337,13 +1343,13 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
 
         if (valid && !numeric_fields.empty()) {
             state.numeric_table_fields[nm] = numeric_fields;
-            for (auto &fld : numeric_fields) {
+            for (auto& fld : numeric_fields) {
                 if (std::find(state.string_pool.begin(), state.string_pool.end(), fld) == state.string_pool.end())
                     state.string_pool.push_back(fld);
             }
         }
     }
-    for (const auto &nd : ctx.nodes) {
+    for (const auto& nd : ctx.nodes) {
         if (nd.type != NodeType::FunctionDef)
             continue;
         std::set<std::string_view> func_params;
@@ -1356,7 +1362,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
         if (func_params.empty())
             continue;
         std::map<std::string_view, std::string_view> local_to_param;
-        for (const auto &scan : ctx.nodes) {
+        for (const auto& scan : ctx.nodes) {
             if (scan.type != NodeType::LocalDecl)
                 continue;
             if (scan.as.local_decl.ident_count != 1 || scan.as.local_decl.value_count != 1)
@@ -1383,14 +1389,14 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
         if (local_to_param.empty())
             continue;
         std::map<std::string_view, std::set<std::string_view>> param_arith_fields;
-        for (const auto &bn : ctx.nodes) {
+        for (const auto& bn : ctx.nodes) {
             if (bn.type != NodeType::BinaryOp)
                 continue;
             std::function<void(uint32_t)> check_side;
             check_side = [&](uint32_t side_idx) {
                 if (side_idx >= ctx.nodes.size())
                     return;
-                const auto &sn = ctx.nodes[side_idx];
+                const auto& sn = ctx.nodes[side_idx];
                 if (sn.type == NodeType::TableAccess) {
                     uint32_t stbl = sn.as.table_access.table;
                     if (stbl < ctx.nodes.size() && ctx.nodes[stbl].type == NodeType::Identifier) {
@@ -1412,16 +1418,16 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
             check_side(bn.as.bin_op.left);
             check_side(bn.as.bin_op.right);
         }
-        for (auto &[pn, fields] : param_arith_fields) {
+        for (auto& [pn, fields] : param_arith_fields) {
             if (!fields.empty() && !state.numeric_table_fields.count(pn)) {
                 state.numeric_table_fields[pn] = fields;
-                for (auto &fld : fields) {
+                for (auto& fld : fields) {
                     if (std::find(state.string_pool.begin(), state.string_pool.end(), fld) == state.string_pool.end())
                         state.string_pool.push_back(fld);
                 }
             }
         }
-        for (auto &[ln, pn] : local_to_param) {
+        for (auto& [ln, pn] : local_to_param) {
             auto it = param_arith_fields.find(pn);
             if (it != param_arith_fields.end() && !it->second.empty()) {
                 if (!state.numeric_table_fields.count(ln)) {
@@ -1439,7 +1445,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
             changed2 = false;
             if (--safety2 <= 0)
                 break;
-            for (const auto &node : ctx.nodes) {
+            for (const auto& node : ctx.nodes) {
                 if (node.type == NodeType::LocalDecl || node.type == NodeType::GlobalDeclStatement) {
                     if (node.type == NodeType::GlobalDeclStatement && node.as.global_decl.is_wildcard)
                         continue;
@@ -1474,7 +1480,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                 } else if (node.type == NodeType::Assignment) {
                     for (uint32_t ii = 0; ii < node.as.assign.target_count; ++ii) {
                         uint32_t ti = ctx.block_statements[node.as.assign.first_target + ii];
-                        const auto &tn = ctx.nodes[ti];
+                        const auto& tn = ctx.nodes[ti];
                         if (tn.type == NodeType::Identifier) {
                             std::string_view nm(tn.as.ident.name, tn.as.ident.length);
                             uint32_t vi = (ii < node.as.assign.value_count)
@@ -1513,7 +1519,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
     }
 
     state.param_numbers.clear();
-    for (const auto &node : ctx.nodes) {
+    for (const auto& node : ctx.nodes) {
         if (node.type == NodeType::LocalDecl) {
             for (uint32_t ii = 0; ii < node.as.local_decl.ident_count; ++ii) {
                 uint32_t idi = ctx.block_statements[node.as.local_decl.first_ident + ii];
@@ -1547,7 +1553,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
 
     std::set<std::string_view> param_names;
     std::set<std::string> numeric_params;
-    for (const auto &nd : ctx.nodes) {
+    for (const auto& nd : ctx.nodes) {
         if (nd.type == NodeType::FunctionDef) {
             for (size_t p = 0; p < nd.as.func_def.param_count; ++p) {
                 uint32_t pi = ctx.block_statements[nd.as.func_def.first_param + p];
@@ -1562,7 +1568,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
     state.param_numbers.clear();
     std::map<std::string_view, std::map<uint32_t, uint32_t>> func_to_param_indices;
     for (uint32_t ni = 0; ni < ctx.nodes.size(); ++ni) {
-        const auto &nd = ctx.nodes[ni];
+        const auto& nd = ctx.nodes[ni];
         if (nd.type != NodeType::FunctionDef)
             continue;
         _np_debug_node_count++;
@@ -1575,7 +1581,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
     }
     std::map<uint32_t, std::vector<std::string_view>> func_def_params;
     for (uint32_t ni = 0; ni < ctx.nodes.size(); ++ni) {
-        const auto &nd = ctx.nodes[ni];
+        const auto& nd = ctx.nodes[ni];
         if (nd.type != NodeType::FunctionDef)
             continue;
         _np_debug_node_count++;
@@ -1591,10 +1597,10 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
     for (int iter = 0; iter < 10 && np_changed; ++iter) {
         np_changed = false;
         for (uint32_t ni = 0; ni < ctx.nodes.size(); ++ni) {
-            const auto &nd = ctx.nodes[ni];
+            const auto& nd = ctx.nodes[ni];
             if (nd.type != NodeType::FunctionDef)
                 continue;
-            auto &fparams = func_def_params[ni];
+            auto& fparams = func_def_params[ni];
             if (fparams.empty())
                 continue;
 
@@ -1604,7 +1610,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                 stack.pop_back();
                 if (nid == 0xFFFFFFFF || nid >= ctx.nodes.size())
                     continue;
-                const auto &nn = ctx.nodes[nid];
+                const auto& nn = ctx.nodes[nid];
 
                 if (nn.type == NodeType::Block) {
                     for (uint32_t bi = 0; bi < nn.as.block.count; ++bi)
@@ -1653,7 +1659,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                         auto check_arith = [&](uint32_t idx) {
                             if (idx < ctx.nodes.size() && ctx.nodes[idx].type == NodeType::Identifier) {
                                 std::string_view nm(ctx.nodes[idx].as.ident.name, ctx.nodes[idx].as.ident.length);
-                                for (auto &fp : fparams) {
+                                for (auto& fp : fparams) {
                                     if (fp == nm) {
                                         if (!state.param_numbers[ni].count(std::string(nm))) {
                                             state.param_numbers[ni].insert(std::string(nm));
@@ -1673,8 +1679,8 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                         std::string_view callee(ctx.nodes[tgt].as.ident.name, ctx.nodes[tgt].as.ident.length);
                         auto cit = func_to_param_indices.find(callee);
                         if (cit != func_to_param_indices.end()) {
-                            for (auto &[ci, start_idx] : cit->second) {
-                                auto &cparams = func_def_params[ci];
+                            for (auto& [ci, start_idx] : cit->second) {
+                                auto& cparams = func_def_params[ci];
                                 for (size_t ai = 0; ai < nn.as.call_expr.arg_count && ai < cparams.size(); ++ai) {
                                     uint32_t arg_nid = ctx.block_statements[nn.as.call_expr.first_arg + ai];
                                     if (arg_nid < ctx.nodes.size() && ctx.nodes[arg_nid].type == NodeType::Identifier) {
@@ -1683,7 +1689,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                                         std::string callee_pn(cparams[ai]);
                                         if (state.param_numbers[ci].count(callee_pn)
                                             && !state.param_numbers[ni].count(std::string(arg_nm))) {
-                                            for (auto &fp : fparams) {
+                                            for (auto& fp : fparams) {
                                                 if (fp == arg_nm) {
                                                     state.param_numbers[ni].insert(std::string(arg_nm));
                                                     np_changed = true;
@@ -1740,7 +1746,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
 
     state.node_func_owner.clear();
     for (uint32_t fi = 0; fi < ctx.nodes.size(); ++fi) {
-        const auto &fn = ctx.nodes[fi];
+        const auto& fn = ctx.nodes[fi];
         if (fn.type != NodeType::FunctionDef)
             continue;
         uint32_t body = fn.as.func_def.body_block;
@@ -1753,7 +1759,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
             if (ni >= ctx.nodes.size())
                 continue;
             state.node_func_owner[ni] = fi;
-            const auto &nn = ctx.nodes[ni];
+            const auto& nn = ctx.nodes[ni];
             auto push = [&](uint32_t idx) {
                 if (idx < ctx.nodes.size())
                     stk.push_back(idx);
@@ -1817,7 +1823,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
 
     {
         std::set<std::string_view> loop_vars;
-        for (const auto &nd : ctx.nodes) {
+        for (const auto& nd : ctx.nodes) {
             if (nd.type == NodeType::ForStatement) {
                 uint32_t vi = nd.as.for_stmt.var_ident;
                 if (vi < ctx.nodes.size() && ctx.nodes[vi].type == NodeType::Identifier) {
@@ -1826,8 +1832,8 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
             }
         }
 
-        std::vector<const ASTNode *> func_defs;
-        for (const auto &nd : ctx.nodes) {
+        std::vector<const ASTNode*> func_defs;
+        for (const auto& nd : ctx.nodes) {
             if (nd.type == NodeType::FunctionDef) {
                 func_defs.push_back(&nd);
             } else if (nd.type == NodeType::LocalDecl) {
@@ -1839,8 +1845,8 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                 }
             }
         }
-        for (const auto *fnd : func_defs) {
-            const auto &nd = *fnd;
+        for (const auto* fnd : func_defs) {
+            const auto& nd = *fnd;
             std::set<std::string_view> func_params;
             for (size_t p = 0; p < nd.as.func_def.param_count; ++p) {
                 uint32_t pi = ctx.block_statements[nd.as.func_def.first_param + p];
@@ -1850,7 +1856,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
             if (func_params.empty())
                 continue;
 
-            for (const auto &scan : ctx.nodes) {
+            for (const auto& scan : ctx.nodes) {
                 if (scan.type == NodeType::Assignment) {
                     for (uint32_t ii = 0; ii < scan.as.assign.target_count; ++ii) {
                         uint32_t ti = ctx.block_statements[scan.as.assign.first_target + ii];
@@ -1864,7 +1870,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
             if (func_params.empty())
                 continue;
 
-            for (const auto &bn : ctx.nodes) {
+            for (const auto& bn : ctx.nodes) {
                 if (bn.type != NodeType::BinaryOp)
                     continue;
                 int bop = bn.as.bin_op.op;
@@ -1876,7 +1882,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                 check_side = [&](uint32_t side_idx) {
                     if (side_idx >= ctx.nodes.size())
                         return;
-                    const auto &sn = ctx.nodes[side_idx];
+                    const auto& sn = ctx.nodes[side_idx];
                     if (sn.type == NodeType::TableAccess) {
                         uint32_t stbl = sn.as.table_access.table;
                         if (stbl < ctx.nodes.size() && ctx.nodes[stbl].type == NodeType::Identifier) {
@@ -1884,7 +1890,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                             if (func_params.count(sname)) {
                                 uint32_t key_idx = sn.as.table_access.key;
                                 if (key_idx < ctx.nodes.size()) {
-                                    const auto &kn = ctx.nodes[key_idx];
+                                    const auto& kn = ctx.nodes[key_idx];
                                     bool key_is_num = (kn.type == NodeType::Number || kn.type == NodeType::Integer);
                                     if (!key_is_num && kn.type == NodeType::Identifier) {
                                         std::string_view knm(kn.as.ident.name, kn.as.ident.length);
@@ -1923,7 +1929,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
     state.arena_table_sizes.clear();
 
     for (uint32_t fi = 0; fi < ctx.nodes.size(); ++fi) {
-        const auto &fn = ctx.nodes[fi];
+        const auto& fn = ctx.nodes[fi];
         if (fn.type != NodeType::FunctionDef)
             continue;
         uint32_t body = fn.as.func_def.body_block;
@@ -1941,14 +1947,14 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
         std::function<void(uint32_t)> walk_body = [&](uint32_t block_idx) {
             if (block_idx == 0xFFFFFFFF || block_idx >= ctx.nodes.size())
                 return;
-            const auto &blk = ctx.nodes[block_idx];
+            const auto& blk = ctx.nodes[block_idx];
             if (blk.type != NodeType::Block)
                 return;
             for (uint32_t si = 0; si < blk.as.block.count; ++si) {
                 uint32_t stmt = ctx.block_statements[blk.as.block.first_statement + si];
                 if (stmt >= ctx.nodes.size())
                     continue;
-                const auto &sn = ctx.nodes[stmt];
+                const auto& sn = ctx.nodes[stmt];
                 if (sn.type == NodeType::LocalDecl) {
                     for (uint32_t li = 0; li < sn.as.local_decl.ident_count; ++li) {
                         uint32_t id_idx = ctx.block_statements[sn.as.local_decl.first_ident + li];
@@ -1988,13 +1994,13 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
         if (local_tables.empty())
             continue;
 
-        for (auto &lt : local_tables) {
+        for (auto& lt : local_tables) {
             bool escapes = false;
 
             std::function<void(uint32_t)> check_escape = [&](uint32_t block_idx) {
                 if (escapes || block_idx == 0xFFFFFFFF || block_idx >= ctx.nodes.size())
                     return;
-                const auto &blk = ctx.nodes[block_idx];
+                const auto& blk = ctx.nodes[block_idx];
                 if (blk.type != NodeType::Block)
                     return;
                 for (uint32_t si = 0; si < blk.as.block.count; ++si) {
@@ -2003,12 +2009,12 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                     uint32_t stmt = ctx.block_statements[blk.as.block.first_statement + si];
                     if (stmt >= ctx.nodes.size())
                         continue;
-                    const auto &sn = ctx.nodes[stmt];
+                    const auto& sn = ctx.nodes[stmt];
 
                     std::function<bool(uint32_t)> refs_var = [&](uint32_t n_idx) -> bool {
                         if (n_idx >= ctx.nodes.size())
                             return false;
-                        const auto &n = ctx.nodes[n_idx];
+                        const auto& n = ctx.nodes[n_idx];
                         if (n.type == NodeType::Identifier) {
                             return std::string_view(n.as.ident.name, n.as.ident.length) == lt.name;
                         }
@@ -2094,7 +2100,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                         for (uint32_t vi = 0; vi < v_count; ++vi) {
                             uint32_t v_idx = ctx.block_statements[first_v + vi];
                             if (v_idx < ctx.nodes.size()) {
-                                const auto &vn = ctx.nodes[v_idx];
+                                const auto& vn = ctx.nodes[v_idx];
                                 if (vn.type == NodeType::CallExpression) {
                                     for (uint32_t ai = 0; ai < vn.as.call_expr.arg_count; ++ai) {
                                         uint32_t a_idx = ctx.block_statements[vn.as.call_expr.first_arg + ai];
@@ -2146,7 +2152,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
 
             if (!escapes) {
                 for (uint32_t ni = 0; ni < ctx.nodes.size(); ++ni) {
-                    const auto &n = ctx.nodes[ni];
+                    const auto& n = ctx.nodes[ni];
                     if (n.type == NodeType::Identifier && n.as.ident.is_captured
                         && std::string_view(n.as.ident.name, n.as.ident.length) == lt.name) {
                         escapes = true;
@@ -2160,7 +2166,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                 std::function<void(uint32_t)> check_growth = [&](uint32_t block_idx) {
                     if (might_grow || block_idx == 0xFFFFFFFF || block_idx >= ctx.nodes.size())
                         return;
-                    const auto &blk = ctx.nodes[block_idx];
+                    const auto& blk = ctx.nodes[block_idx];
                     if (blk.type != NodeType::Block)
                         return;
                     for (uint32_t si = 0; si < blk.as.block.count; ++si) {
@@ -2169,11 +2175,11 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                         uint32_t stmt = ctx.block_statements[blk.as.block.first_statement + si];
                         if (stmt >= ctx.nodes.size())
                             continue;
-                        const auto &sn = ctx.nodes[stmt];
+                        const auto& sn = ctx.nodes[stmt];
                         auto check_target = [&](uint32_t tgt_idx) {
                             if (tgt_idx >= ctx.nodes.size())
                                 return;
-                            const auto &tn = ctx.nodes[tgt_idx];
+                            const auto& tn = ctx.nodes[tgt_idx];
                             if (tn.type == NodeType::TableAccess) {
                                 if (tn.as.table_access.table < ctx.nodes.size()
                                     && ctx.nodes[tn.as.table_access.table].type == NodeType::Identifier) {
@@ -2220,7 +2226,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
 
         uint32_t total_arena = 0;
         for (uint32_t node_idx : state.arena_safe_table_nodes) {
-            const auto &tc = ctx.nodes[node_idx];
+            const auto& tc = ctx.nodes[node_idx];
             if (tc.type != NodeType::TableConstructor)
                 continue;
             size_t arr_count = 0;
@@ -2256,25 +2262,25 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
     }
 
     {
-        std::function<bool(uint32_t, std::set<std::string_view> &)> walk_for_int_returns
-            = [&](uint32_t bi, std::set<std::string_view> &loop_vars) -> bool {
+        std::function<bool(uint32_t, std::set<std::string_view>&)> walk_for_int_returns
+            = [&](uint32_t bi, std::set<std::string_view>& loop_vars) -> bool {
             if (bi == 0xFFFFFFFF || bi >= ctx.nodes.size())
                 return true;
-            const auto &b = ctx.nodes[bi];
+            const auto& b = ctx.nodes[bi];
             if (b.type != NodeType::Block)
                 return true;
             for (uint32_t j = 0; j < b.as.block.count; ++j) {
                 uint32_t si = ctx.block_statements[b.as.block.first_statement + j];
                 if (si >= ctx.nodes.size())
                     continue;
-                const auto &st = ctx.nodes[si];
+                const auto& st = ctx.nodes[si];
                 if (st.type == NodeType::ReturnStatement) {
                     if (st.as.return_stmt.value_count != 1)
                         return false;
                     uint32_t vi = ctx.block_statements[st.as.return_stmt.first_value];
                     if (vi == 0xFFFFFFFF || vi >= ctx.nodes.size())
                         return false;
-                    const auto &v = ctx.nodes[vi];
+                    const auto& v = ctx.nodes[vi];
                     if (v.type == NodeType::Integer)
                         continue;
                     if (v.type == NodeType::Identifier) {
@@ -2328,7 +2334,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
         };
 
         for (uint32_t i = 0; i < ctx.nodes.size(); ++i) {
-            const auto &nd = ctx.nodes[i];
+            const auto& nd = ctx.nodes[i];
             if (nd.type != NodeType::FunctionDef)
                 continue;
             if (nd.as.func_def.body_block == 0xFFFFFFFF)
@@ -2337,7 +2343,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
             if (!walk_for_int_returns(nd.as.func_def.body_block, loop_vars))
                 continue;
             for (uint32_t j = 0; j < ctx.nodes.size(); ++j) {
-                const auto &ln = ctx.nodes[j];
+                const auto& ln = ctx.nodes[j];
                 uint32_t fv = 0xFFFFFFFF, fi = 0xFFFFFFFF;
                 if (ln.type == NodeType::LocalDecl && ln.as.local_decl.value_count == 1) {
                     fv = ctx.block_statements[ln.as.local_decl.first_value];
@@ -2360,7 +2366,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
         }
 
         for (uint32_t i = 0; i < ctx.nodes.size(); ++i) {
-            const auto &nd = ctx.nodes[i];
+            const auto& nd = ctx.nodes[i];
             if (nd.type != NodeType::LocalDecl)
                 continue;
             if (nd.as.local_decl.ident_count != 1 || nd.as.local_decl.value_count != 1)

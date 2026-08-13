@@ -8,15 +8,15 @@
 #ifndef OPTIMIZER_H
 #define OPTIMIZER_H
 
-#include "../syntax/nodes.h"
 #include "../codegen/codegen.h"
+#include "../syntax/nodes.h"
 #include "analysis_state.h"
-#include <set>
-#include <map>
-#include <vector>
 #include <algorithm>
 #include <cstring>
+#include <map>
+#include <set>
 #include <string_view>
+#include <vector>
 
 namespace clx {
 
@@ -24,20 +24,21 @@ namespace clx {
 class Optimizer {
 public:
     //------------------ Optimizer: constructs optimizer for a given AST context and analysis state
-    Optimizer(const ASTContext &context, AnalysisState &analysis);
+    Optimizer(const ASTContext& context, AnalysisState& analysis);
 
     //------------------ run: executes all analysis passes on the AST
-    void run(const ASTContext &ctx, uint32_t root_node);
+    void run(const ASTContext& ctx, uint32_t root_node);
 
 private:
-    const ASTContext *ctx;
-    AnalysisState &state;
+    const ASTContext* ctx;
+    AnalysisState& state;
 };
 
 //------------------ yields_number: returns true if a node always evaluates to a number
-inline bool yields_number(const ASTContext &ctx, const AnalysisState &state, uint32_t node_idx,
-    const std::set<std::string_view> *known_numbers = nullptr, std::string_view self_name = "",
-    const std::set<std::string_view> *param_numbers = nullptr, int *depth = nullptr) {
+inline bool yields_number(const ASTContext& ctx, const AnalysisState& state, uint32_t node_idx,
+    const std::set<std::string_view>* known_numbers = nullptr, std::string_view self_name = "",
+    const std::set<std::string_view>* param_numbers = nullptr, int* depth = nullptr)
+{
     if (node_idx == 0xFFFFFFFF || node_idx >= ctx.nodes.size())
         return false;
     int dummy = 0;
@@ -48,7 +49,7 @@ inline bool yields_number(const ASTContext &ctx, const AnalysisState &state, uin
         return false;
     }
 
-    const auto &n = ctx.nodes[node_idx];
+    const auto& n = ctx.nodes[node_idx];
     bool result = false;
 
     if (n.type == NodeType::Number || n.type == NodeType::Integer) {
@@ -124,7 +125,7 @@ inline bool yields_number(const ASTContext &ctx, const AnalysisState &state, uin
             auto it = state.numeric_table_fields.find(tn);
             if (it == state.numeric_table_fields.end()) {
 
-                for (const auto &nd : ctx.nodes) {
+                for (const auto& nd : ctx.nodes) {
                     if (nd.type != NodeType::LocalDecl)
                         continue;
                     for (uint32_t ii = 0; ii < nd.as.local_decl.ident_count; ++ii) {
@@ -170,7 +171,7 @@ inline bool yields_number(const ASTContext &ctx, const AnalysisState &state, uin
         }
 
         if (tbl_idx < ctx.nodes.size() && ctx.nodes[tbl_idx].type == NodeType::TableAccess) {
-            const auto &inner_acc = ctx.nodes[tbl_idx].as.table_access;
+            const auto& inner_acc = ctx.nodes[tbl_idx].as.table_access;
             if (ctx.nodes[inner_acc.table].type == NodeType::Identifier) {
                 std::string_view tn(
                     ctx.nodes[inner_acc.table].as.ident.name, ctx.nodes[inner_acc.table].as.ident.length);

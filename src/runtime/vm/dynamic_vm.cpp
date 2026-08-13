@@ -2,68 +2,71 @@
 // │  clx — Lua to C++ Native Compiler           │
 // │  Copyright (c) 2026 Tine Samir. MIT License.│
 // ├─────────────────────────────────────────────┤
-// │  dynamic_vm.cpp · Embedded Lua 5.5 VM     │
+// │  dynamic_vm.cpp · Embedded Lua 5.5 VM       │
 // └─────────────────────────────────────────────┘
 
 #include "dynamic_vm.h"
 #include "vm_convert.h"
-#include "vm_table_proxy.h"
 #include "vm_function_object.h"
+#include "vm_table_proxy.h"
 
 #include <clx_simd.h>
-#include <unordered_map>
-#include <vector>
 #include <cstring>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 extern "C" {
-int clx_vm_env_index(lua_State *L);
-int clx_vm_env_newindex(lua_State *L);
-int clx_vm_env_pairs(lua_State *L);
-int clx_vm_env_pairs_iter(lua_State *L);
-int clx_vm_env_collectgarbage(lua_State *L);
+int clx_vm_env_index(lua_State* L);
+int clx_vm_env_newindex(lua_State* L);
+int clx_vm_env_pairs(lua_State* L);
+int clx_vm_env_pairs_iter(lua_State* L);
+int clx_vm_env_collectgarbage(lua_State* L);
 }
 
 namespace clx {
 
-void clx_mark_vm_proxies_(LState *clx_L, std::vector<LHeader *> &wl);
+void clx_mark_vm_proxies_(LState* clx_L, std::vector<LHeader*>& wl);
 
 //------------------ clx_register_vm_proxy - link a VM proxy into clx GC
-void clx_register_vm_proxy(LState *clx_L, LHeader *proxy, size_t bytes) {
+void clx_register_vm_proxy(LState* clx_L, LHeader* proxy, size_t bytes)
+{
     proxy->next = clx_L->allocated_objects;
     clx_L->allocated_objects = proxy;
     clx_L->object_count++;
     clx_L->allocated_bytes += bytes;
 
-    DynamicVM *vm = DynamicVM::find(clx_L);
+    DynamicVM* vm = DynamicVM::find(clx_L);
     if (vm)
         vm->pace_vm_gc();
 }
 
 //------------------ clx_free_vm_proxy_ - free a VM proxy collected by clx GC
-static void clx_free_vm_proxy_(LState *clx_L, LHeader *proxy) {
+static void clx_free_vm_proxy_(LState* clx_L, LHeader* proxy)
+{
     if (proxy->type == static_cast<uint8_t>(Table)) {
         clx_L->allocated_bytes -= sizeof(VMTableProxy);
-        delete static_cast<VMTableProxy *>(proxy);
+        delete static_cast<VMTableProxy*>(proxy);
     } else {
         clx_L->allocated_bytes -= sizeof(VMFunction);
-        delete static_cast<VMFunction *>(proxy);
+        delete static_cast<VMFunction*>(proxy);
     }
 }
 
 namespace {
 
-    std::unordered_map<LState *, DynamicVM *> g_dynamic_vms_;
+    std::unordered_map<LState*, DynamicVM*> g_dynamic_vms_;
 
 }
 
 //------------------ DynamicVM::DynamicVM
-DynamicVM::DynamicVM(LState *clx_L)
+DynamicVM::DynamicVM(LState* clx_L)
     : clx_L_(clx_L)
     , L_(nullptr)
     , registry_root_(LUA_NOREF)
     , env_table_ref_(LUA_NOREF)
-    , opened_libs_(false) {
+    , opened_libs_(false)
+{
     L_ = luaL_newstate();
     if (!L_)
         throw_runtime_error("failed to create embedded Lua 5.5 vm_state");
@@ -80,7 +83,8 @@ DynamicVM::DynamicVM(LState *clx_L)
 }
 
 //------------------ DynamicVM::~DynamicVM
-DynamicVM::~DynamicVM() {
+DynamicVM::~DynamicVM()
+{
     if (L_) {
 
         if (registry_root_ != LUA_NOREF) {
@@ -93,35 +97,38 @@ DynamicVM::~DynamicVM() {
 }
 
 //------------------ DynamicVM::default_env_registry_ref
-int DynamicVM::default_env_registry_ref() const {
+int DynamicVM::default_env_registry_ref() const
+{
     return env_table_ref_;
 }
 
 //------------------ DynamicVM::build_parking_lot
-void DynamicVM::build_parking_lot() {
+void DynamicVM::build_parking_lot()
+{
     lua_newtable(L_);
     registry_root_ = luaL_ref(L_, LUA_REGISTRYINDEX);
 }
 
 //------------------ DynamicVM::build_default_env
-int DynamicVM::build_default_env() {
+int DynamicVM::build_default_env()
+{
     lua_newtable(L_);
     lua_newtable(L_);
 
-    lua_pushlightuserdata(L_, static_cast<void *>(clx_L_));
-    lua_pushlightuserdata(L_, static_cast<void *>(clx_L_->_G));
+    lua_pushlightuserdata(L_, static_cast<void*>(clx_L_));
+    lua_pushlightuserdata(L_, static_cast<void*>(clx_L_->_G));
     lua_pushinteger(L_, 0);
     lua_pushcclosure(L_, clx_vm_env_index, 3);
     lua_setfield(L_, -2, "__index");
 
-    lua_pushlightuserdata(L_, static_cast<void *>(clx_L_));
-    lua_pushlightuserdata(L_, static_cast<void *>(clx_L_->_G));
+    lua_pushlightuserdata(L_, static_cast<void*>(clx_L_));
+    lua_pushlightuserdata(L_, static_cast<void*>(clx_L_->_G));
     lua_pushinteger(L_, 0);
     lua_pushcclosure(L_, clx_vm_env_newindex, 3);
     lua_setfield(L_, -2, "__newindex");
 
-    lua_pushlightuserdata(L_, static_cast<void *>(clx_L_));
-    lua_pushlightuserdata(L_, static_cast<void *>(clx_L_->_G));
+    lua_pushlightuserdata(L_, static_cast<void*>(clx_L_));
+    lua_pushlightuserdata(L_, static_cast<void*>(clx_L_->_G));
     lua_pushinteger(L_, 0);
     lua_pushcclosure(L_, clx_vm_env_pairs, 3);
     lua_setfield(L_, -2, "__pairs");
@@ -152,9 +159,9 @@ int DynamicVM::build_default_env() {
     lua_rawset(L_, -3);
 
     {
-        static const char *lua_only_globals[] = { "coroutine", "pairs", "ipairs", "pcall", "xpcall", "select",
+        static const char* lua_only_globals[] = { "coroutine", "pairs", "ipairs", "pcall", "xpcall", "select",
             "tostring", "type", "error", "assert", "math", "string", "table", "os", "io", nullptr };
-        for (const char **gp = lua_only_globals; *gp; ++gp) {
+        for (const char** gp = lua_only_globals; *gp; ++gp) {
             lua_pushstring(L_, *gp);
             lua_getglobal(L_, *gp);
             lua_rawset(L_, -3);
@@ -163,7 +170,7 @@ int DynamicVM::build_default_env() {
 
     {
         lua_pushstring(L_, "collectgarbage");
-        lua_pushlightuserdata(L_, static_cast<void *>(clx_L_));
+        lua_pushlightuserdata(L_, static_cast<void*>(clx_L_));
         lua_pushcclosure(L_, clx_vm_env_collectgarbage, 1);
         lua_rawset(L_, -3);
     }
@@ -173,26 +180,27 @@ int DynamicVM::build_default_env() {
 }
 
 //------------------ DynamicVM::build_env_table
-int DynamicVM::build_env_table(const LValue &preferred) {
+int DynamicVM::build_env_table(const LValue& preferred)
+{
     if (preferred.type == Table && preferred.as_pointer()) {
         lua_newtable(L_);
-        LTable *t = static_cast<LTable *>(preferred.as_pointer());
+        LTable* t = static_cast<LTable*>(preferred.as_pointer());
         lua_newtable(L_);
 
-        lua_pushlightuserdata(L_, static_cast<void *>(clx_L_));
-        lua_pushlightuserdata(L_, static_cast<void *>(t));
+        lua_pushlightuserdata(L_, static_cast<void*>(clx_L_));
+        lua_pushlightuserdata(L_, static_cast<void*>(t));
         lua_pushinteger(L_, 0);
         lua_pushcclosure(L_, clx_vm_env_index, 3);
         lua_setfield(L_, -2, "__index");
 
-        lua_pushlightuserdata(L_, static_cast<void *>(clx_L_));
-        lua_pushlightuserdata(L_, static_cast<void *>(t));
+        lua_pushlightuserdata(L_, static_cast<void*>(clx_L_));
+        lua_pushlightuserdata(L_, static_cast<void*>(t));
         lua_pushinteger(L_, 0);
         lua_pushcclosure(L_, clx_vm_env_newindex, 3);
         lua_setfield(L_, -2, "__newindex");
 
-        lua_pushlightuserdata(L_, static_cast<void *>(clx_L_));
-        lua_pushlightuserdata(L_, static_cast<void *>(t));
+        lua_pushlightuserdata(L_, static_cast<void*>(clx_L_));
+        lua_pushlightuserdata(L_, static_cast<void*>(t));
         lua_pushinteger(L_, 0);
         lua_pushcclosure(L_, clx_vm_env_pairs, 3);
         lua_setfield(L_, -2, "__pairs");
@@ -243,12 +251,13 @@ int DynamicVM::build_env_table(const LValue &preferred) {
 }
 
 //------------------ DynamicVM::load_buffer
-bool DynamicVM::load_buffer(const char *src, size_t len, const char *name, const char *mode_str, int env_ref,
-    int *out_ref, std::string *error_msg) {
+bool DynamicVM::load_buffer(const char* src, size_t len, const char* name, const char* mode_str, int env_ref,
+    int* out_ref, std::string* error_msg)
+{
     int rc = luaL_loadbufferx(L_, src, len, name ? name : "[chunk]", mode_str);
     if (rc != LUA_OK) {
         if (error_msg) {
-            const char *msg = lua_tostring(L_, -1);
+            const char* msg = lua_tostring(L_, -1);
             *error_msg = msg ? msg : "<unknown>";
         }
         lua_pop(L_, 1);
@@ -263,11 +272,12 @@ bool DynamicVM::load_buffer(const char *src, size_t len, const char *name, const
 }
 
 //------------------ DynamicVM::load_file
-bool DynamicVM::load_file(const char *path, const char *mode_str, int env_ref, int *out_ref, std::string *error_msg) {
+bool DynamicVM::load_file(const char* path, const char* mode_str, int env_ref, int* out_ref, std::string* error_msg)
+{
     int rc = luaL_loadfilex(L_, path, mode_str);
     if (rc != LUA_OK) {
         if (error_msg) {
-            const char *msg = lua_tostring(L_, -1);
+            const char* msg = lua_tostring(L_, -1);
             *error_msg = msg ? msg : "<unknown>";
         }
         lua_pop(L_, 1);
@@ -282,8 +292,9 @@ bool DynamicVM::load_file(const char *path, const char *mode_str, int env_ref, i
 }
 
 //------------------ DynamicVM::capture_error
-LValue DynamicVM::capture_error() {
-    const char *msg = lua_tostring(L_, -1);
+LValue DynamicVM::capture_error()
+{
+    const char* msg = lua_tostring(L_, -1);
     if (!msg)
         return LValue();
     LValue v = clx_L_->intern_lvalue(msg, std::strlen(msg));
@@ -292,24 +303,26 @@ LValue DynamicVM::capture_error() {
 }
 
 //------------------ DynamicVM::acquire
-DynamicVM *DynamicVM::acquire(LState *clx_L) {
+DynamicVM* DynamicVM::acquire(LState* clx_L)
+{
     auto it = g_dynamic_vms_.find(clx_L);
     if (it != g_dynamic_vms_.end())
         return it->second;
-    DynamicVM *vm = new DynamicVM(clx_L);
+    DynamicVM* vm = new DynamicVM(clx_L);
     g_dynamic_vms_[clx_L] = vm;
     return vm;
 }
 
 //------------------ DynamicVM::release
-void DynamicVM::release(LState *clx_L) {
+void DynamicVM::release(LState* clx_L)
+{
     auto it = g_dynamic_vms_.find(clx_L);
     if (it == g_dynamic_vms_.end())
         return;
 
-    ProxyNode *n = it->second->proxy_head_;
+    ProxyNode* n = it->second->proxy_head_;
     while (n) {
-        ProxyNode *nx = n->next;
+        ProxyNode* nx = n->next;
         n->prev = nullptr;
         n->next = nullptr;
         n->header = nullptr;
@@ -321,13 +334,15 @@ void DynamicVM::release(LState *clx_L) {
 }
 
 //------------------ DynamicVM::find - non-lazy lookup
-DynamicVM *DynamicVM::find(LState *clx_L) {
+DynamicVM* DynamicVM::find(LState* clx_L)
+{
     auto it = g_dynamic_vms_.find(clx_L);
     return (it != g_dynamic_vms_.end()) ? it->second : nullptr;
 }
 
 //------------------ DynamicVM::pace_vm_gc - throttle embedded VM GC
-void DynamicVM::pace_vm_gc() {
+void DynamicVM::pace_vm_gc()
+{
     if (L_ && ++proxy_alloc_since_gc_ >= PROXY_GC_PACE_THRESHOLD) {
         proxy_alloc_since_gc_ = 0;
         lua_gc(L_, LUA_GCSTEP, 200);
@@ -335,7 +350,8 @@ void DynamicVM::pace_vm_gc() {
 }
 
 //------------------ DynamicVM::link_proxy - O(1) head insert
-void DynamicVM::link_proxy(ProxyNode *node) {
+void DynamicVM::link_proxy(ProxyNode* node)
+{
     if (!node)
         return;
     node->prev = nullptr;
@@ -349,7 +365,8 @@ void DynamicVM::link_proxy(ProxyNode *node) {
 }
 
 //------------------ DynamicVM::unlink_proxy - O(1) pointer surgery
-void DynamicVM::unlink_proxy(ProxyNode *node) {
+void DynamicVM::unlink_proxy(ProxyNode* node)
+{
     if (!node)
         return;
     if (node->prev)
@@ -363,33 +380,36 @@ void DynamicVM::unlink_proxy(ProxyNode *node) {
 }
 
 //------------------ DynamicVM::mark_proxy_roots - walk list into clx GC worklist
-void DynamicVM::mark_proxy_roots(std::vector<LHeader *> &wl) {
-    for (ProxyNode *n = proxy_head_; n; n = n->next) {
+void DynamicVM::mark_proxy_roots(std::vector<LHeader*>& wl)
+{
+    for (ProxyNode* n = proxy_head_; n; n = n->next) {
         if (n->header && n->header->marked == 0) {
             n->header->marked = 1;
             wl.push_back(n->header);
         }
         if (n->header && n->header->type == static_cast<uint8_t>(Table)) {
-            VMTableProxy *tp = static_cast<VMTableProxy *>(n->header);
+            VMTableProxy* tp = static_cast<VMTableProxy*>(n->header);
             if (tp->clx_underlying && tp->clx_underlying->marked == 0) {
                 tp->clx_underlying->marked = 1;
-                wl.push_back(reinterpret_cast<LHeader *>(tp->clx_underlying));
+                wl.push_back(reinterpret_cast<LHeader*>(tp->clx_underlying));
             }
         }
     }
 }
 
 //------------------ clx_mark_vm_proxies_ - free-function facade
-void clx_mark_vm_proxies_(LState *clx_L, std::vector<LHeader *> &wl) {
-    DynamicVM *vm = DynamicVM::find(clx_L);
+void clx_mark_vm_proxies_(LState* clx_L, std::vector<LHeader*>& wl)
+{
+    DynamicVM* vm = DynamicVM::find(clx_L);
     if (!vm)
         return;
     vm->mark_proxy_roots(wl);
 }
 
 //------------------ clx_vm_env_collectgarbage - collectgarbage wrapper
-extern "C" int clx_vm_env_collectgarbage(lua_State *L) {
-    const char *opt = lua_tostring(L, 1);
+extern "C" int clx_vm_env_collectgarbage(lua_State* L)
+{
+    const char* opt = lua_tostring(L, 1);
 
     if (opt && strcmp(opt, "count") == 0) {
         int kb = lua_gc(L, LUA_GCCOUNT, 0);
@@ -397,7 +417,7 @@ extern "C" int clx_vm_env_collectgarbage(lua_State *L) {
         return 1;
     }
 
-    clx::LState *clx_L = static_cast<clx::LState *>(lua_touserdata(L, lua_upvalueindex(1)));
+    clx::LState* clx_L = static_cast<clx::LState*>(lua_touserdata(L, lua_upvalueindex(1)));
 
     if (opt && strcmp(opt, "stop") == 0) {
         lua_gc(L, LUA_GCSTOP, 0);

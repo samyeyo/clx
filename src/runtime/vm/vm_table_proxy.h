@@ -14,18 +14,18 @@ namespace clx {
 
 //------------------ VMTableProxy - clx LValue that wraps a Lua VM table
 struct VMTableProxy : public LHeader {
-    DynamicVM *vm;
+    DynamicVM* vm;
     int registry_ref;
-    LTable *clx_underlying;
+    LTable* clx_underlying;
 
-    VMTableProxy(DynamicVM *vm_, int ref, LTable *clx_under = nullptr);
+    VMTableProxy(DynamicVM* vm_, int ref, LTable* clx_under = nullptr);
     ~VMTableProxy();
 
-    static LValue wrap(LState *clx_L, const LValue &src);
-    static LValue wrap(LState *clx_L, lua_State *L, int idx);
+    static LValue wrap(LState* clx_L, const LValue& src);
+    static LValue wrap(LState* clx_L, lua_State* L, int idx);
 };
 
-LValue vm_to_clx_table_(LState *clx_L, lua_State *L, int idx);
+LValue vm_to_clx_table_(LState* clx_L, lua_State* L, int idx);
 
 }
 
