@@ -23,14 +23,17 @@ jobs:
             os: ubuntu-latest
             artifact: clx-linux-x86_64
             binary: clx
+            exe_ext: ""
           - name: windows-x86_64
             os: windows-latest
             artifact: clx-windows-x86_64
             binary: clx.exe
+            exe_ext: ".exe"
           - name: macos-arm64
             os: macos-latest
             artifact: clx-macos-arm64
             binary: clx
+            exe_ext: ""
 
 
     steps:
@@ -46,23 +49,28 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          mkdir -p staging/bin staging/include staging/lib
-          tar cf - --exclude=./build --exclude=./.git --exclude=./staging . | tar xf - -C staging/
-          cp bin/${{ matrix.binary }} staging/bin/ 2>/dev/null || true
-          cp -f lib/libclx.a lib/libclx_size.a staging/lib/ 2>/dev/null || true
-          tar czf ${{ matrix.artifact }}.tar.gz -C staging .
+          set -e
+          FOLDER=${{ matrix.artifact }}
+          mkdir -p staging/$FOLDER/bin staging/$FOLDER/include staging/$FOLDER/lib
+          cp -f build/${{ matrix.binary }} staging/$FOLDER/bin/
+          cp -f include/clx.h include/clx_runtime.h include/clx_simd.h staging/$FOLDER/include/
+          cp -f build/libclx.a build/libclx_size.a staging/$FOLDER/lib/
+          cp -f build/clx_lua/libclx_lua.a staging/$FOLDER/lib/ 2>/dev/null || true
+          tar czf $FOLDER.tar.gz -C staging $FOLDER
+          (cd staging && zip -r ../$FOLDER.zip $FOLDER)
 
       - name: Archive (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path staging/bin,staging/include,staging/lib -Force | Out-Null
-          Get-ChildItem -Path . -Exclude build,.git,staging | Copy-Item -Recurse -Destination staging -Force
-          Copy-Item bin/clx.exe staging/bin/
-          Copy-Item include/clx.h,include/clx_runtime.h staging/include/
-          if (Test-Path "lib/clx.lib") { Copy-Item "lib/clx.lib" staging/lib/ }
-          if (Test-Path "lib/clx_size.lib") { Copy-Item "lib/clx_size.lib" staging/lib/ }
-          Compress-Archive -Path staging/* -DestinationPath ${{ matrix.artifact }}.zip
+          $FOLDER = "${{ matrix.artifact }}"
+          New-Item -ItemType Directory -Path "staging/$FOLDER/bin","staging/$FOLDER/include","staging/$FOLDER/lib" -Force | Out-Null
+          Copy-Item "bin/${{ matrix.binary }}" "staging/$FOLDER/bin/"
+          Copy-Item "include/clx.h","include/clx_runtime.h","include/clx_simd.h" "staging/$FOLDER/include/"
+          Copy-Item "lib/clx.lib" "staging/$FOLDER/lib/"
+          Copy-Item "lib/clx_size.lib" "staging/$FOLDER/lib/"
+          if (Test-Path "lib/clx_lua.lib") { Copy-Item "lib/clx_lua.lib" "staging/$FOLDER/lib/" }
+          Compress-Archive -Path "staging/$FOLDER" -DestinationPath "$FOLDER.zip"
 
       - uses: actions/upload-artifact@v4
         with:
