@@ -92,8 +92,8 @@ The compiler is already capable of compiling non-trivial Lua applications, but c
 ```bash
 ./build.bat              # Release (default)
 ./build.bat debug        # Debug
-./build.bat clean        # Removes build/ + ./bin and ./lib
-./build.bat install      # Release + install to /bin and ./lib
+./build.bat clean        # Removes build/ + in-tree ./bin and ./lib outputs
+./build.bat install      # Release + install to %ProgramFiles%\clx (see below)
 ./build.bat uninstall    # Removes previously installed clx
 ```
 
@@ -103,11 +103,16 @@ Also works directly with CMake:
 mkdir -p build && cmake -S . -B build && cmake --build build
 ```
 
-Once compiled, you will find :
+Once compiled, you will find the following compiled files (in `build/`):
 
-- `build/clx` — The compiler executable
-- `build/libclx.a` — Static runtime library
-- `build/libclx_size.a` — Static runtime library optimized for size
+| Output | POSIX | Windows |
+|----------|-------|---------|
+| Compiler executable | `build/clx` | `build/clx.exe` |
+| Static runtime library | `build/libclx.a` | `build/clx.lib` |
+| Runtime library optimized for size | `build/libclx_size.a` | `build/clx_size.lib` |
+| Embedded Lua 5.5 VM + clx bridge (needed only for `--dynamic`) | `build/clx_lua/libclx_lua.a` | `build/clx_lua/clx_lua.lib` |
+
+clx locates its runtime libraries, headers, and native modules from the in-tree `build/` dir first, then the install prefix resolved from CMake/GNUInstallDirs (`/usr/local` on POSIX, `%ProgramFiles%\clx` on Windows).
 
 ## Usage
 
@@ -122,39 +127,19 @@ Once compiled, you will find :
 ./build/clx file.lua --minimal               # base + package modules only
 ./build/clx file.lua --fast                  # Optimize for speed
 ./build/clx file.lua --size                  # Optimize for size (default)
+./build/clx app.lua --dynamic                # Embed the Lua VM; enables load/loadfile/dofile
 ./build/clx --version                        # Print version
 ./build/clx --help                           # Display help
 ```
 
-#### Compatibility
-
-**clx** targets Lua 5.5 compatibility.
-
-Current status:
-
-- Core language: largely implemented
-- Tables and metatables: implemented
-- Coroutines: implemented
-- Modules: implemented
-- Most standard libraries: implemented
-
-See **[compatibility.md](doc/compatibility.md)** for detailed status.
-
 #### Known limitations
 - **`load()` / `loadfile()` / `dofile()`** — available only when the generated program is compiled with `--dynamic`; the source executes in the embedded Lua VM rather than in the AOT code path. They are absent from ordinary and `--minimal` builds.
-- **AOT `string.dump()` / `debug`** — these are not provided by the clx AOT runtime. Dynamic code uses the embedded VM’s own standard libraries when compiled with `--dynamic`.
+- **AOT `string.dump()` / `debug`** — these are not provided by the clx AOT runtime, only available when running dynamic code with the embedded VM’s own standard libraries.
 - The traditional Lua C API is not supported.
 - Binary modules should be written using the clx C++ API.
 
-See [Dynamic Lua](./doc/dyamic-lua.md) for activation, environments, `require`, and bridge limitations.
+See [Dynamic Lua](./doc/dynamic-lua.md) for activation, environments, `require`, and bridge limitations.
 
-## Test suite
-
-```bash
-./tests/run.sh              # POSIX
-./tests/run.bat             # Windows
-```
-Each `.lua` in `tests/` is compiled to a binary and executed. Tests print `[OK]`/`[FAIL]` per assertion.
 
 ## Benchmarks
 
@@ -187,7 +172,7 @@ Documentation is available in the `doc/` directory, including :
 - Optimizations
 - Benchmarks
 
-See **[Documentation Index](./doc/index.md)**. For runtime Lua loading, see **[Dynamic Lua](./doc/dyamic-lua.md)**.
+See **[Documentation Index](./doc/index.md)**. For runtime Lua loading, see **[Dynamic Lua](./doc/dynamic-lua.md)**.
 
 ## License
 
