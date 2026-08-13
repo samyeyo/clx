@@ -43,6 +43,27 @@ local result = a + b  -- Uses clx::LValue arithmetic with type checks
 local result = a + b  -- When a and b are known numbers, uses add directly
 ```
 
+### Native integer tracking
+
+Beyond plain numeric inference, the optimizer tracks which locals, function parameters, and
+function return values are **integer**-typed (`int64_t` rather than `double`). This enables:
+
+- `int64_t` loop counters for numeric `for` loops (no floating-point counter):
+
+```lua
+-- Generated C++:
+-- for (int64_t i_val = 1; i_val <= n; i_val++) { ... }
+for i = 1, n do
+    ...
+end
+```
+
+- unboxed integer locals (`int64_t l_x;`) instead of `double` when the optimizer proves the variable is only assigned integer values;
+- integer-returning functions whose result is used directly in integer arithmetic;
+- native `//`, `%`, bitwise, and shift operators when both sides are integer-typed.
+
+The optimizer records `int_returning_funcs`, `int_typed_locals`, and `native_integers` in the analysis state (`analysis_state.h`), and `is_purely_integer_expr()` proves integer-ness for whole expressions so arithmetic stays in the integer domain end-to-end.
+
 ### Int64 overflow safety
 
 Integer arithmetic (`add`, `sub`, `mul`) with two `Int64` operands uses native C++ integer
@@ -98,6 +119,32 @@ end
 -- After: bi.x is a native double, bi.x + bi.vx * dt is C++ arithmetic
 ```
 
+### Known-length `#t` constant folding
+
+Tables created with a fixed constructor length (e.g. `{1, 2, 3}`) get a known length recorded in `known_table_lengths`. When the optimizer can prove the table is not mutated afterwards, `#t` is folded to a compile-time constant instead of a runtime `rawlen` call.
+
+The optimizer also tracks tables whose length can change at runtime — `setmetatable(t, mt)`, `table.insert(t, ...)`, and `table.remove(t, ...)` populate tables_with_dynamic_length`,
+preventing incorrect constant folding on mutated tables.
+
+### Direct table field write (`table_set_direct`)
+
+When the optimizer proves a record field exists (from `numeric_table_fields`), the codegen
+emits `clx::table_set_direct(L, tbl, key, val)` instead of the general `table_set`. The direct
+helper calls `settable()` directly, skipping `set_value()`'s redundant `gettable()` existence
+check.
+
+### Pure numeric array promotion
+
+The optimizer promotes tables whose array part provably holds only numbers into
+`pure_numeric_arrays`. Reads on such tables emit direct `std::vector<double>`-style indexing
+instead of `clx::table_get`. This includes:
+
+- numeric array constructors (`local t = {1, 2, 3}`) — verified element-wise;
+- record-like constructors (`local v = {x=1, y=2, z=3}`) — numeric string-keyed fields are
+  registered in `numeric_table_fields` so `v.x + v.y` emits native arithmetic;
+- the empty-table-in-loop pattern (`local t = {}; for i = 1, N do t[i] = v end`) — promoted to
+  `pure_numeric_arrays` so the loop writes through fast indexed codegen.
+
 ### Local variable optimization
 
 Local variables that hold numbers are stored as unboxed C++ `int64_t` or `double`:
@@ -112,29 +159,67 @@ local function sum(n)
 end
 ```
 
-## 2. Inline caching
+## 2. Table memory layout
 
-### InlineCache for table access
+### Compact LTable (80 bytes) with lazy LTableExt
 
-Each LTable carries an embedded 4-entry inline cache (64 bytes):
+`LTable` is kept at **80 bytes** by moving hash, inline-cache, and metatable state behind a
+lazily-allocated `LTableExt` pointer. The hot struct holds only the array part and the `ext`
+pointer:
 
 ```cpp
-struct LTable {
-    static constexpr int IC_SIZE = 4;
+struct LTableExt {
+    HashEntry *entries = nullptr;       // hash part
+    size_t hash_size, hash_count, hash_tombs;
+    uint64_t *hash_bitmap = nullptr;    // slot-occupancy bitmap for fast scans
+    uint32_t hash_version = 0;          // bumped on structural mutation
+    LTableInlineCache *ic = nullptr;    // inline cache (8 entries, lazily allocated)
+    LTable *metatable = nullptr;
+    LTable *meta_next = nullptr;        // GC metatable-list link
+};
 
-    struct InlineCache {
-        uint64_t key_payload = 0;  // Key's raw payload for fast comparison
-        uint32_t entry_idx = 0;    // Hash entry index
-        uint32_t table_ver = 0;    // Snapshot of hash_version at insertion
-    };
-
-    InlineCache ic[IC_SIZE];       // 4 entries × 16 bytes = 64 bytes
+struct LTable : public LHeader {
+    TValue *array;
+    ValueType *array_types;
+    size_t array_size, array_cap;
+    TValue small_array[2];              // inline buffer for tiny arrays
+    ValueType small_array_types[2];
+    LTableExt *ext;                     // null until hash/ic/metatable needed
 };
 ```
 
-The IC is indexed by `key ^ (key >> 17) ^ (key >> 33) % 4` — a cheap bit-mix of the key's
-64-bit payload, replacing the former wyhash64. On a hit (key_payload matches, table_ver matches
-`hash_version`, entry is non-nil), the hash probe is skipped entirely:
+Benefits:
+
+- Tables that stay purely array-part (the common case in numeric workloads) never allocate
+  an `LTableExt` — the hot read path touches a single cache line.
+- The inline cache is allocated lazily only when string-key or hash accesses start happening.
+- Arena-allocated tables carve their `LTableExt` out of the arena blob (freed with the arena);
+  heap tables allocate it on first hash insertion or metatable set.
+- `binarytrees` improved from 0.43s to 0.31s (~27%) with the 80B layout.
+
+### Inline buffer for small arrays
+
+Arrays of size ≤ 2 use `small_array`/`small_array_types` storage inside `LTable` itself — no
+heap allocation and no accounting overhead for the common small-table case. Buffers retained
+on the table free list are reused (avoids `new[]`/`delete[]` churn) and deallocated only when
+too small for a growth.
+
+## 3. Inline caching
+
+### Per-table inline cache
+
+Each table's `LTableExt` carries an 8-entry inline cache (when hash accesses occur). It is
+indexed by a cheap bit-mix of the key's 64-bit payload:
+
+```cpp
+uint32_t ic_idx = static_cast<uint32_t>(key.payload.u64
+                 ^ (key.payload.u64 >> 17) ^ (key.payload.u64 >> 33)
+                 ^ (key.payload.u64 >> 5)  ^ (key.payload.u64 >> 11))
+                 % LTABLE_IC_SIZE;  // 8
+```
+
+On a hit (key payload matches, `table_ver` matches `hash_version`, entry non-nil), the hash
+probe is skipped entirely:
 
 ```lua
 -- First access: full hash probe
@@ -149,49 +234,78 @@ and deletes that alter the hash probe sequence), not on value-only overwrites. T
 read-then-write patterns (e.g., `t[k] = t[k] + 1`) hit the cache on the read even when the
 value is overwritten, because the structural shape hasn't changed.
 
-**No per-entry versioning**: The old system tracked a `version` field per `HashEntry` and
-invalidated on every write. The current system uses the single table-level `hash_version`,
-reducing overhead and improving cache hit rates for update-heavy workloads.
+**Works for any hash key**: The inline cache operates on raw key payload bits, not on
+identifier names. It works for globals, locals, function parameters, and computed string
+keys alike.
 
-**Works for any hash key**: InlineCache operates on raw key payload bits, not on identifier
-names. It works for globals, locals, function parameters, and computed string keys alike.
+### Fast-path / slow-path `table_get` split
 
-## 2.5 SIMD runtime scans
+The hot `table_get` path is kept inline: integer/double array indexing first, then the inline
+cache. If both miss, the call falls through to an out-of-line `table_get_slow` that performs
+the full hash probe and metamethod (`__index`) dispatch. This keeps the common numeric/array
+read on the inline path while moving the rare hash-and-metamethod machinery out of the hot
+inline function, reducing code bloat and improving the fast path's cache footprint.
 
-`ValueType` is a `uint8_t` enum, so 16 type tags fit in a single 128-bit SIMD register.
-The runtime uses SSE2 (x64) or NEON (ARM64) to accelerate hot type-array scans:
+## 4. SIMD runtime scans
+
+`ValueType` is a `uint8_t` enum, so 16 type tags fit in a single 128-bit SIMD register and 32
+fit in an AVX2 register. The runtime uses AVX2 (32-byte) with SSE2 (x64) or NEON (ARM64)
+fallbacks to accelerate hot type-array scans:
 
 | Site | What it does |
 |---|---|
 | `rawlen()` | Finds first nil in table array — determines array length |
 | `next()` | Finds first non-nil after a given index |
-| `table_concat` validation | Validates all elements are String/Double/Int64 in 16-byte chunks |
+| `table_concat` validation | Validates all elements are String/Double/Int64 in 32/16-byte chunks |
 | GC mark loop | Skips nil entries in the array part, only marking non-nil values |
 
-Scalar tail handles remaining elements for non-16-byte-aligned sizes.
-Portability: SSE2 (all x86_64), NEON (all ARM64), scalar fallback for others.
+### Bitmap-based hash part scanning
 
-## 3. String optimizations
+Each `LTableExt` carries a `hash_bitmap` recording which hash slots are occupied. This makes:
 
-### StringPool interning
+- `next()` hash-part iteration skip empty slots directly (no per-slot probe);
+- GC hash-part marking scan only occupied slots;
+- hash occupancy checks O(1).
 
-Open-addressed hash map for string interning. Each slot owns a baked allocation:
-`[uint32_t hash][uint32_t len][char data...\0]`. LValue stores a pointer to the char data
-(8 bytes past alloc start). Benefits:
+The bitmap is maintained on insert, resize, and delete, and SIMD-accelerated scans read it in
+32-byte chunks with scalar tails for non-aligned sizes. Portability: AVX2 where available,
+else SSE2/NEON, else scalar.
+
+## 5. String optimizations
+
+### StringArena + StringPool interning
+
+String storage is backed by a block-based **StringArena** (64 KB blocks, bump-allocated) inside
+the open-addressed `StringPool` hash map. Each pool slot owns a baked allocation:
+
+```text
+[uint16 hash hi][uint32 len][char data...\0]
+[  8 bytes  ][ 4 bytes ]
+```
+
+Benefits:
 
 - One probe on hit
 - No `std::string` overhead
 - No side map or double lookup
-- Hash is pre-computed and baked into the allocation
+- Bump allocation from the arena — no per-string `new[]`
+- Hash is pre-computed and baked into the allocation header
 
-### Baked hashes
+### Baked hashes (16-byte header)
 
-For interned strings, the wyhash is baked into the allocation header at `ptr[-8..ptr[-5]]`.
-Reading the hash costs a single 4-byte load — zero recompute:
+For interned strings, the 64-bit wyhash is baked into the allocation header 16 bytes before
+the data pointer (`ptr[-16..-9]`). Reading the hash costs a single 8-byte load — zero recompute:
 
 ```cpp
-uint32_t h = string_baked_hash(str_ptr);  // Single load
+uint64_t h = string_baked_hash(str_ptr);  // Single load
 ```
+
+### 64-bit wyhash
+
+The hash is a 64-bit wyhash (`wyhash64`) using compile-time constant secrets and 128-bit
+multiply (`clx_umul128` / `_umul128` on MSVC) for excellent avalanche. Short strings
+(≤ 8 bytes) use a SWAR path (`swar_hash_8`) that hashes the raw bytes plus length in one
+128-bit multiply; longer strings process 8-byte chunks with a safe tail.
 
 ### StringBuilder (O(n) concatenation)
 
@@ -209,24 +323,25 @@ local s = table.concat(parts)
 ```
 
 The codegen emits `StringBuilder`-based concatenation for multi-part string expressions,
-producing a single interned string with baked hash.
+producing a single interned string with baked hash. StringBuilders are also arena-backed.
 
-### wyhash
+### Pre-computed hashes for compile-time string literals
 
-Fast, high-quality hash function used for table keys and string interning. Uses compile-time
-constant secrets with 128-bit multiply (`__uint128_t` or `_umul128` on MSVC) for excellent
-avalanche. Processes 8-byte chunks with safe tail handling for 1-7 byte remainders.
+The codegen pre-computes the wyhash for compile-time string literals (via `swar_hash_8` for
+short strings) and emits it as a constant, avoiding repeated runtime hashing of the same
+literal at every access.
 
 ### Pre-allocated interning
 
 `intern_preallocated()` adopts a pre-formatted buffer directly into the StringPool, cutting
 string concat from 3 heap allocations to 1 (or 0 on pool hit).
 
-## 4. Code generation optimizations
+## 6. Code generation optimizations
 
 ### Loop transformations
 
-Numeric for loops are transformed to C++ for loops:
+Numeric for loops are transformed to native C++ for loops, with `int64_t` counters when the
+optimizer proves integer bounds:
 
 ```lua
 -- Lua source
@@ -234,30 +349,30 @@ for i = 1, 100 do
     print(i)
 end
 
--- Generated C++
-for (double i_val = 1; i_val <= 100; i_val += 1) {
+-- Generated C++ (integer bounds known)
+for (int64_t i_val = 1; i_val <= 100; i_val++) {
     std::cout << i_val << std::endl;
 }
 ```
 
 Generic for loops emit direct `LCFunction` pointer calls in the loop body, avoiding
-indirect call overhead.
+indirect call overhead. Inline `ipairs(t)` patterns are detected and emitted as direct
+`while` loops over `table_get_int` with no iterator function calls.
 
 ### Branch prediction hints
 
-Fast paths are annotated with `[[likely]]` attributes:
+Fast paths are annotated with `[[likely]]` attributes and hot runtime helpers are marked
+`CLX_INLINE_HOT` (`always_inline`/`__forceinline`):
 
 ```cpp
 if (a.type() == LType::Integer && b.type() == LType::Integer) [[likely]]
     return LValue(a.as_integer() + b.as_integer());
 ```
 
-This helps the compiler optimize branch prediction for the common case.
-
 ### Inlining
 
 Small functions are inlined at compile time through C++ compiler optimizations (-O3).
-All arithmetic operators (`add`, `sub`, `mul`, etc.) are marked `CLX_INLINE`
+All arithmetic operators (`add`, `sub`, `mul`, etc.) are marked `CLX_INLINE_HOT`
 with `always_inline` attributes.
 
 ### Tail-call optimization
@@ -294,7 +409,7 @@ In executable mode (non-debug), clx enables function-section-level DCE:
 
 This eliminates unused functions and data from the final binary.
 
-## 5. Link-Time optimizations
+## 7. Link-Time optimizations
 
 When using `-flto=auto` (Link Time Optimization), the compiler can:
 - Inline functions across translation units
@@ -307,7 +422,24 @@ clx program.lua -flto=auto -O3
 
 Note: `-flto=auto` is enabled by default in release mode.
 
-## 6. Runtime optimizations
+## 8. Runtime optimizations
+
+### Per-function arena allocation (escape analysis)
+
+The optimizer performs escape analysis on table constructors. Tables that never escape their
+function (no return, no assignment to globals/upvalues/fields, no passing to calls, no use in
+growing loops) are allocated from a per-function bump-pointer arena instead of the GC heap:
+
+- The optimizer computes `arena_safe_table_nodes` and a byte budget per function
+  (`arena_table_sizes`), covering the `LTable` header, array part, type part, hash part, and
+  `LTableExt`.
+- The codegen emits `clx::arena_init(&_arena, size)` at function entry and routes qualifying
+  `table_create` calls through `arena_create_table`, which placement-news the whole table
+  (header + array + types + hash + ext) into one arena blob.
+- Tables that might escape (assigned to function parameters, returned, captured, or stored in
+  fields) are excluded from the arena and allocated normally.
+
+This eliminates per-table `new`/`free` for the hot temporary-table case and improves locality.
 
 ### Table pre-sizing
 
@@ -316,15 +448,6 @@ Tables with known structure are pre-allocated:
 ```lua
 local t = { x = 0, y = 0, z = 0 }  -- Pre-sized to 3 elements
 ```
-
-### Table layout optimization
-
-Tables use a cache-line-optimized layout:
-
-- **Cache line 0** (64 bytes): array pointer, sizes, hash bucket, metatable, hash count
-- **Cache line 1+**: parallel arrays for keys, values, and chain next pointers
-
-All gettable fields fit in one 64-byte cache line for fast access.
 
 ### Upvalue fast-path
 
@@ -336,10 +459,19 @@ Frequently used metamethod strings (`__index`, `__newindex`, `__gc`, `__call`, `
 `__tostring`, `__pairs`) are pre-interned in LState at initialization, avoiding repeated
 string interning on every dispatch.
 
+### Metatable list and permanent roots
+
+Tables with metatables are linked into a GC metatable list (`meta_next`), so the mark phase
+scans only metatabled tables for finalizer references instead of every table. Permanent roots
+(a small set of long-lived objects) are marked directly each cycle, and the string/io
+metatables and default io handles are rooted so they are never collected. VM proxies are
+registered with the clx GC and paced to the embedded VM's collection.
+
 ### Length operator optimization
 
-String length is read from the baked allocation header (`ptr[-4..ptr[-1]]`), avoiding
-`strlen` entirely. For tables with dense arrays, `#` returns `array_size` directly.
+String length is read from the baked allocation header, avoiding `strlen` entirely. For tables
+with dense arrays, `#` returns `array_size` directly; tables with known constructor lengths
+and no dynamic mutation are folded to a compile-time constant (see Known-length `#t` above).
 
 ### Table arithmetic (table_op)
 
