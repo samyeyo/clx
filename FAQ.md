@@ -80,13 +80,13 @@ clx script.lua --dynamic --output script
 
 The generated program then links the embedded Lua VM. Source passed to `load`, `loadfile`, or `dofile` executes in that VM and crosses the clx/VM bridge when it calls AOT functions or returns values. Without `--dynamic`—and in `--minimal` builds—the loader functions are not registered.
 
-The clx AOT runtime does not provide `string.dump()` or the `debug` module directly. Dynamic code runs in the embedded VM and uses its own standard libraries; see `doc/dyamic-lua.md` for the environment and bridge boundaries.
+The clx AOT runtime does not provide `string.dump()` or the `debug` module directly. Dynamic code runs in the embedded VM and uses its own standard libraries; see `doc/dynamic-lua.md` for the environment and bridge boundaries.
 
 ---
 
 ## Does dynamic Lua provide string.dump() and debug?
 
-The clx AOT runtime does not expose `string.dump()` or a `debug` global. When compiled with `--dynamic`, however, loaded code executes in the embedded Lua VM, which contains Lua’s own standard libraries. The default bridge environment copies selected VM globals and does not copy `debug` as a global; consult [Dynamic Lua](doc/dyamic-lua.md) for the boundary details.
+The clx AOT runtime does not expose `string.dump()` or a `debug` global. When compiled with `--dynamic`, however, loaded code executes in the embedded Lua VM, which contains Lua’s own standard libraries. The default bridge environment copies selected VM globals and does not copy `debug` as a global; consult [Dynamic Lua](doc/dynamic-lua.md) for the boundary details.
 
 ---
 
