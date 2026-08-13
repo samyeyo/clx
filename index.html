@@ -782,17 +782,27 @@ clx hello.lua
                     <div class="code-header"><span class="lang">sh</span><span>macOS / Linux</span></div>
                     <div class="code-body"><span class="prompt">$</span> git clone https://github.com/samyeyo/clx
 <span class="prompt">$</span> cd clx
-<span class="prompt">$</span> ./build.sh install
+<span class="prompt">$</span> ./build.sh install          <span class="comment"># or ./build.sh uninstall to remove</span>
 <span class="comment"># clx compiler installed to /usr/local/bin</span>
-<span class="comment"># libclx.a library installed to /usr/local/lib</span></div>
+<span class="comment"># libclx.a, libclx_size.a, libclx_lua.a installed to /usr/local/lib</span>
+<span class="comment"># headers installed to /usr/local/include</span></div>
                 </div>
                 <div class="code-block">
                     <div class="code-header"><span class="lang">CMD</span><span>Windows</span></div>
                     <div class="code-body"><span class="prompt">&gt;</span> git clone https://github.com/samyeyo/clx
 <span class="prompt">&gt;</span> cd clx
-<span class="prompt">&gt;</span> build.bat install
-<span class="comment"># clx.exe compiler installed to clx\bin</span>
-<span class="comment"># clx.lib and clx_size.lib installed to clx\lib</span></div>
+<span class="prompt">&gt;</span> build.bat install           <span class="comment">:: or build.bat uninstall to remove</span>
+<span class="comment"># clx.exe compiler installed to %ProgramFiles%\clx\bin</span>
+<span class="comment"># clx.lib and clx_size.lib installed to %ProgramFiles%\clx\lib</span>
+<span class="comment"># headers installed to %ProgramFiles%\clx\include</span></div>
+                </div>
+                <p style="margin-top:16px">Override the install location with <span class="inline-code">-DCMAKE_INSTALL_PREFIX=&lt;dir&gt;</span> when configuring. The pre-built archives from GitHub Releases ship the same layout inside a <span class="inline-code">clx-&lt;platform&gt;/</span> folder (<span class="inline-code">bin/</span>, <span class="inline-code">include/</span>, <span class="inline-code">lib/</span>), so you can extract them directly into the install prefix of your choice:</p>
+                <div class="code-block">
+                    <div class="code-header"><span class="lang">sh</span><span>Pre-built archive (Linux / macOS)</span></div>
+                    <div class="code-body"><span class="prompt">$</span> tar xzf clx-linux-x86_64.tar.gz
+<span class="prompt">$</span> sudo cp -r clx-linux-x86_64/* /usr/local/
+<span class="comment"># clx now on PATH, libs + headers in /usr/local</span>
+<span class="prompt">$</span> clx --version</div>
                 </div>
                 <p style="margin-top:16px">Verify your installation:</p>
                 <div class="code-block">
@@ -1157,18 +1167,18 @@ end
                 <div class="doc-section">
                     <h3>Environments and Boundary Values</h3>
                     <ul>
-                        <li>The default VM environment exposes selected VM globals and bridge callbacks for missing names in the clx global table.</li>
+                        <li>The default VM environment exposes the common VM globals, with missing names falling through to the clx global table.</li>
                         <li>A custom environment passed to <span class="inline-code">load</span> or <span class="inline-code">loadfile</span> is a converted clx table; VM libraries must be provided explicitly when needed.</li>
-                        <li>Nil, booleans, numbers, and strings are copied by value. Functions are wrapped across the bridge.</li>
-                        <li>Clx tables and userdata become VM-side proxy userdata (<span class="inline-code">clx_proxy</span> and <span class="inline-code">clx_userdata</span>), not raw native objects. VM tables passed to clx are converted and tracked writes can be copied back.</li>
-                        <li>Ordinary VM userdata and lightuserdata are VM-local and convert to <span class="inline-code">nil</span> when passed to clx; VM threads are explicitly rejected. Only recognized bridge proxies have special handling.</li>
+                        <li>Nil, booleans, numbers, and strings are copied by value. Functions are wrapped so they are callable from the other runtime.</li>
+                        <li>clx tables and userdata passed to the VM become proxy userdata with bridge metamethods, not native Lua tables. VM tables passed to clx are deep-converted, and changes are written back on a successful return.</li>
+                        <li>Ordinary VM userdata and lightuserdata are VM-local and convert to <span class="inline-code">nil</span> when passed to clx; VM threads are explicitly rejected.</li>
                     </ul>
                 </div>
                 <div class="doc-section">
                     <h3>Coroutines and Limitations</h3>
                     <p>Coroutines are runtime-local. Keep creation, resume, yield, and close within either clx or the embedded VM; clx and VM coroutines cannot be passed or resumed across the boundary, and a yield cannot cross it. The bridge also rejects calling a VM function from inside a clx coroutine.</p>
                     <p>Dynamic loading is unavailable without <span class="inline-code">--dynamic</span>, loader registration is skipped by <span class="inline-code">--minimal</span>, and the two runtimes do not share table identity, userdata layout, garbage collection, or package caches. The AOT runtime does not provide <span class="inline-code">string.dump</span>; that API belongs to the embedded VM path.</p>
-                    <p>For the complete API behavior and current limitations, see <span class="inline-code">doc/dyamic-lua.md</span>.</p>
+                    <p>For the complete API behavior and current limitations, see <span class="inline-code">doc/dynamic-lua.md</span>.</p>
                 </div>
             </section>
             <section id="doc-cli" class="section doc-section" role="tabpanel">
@@ -1348,7 +1358,7 @@ end
                     <p><span class="bright">Parser</span> — Recursive descent parser builds an AST with statement, expression, block, and function nodes.</p>
                     <p><span class="bright">AST Nodes</span> — Core node types: Block, Identifier, BinaryOp, UnaryOp, FunctionDef, TableConstructor, ForStatement, WhileStatement, IfStatement, CallExpression.</p>
                     <p><span class="bright">Optimizer</span> — Analyzes the AST and annotates nodes with optimization hints: numeric fast-paths and parameter promotion, numeric record-field inference, variable scope resolution, table purity analysis, constant folding preparation, table version tracking for inline-cache invalidation, and <span class="inline-code">yields_number</span> analysis for numeric loops.</p>
-                    <p><span class="bright">Code Generator</span> — Produces C++ code with native numeric fast-paths, dynamic fallbacks, loop transformations, <span class="inline-code">[[likely]]</span> hints, per-LTable 4-entry inline caches, StringBuilder concatenation, and baked string hashes.</p>
+                    <p><span class="bright">Code Generator</span> — Produces C++ code with native numeric fast-paths, dynamic fallbacks, loop transformations, <span class="inline-code">[[likely]]</span> hints, per-LTable inline caches, StringBuilder concatenation, and baked string hashes.</p>
                     <p><span class="bright">Runtime Library</span> — Implements Lua semantics through the AOT runtime: values, GC, tables, metamethods, arithmetic, standard libraries, coroutines, and the clx package system. The optional <span class="inline-code">runtime/vm/</span> tree contains the separate embedded Lua VM and bridge.</p>
                 </div>
                 <div class="doc-section">
@@ -1408,19 +1418,19 @@ end
                 </div>
                 <div class="doc-section">
                     <h3>Key Runtime Components</h3>
-                    <h4>StringPool</h4>
-                    <p>Open-addressed hash map for string interning. Each slot owns a baked allocation: <span class="inline-code">[uint32_t hash][uint32_t len][char data...\0]</span>. LValue stores a pointer to the char data (8 bytes past alloc start). One probe on hit, no <span class="inline-code">std::string</span>, no side map, no double lookup. Supports <span class="inline-code">intern_preallocated()</span> for zero-allocation string concatenation.</p>
+                    <h4>StringPool / StringArena</h4>
+                    <p>Open-addressed hash map for string interning, backed by a block-based <span class="inline-code">StringArena</span> (64 KB blocks, bump-allocated). Each slot owns a baked allocation with a 16-byte header: <span class="inline-code">[uint64 hash][uint32 len][char data...\0]</span>. LValue stores a pointer to the char data (16 bytes past alloc start). One probe on hit, no <span class="inline-code">std::string</span>, no side map, no double lookup. Supports <span class="inline-code">intern_preallocated()</span> for zero-allocation string concatenation.</p>
                     <h4>wyhash</h4>
-                    <p>Fast, high-quality hash function used for table keys and string interning. Uses compile-time constant secrets with 128-bit multiply for excellent avalanche. For interned strings, the hash is baked into the allocation header, making <span class="inline-code">lvalue_hash()</span> a single 4-byte load.</p>
+                    <p>Fast, high-quality 64-bit hash function used for table keys and string interning. Uses compile-time constant secrets with 128-bit multiply for excellent avalanche. For interned strings, the hash is baked into the 16-byte allocation header, making <span class="inline-code">lvalue_hash()</span> a single 8-byte load.</p>
                     <p>For strings ≤8 bytes, <span class="inline-code">swar_hash_8()</span> replaces <span class="inline-code">wyhash_str</span> — loads all bytes into one register with a single <span class="inline-code">memcpy</span> and mixes via <span class="inline-code">wyhash64</span>. Used consistently for both TAG_ISTR inline strings and short interned strings so cross-type hash compatibility is maintained.</p>
                     <h4>Per-LTable Inline Cache</h4>
-                    <p>Each LTable embeds a 4-entry <span class="inline-code">InlineCache</span> for string-keyed table access. The cache stores key payload, entry index, and table <span class="inline-code">hash_version</span>. It is valid when the key and version match; structural changes (inserts, deletes, and rehashes) invalidate it, while value-only updates preserve read-then-write hits. The cache occupies 64 bytes per LTable.</p>
+                    <p>Each LTable's lazily-allocated <span class="inline-code">LTableExt</span> holds an 8-entry <span class="inline-code">InlineCache</span> for string-keyed table access. The cache stores key payload, entry index, and table <span class="inline-code">hash_version</span>. It is valid when the key and version match; structural changes (inserts, deletes, and rehashes) invalidate it, while value-only updates preserve read-then-write hits. Pure array-part tables never allocate the cache. The hot <span class="inline-code">table_get</span> fast path (array + cache) stays inline; misses fall through to an out-of-line <span class="inline-code">table_get_slow</span> for the hash probe and <span class="inline-code">__index</span> dispatch.</p>
                     <h4>StringBuilder</h4>
                     <p>O(n) string concatenation that avoids the O(n²) quadratic blow-up of repeated <span class="inline-code">s = s .. part</span> patterns. Uses inline storage for up to 8 parts, grows to heap allocation when needed. Produces a single interned string with baked hash on <span class="inline-code">to_string()</span>.</p>
                     <h4>Table Version Tracking</h4>
-                    <p>Tables track <span class="inline-code">hash_version</span> (increments on structural changes: inserts, deletes, rehash) and <span class="inline-code">array_version</span> (increments on array-size changes). The inline cache checks <span class="inline-code">hash_version</span> to detect stale entries after table mutations.</p>
+                    <p>Tables track <span class="inline-code">hash_version</span> (increments on structural changes: inserts, deletes, rehash). The inline cache checks <span class="inline-code">hash_version</span> to detect stale entries after table mutations.</p>
                     <h4>SIMD Runtime Scans</h4>
-                    <p><span class="inline-code">ValueType</span> is a <span class="inline-code">uint8_t</span> enum, so 16 type tags fit in a single 128-bit register. The runtime uses SSE2 (x64) or NEON (ARM64) to accelerate hot type-array scans: <span class="inline-code">rawlen()</span> (finds first nil in array), <span class="inline-code">next()</span> (finds first non-nil), <span class="inline-code">table_concat</span> validation (validates String/Double/Int64), and GC mark loop (skips nil entries). Scalar fallback handles non-16-byte-aligned remainders.</p>
+                    <p><span class="inline-code">ValueType</span> is a <span class="inline-code">uint8_t</span> enum, so 32 type tags fit in a single AVX2 register. The runtime uses AVX2 with SSE2 (x64) / NEON (ARM64) fallbacks to accelerate hot type-array scans: <span class="inline-code">rawlen()</span> (finds first nil in array), <span class="inline-code">next()</span> (finds first non-nil), <span class="inline-code">table_concat</span> validation (validates String/Double/Int64), and GC mark loop (skips nil entries). Scalar fallback handles remainders. The <span class="inline-code">hash_bitmap</span> in <span class="inline-code">LTableExt</span> also lets <span class="inline-code">next()</span> and the GC skip empty hash slots directly.</p>
                 </div>
             </section>
             <section id="doc-optimizations" class="section doc-section" role="tabpanel">
@@ -1497,14 +1507,14 @@ end</div>
                 </div>
                 <div class="doc-section">
                     <h3>Inline Caching</h3>
-                    <p>Each LTable embeds a 4-entry <span class="inline-code">InlineCache</span>. On repeated access to the same string key on the same table, the cache skips the hash probe entirely. <span class="inline-code">hash_version</span> guards detect stale entries after structural table mutations. Read-then-write patterns still hit because only inserts/deletes/rehash invalidate the cache — value updates don't.</p>
+                    <p>Each LTable's lazily-allocated <span class="inline-code">LTableExt</span> holds an 8-entry <span class="inline-code">InlineCache</span>. On repeated access to the same string key on the same table, the cache skips the hash probe entirely. <span class="inline-code">hash_version</span> guards detect stale entries after structural table mutations. Read-then-write patterns still hit because only inserts/deletes/rehash invalidate the cache — value updates don't. The hot <span class="inline-code">table_get</span> fast path (array + cache) stays inline; misses fall through to an out-of-line <span class="inline-code">table_get_slow</span>.</p>
                 </div>
                 <div class="doc-section">
                     <h3>String Optimizations</h3>
-                    <p><span class="bright">StringPool</span> — Open-addressed hash map for string interning with one-probe-on-hit, baked hashes, and no <span class="inline-code">std::string</span> overhead.</p>
-                    <p><span class="bright">Baked Hashes</span> — For interned strings, the wyhash is baked into the allocation header. Reading the hash costs a single 4-byte load.</p>
+                    <p><span class="bright">StringPool / StringArena</span> — Open-addressed hash map for string interning with one-probe-on-hit, baked hashes, arena-backed bump allocation, and no <span class="inline-code">std::string</span> overhead.</p>
+                    <p><span class="bright">Baked Hashes</span> — For interned strings, the 64-bit wyhash is baked into the 16-byte allocation header. Reading the hash costs a single 8-byte load.</p>
                     <p><span class="bright">StringBuilder</span> — O(n) string concatenation that avoids O(n²) quadratic blow-up. Produces a single interned string with baked hash.</p>
-                    <p><span class="bright">wyhash</span> — Fast, high-quality hash with compile-time constant secrets and 128-bit multiply (<span class="inline-code">__uint128_t</span> or <span class="inline-code">_umul128</span> on MSVC).</p>
+                    <p><span class="bright">wyhash</span> — Fast, high-quality 64-bit hash with compile-time constant secrets and 128-bit multiply (<span class="inline-code">clx_umul128</span> or <span class="inline-code">_umul128</span> on MSVC).</p>
                     <p><span class="bright">Pre-Allocated Interning</span> — <span class="inline-code">intern_preallocated()</span> adopts a pre-formatted buffer directly into the StringPool, cutting string concat from 3 heap allocations to 1 (or 0 on pool hit).</p>
                 </div>
                 <div class="doc-section">
@@ -1522,7 +1532,7 @@ end</div>
                 <div class="doc-section">
                     <h3>Runtime Optimizations</h3>
                     <p><span class="bright">Table Pre-sizing</span> — Tables with known structure are pre-allocated to the correct size.</p>
-                    <p><span class="bright">Table Layout</span> — Cache-line-optimized layout: all gettable fields fit in one 64-byte cache line.</p>
+                    <p><span class="bright">Table Layout</span> — 80-byte LTable with lazily-allocated <span class="inline-code">LTableExt</span> for hash/metatable/inline-cache state, keeping pure numeric arrays allocation and cache-line light.</p>
                     <p><span class="bright">Upvalue Fast-Path</span> — Closure variables that aren't captured are stored directly, avoiding heap allocation.</p>
                     <p><span class="bright">Metamethod Caching</span> — Frequently used metamethod strings are pre-interned at initialization.</p>
                     <p><span class="bright">Length Operator</span> — String length read from baked header, avoiding <span class="inline-code">strlen</span>.</p>
@@ -1617,14 +1627,14 @@ __index  __newindex  __call  __tostring  __gc  __close  __metatable</div>
                 <div class="doc-section">
                     <h3>Per-LTable Inline Cache</h3>
                     <div class="code-block">
-                        <div class="code-header"><span class="lang">cpp</span><span>InlineCache structure (embedded in LTable)</span></div>
+                        <div class="code-header"><span class="lang">cpp</span><span>InlineCache structure (lives in lazily-allocated LTableExt)</span></div>
                         <div class="code-body">struct InlineCache {
     uint64_t key_payload;  // Raw key payload for fast comparison
     uint32_t entry_idx;    // Index into hash entries array
     uint32_t table_ver;    // Snapshot of hash_version at populate time
 };</div>
                     </div>
-                    <p>4-entry per-LTable cache for string-keyed table access. A hit requires a matching key payload, the current <span class="inline-code">hash_version</span>, and a non-nil cached entry. Structural changes (inserts, deletes, and rehashes) invalidate the cache; value-only updates do not. The cache occupies 64 bytes per LTable.</p>
+                    <p>8-entry per-LTable cache for string-keyed table access, stored in the table's lazily-allocated <span class="inline-code">LTableExt</span> — pure array-part tables never allocate it. A hit requires a matching key payload, the current <span class="inline-code">hash_version</span>, and a non-nil cached entry. Structural changes (inserts, deletes, and rehashes) invalidate the cache; value-only updates do not. Hot <span class="inline-code">table_get</span> fast paths (array + cache) stay inline; misses fall through to an out-of-line <span class="inline-code">table_get_slow</span> for the hash probe and <span class="inline-code">__index</span> dispatch.</p>
                 </div>
                 <div class="doc-section">
                     <h3>Closures and Upvalues</h3>
@@ -1655,31 +1665,33 @@ __index  __newindex  __call  __tostring  __gc  __close  __metatable</div>
                                 <tr><th style="width:40%">Region</th><th style="width:60%">Contents</th></tr>
                             </thead>
                             <tbody>
-                                <tr><td colspan="2" style="font-weight:600;color:var(--text-bright);padding:8px 16px;border-bottom:1px solid var(--border)">LHeader (metadata)</td></tr>
-                                <tr><td style="padding-left:32px">type, marked, next</td><td style="color:var(--text-muted)">GC metadata</td></tr>
-                                <tr><td colspan="2" style="font-weight:600;color:var(--text-bright);padding:8px 16px;border-bottom:1px solid var(--border)">Cache line 0 (64 bytes) — <span style="font-weight:400;color:var(--text-muted)">all gettable fields here</span></td></tr>
-                                <tr><td style="padding-left:32px">array pointer</td><td style="color:var(--text-muted)">8 bytes</td></tr>
+                                <tr><td colspan="2" style="font-weight:600;color:var(--text-bright);padding:8px 16px;border-bottom:1px solid var(--border)">LTable (~80 bytes, kept compact by lazily-allocated LTableExt)</td></tr>
+                                <tr><td style="padding-left:32px">LHeader</td><td style="color:var(--text-muted)">type, marked, next (GC metadata)</td></tr>
+                                <tr><td style="padding-left:32px">array, array_types</td><td style="color:var(--text-muted)">16 bytes — pointer to array values and their ValueType tags</td></tr>
                                 <tr><td style="padding-left:32px">array_size, array_cap</td><td style="color:var(--text-muted)">16 bytes</td></tr>
-                                <tr><td style="padding-left:32px">bucket, hash_size</td><td style="color:var(--text-muted)">24 bytes</td></tr>
-                                <tr><td style="padding-left:32px">metatable, hash_count</td><td style="color:var(--text-muted)">40 bytes</td></tr>
-                                <tr><td style="padding-left:32px">padding</td><td style="color:var(--text-muted)">56 bytes (to align next cache line)</td></tr>
-                                <tr><td colspan="2" style="font-weight:600;color:var(--text-bright);padding:8px 16px;border-bottom:1px solid var(--border)">Parallel arrays (cache-line optimized)</td></tr>
-                                <tr><td style="padding-left:32px">keys</td><td style="color:var(--text-muted)">hash_size &times; 8 bytes</td></tr>
-                                <tr><td style="padding-left:32px">vals</td><td style="color:var(--text-muted)">hash_size &times; 8 bytes</td></tr>
-                                <tr><td style="padding-left:32px">nexts</td><td style="color:var(--text-muted)">hash_size &times; 2 bytes</td></tr>
-                                <tr><td style="padding-left:32px">hash_version, array_version</td><td style="color:var(--text-muted)">8 bytes</td></tr>
-                                <tr><td style="padding-left:32px">inline cache (4 × 16B)</td><td style="color:var(--text-muted)">64 bytes</td></tr>
+                                <tr><td style="padding-left:32px">small_array[2], small_array_types[2]</td><td style="color:var(--text-muted)">~32 bytes — inline storage for tiny array parts (no heap alloc)</td></tr>
+                                <tr><td style="padding-left:32px">ext</td><td style="color:var(--text-muted)">8 bytes — null for pure-array tables; lazily allocated</td></tr>
+                                <tr><td colspan="2" style="font-weight:600;color:var(--text-bright);padding:8px 16px;border-bottom:1px solid var(--border)">LTableExt (lazily-allocated hash/metatable/inline-cache state)</td></tr>
+                                <tr><td style="padding-left:32px">entries, hash_size</td><td style="color:var(--text-muted)">parallel-key hash buckets + size</td></tr>
+                                <tr><td style="padding-left:32px">hash_count, hash_tombs</td><td style="color:var(--text-muted)">occupancy + tombstone counts</td></tr>
+                                <tr><td style="padding-left:32px">hash_bitmap</td><td style="color:var(--text-muted)">slot-occupancy bitmap — fast next()/GC scans</td></tr>
+                                <tr><td style="padding-left:32px">hash_version</td><td style="color:var(--text-muted)">increments on structural changes (inserts/deletes/rehash)</td></tr>
+                                <tr><td style="padding-left:32px">ic</td><td style="color:var(--text-muted)">InlineCache pointer — 8-entry string-key cache</td></tr>
+                                <tr><td style="padding-left:32px">metatable, meta_next</td><td style="color:var(--text-muted)">metatable; link in LState metatable list for GC marking</td></tr>
+                                <tr><td colspan="2" style="font-weight:600;color:var(--text-bright);padding:8px 16px;border-bottom:1px solid var(--border)">InlineCache[8] (string-keyed access)</td></tr>
+                                <tr><td style="padding-left:32px">key_payload, entry_idx, table_ver</td><td style="color:var(--text-muted)">8 × 16B entries; fast path skips hash probe on hit</td></tr>
                             </tbody>
                         </table>
                     </div>
                     <h4>String Layout</h4>
-                    <p>Interned strings are stored as:</p>
+                    <p>Interned strings are baked into a 16-byte header followed by the content:</p>
                     <div class="code-block">
-                        <div class="code-body">4 bytes: baked wyhash
+                        <div class="code-body">8 bytes: 64-bit baked wyhash
 4 bytes: length
+4 bytes: reserved
 char data: string content (null-terminated)</div>
                     </div>
-                    <p>LValue stores a pointer to the char data (skipping the 8-byte header). Length at <span class="inline-code">ptr[-4..ptr[-1]</span> and hash at <span class="inline-code">ptr[-8..ptr[-5]]</span>.</p>
+                    <p>LValue stores a pointer to the char data (skipping the 16-byte header). Hash at <span class="inline-code">ptr[-16..-9]</span>, length at <span class="inline-code">ptr[-8..-5]</span>, and the string ends at <span class="inline-code">ptr[len]</span>.</p>
                 </div>
                 <div class="doc-section">
                     <h3>Pre-interned Metamethods</h3>
