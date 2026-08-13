@@ -120,6 +120,7 @@ The command-line interface handles:
 - Argument parsing (`--executable`, `--object`, `--static`, `--debug`, `--size`, `--fast`, `--cpp`, `--modules`, `--dynamic`, `--output`)
 - File I/O and multiple lua files compilation
 - Invoking the C++ compiler (fixed at build time via CMake)
+- Locating its own runtime libraries, headers, and native modules via a unified search: the in-tree `build/` dir and executable-relative `lib`/`lib64` dirs first, then the install prefix/libdir embedded from CMake/GNUInstallDirs (`CLX_INSTALL_PREFIX`/`CLX_INSTALL_LIBDIR`/`CLX_INSTALL_INCLUDEDIR`). Default install prefix: `/usr/local` on POSIX, `%ProgramFiles%\clx` on Windows.
 - Selecting the optional dynamic link path: `--dynamic` links `libclx_lua.a` on POSIX or `clx_lua.lib` on Windows and emits registration for `load`, `loadfile`, and `dofile`
 - Output file management and temp file cleanup
 - Dead code elimination by default via `-ffunction-sections -Wl,--gc-sections` (gcc/clang) or `/Gy /link /OPT:REF /OPT:ICF` (MSVC)
@@ -161,7 +162,7 @@ Optimization passes analyze the AST and annotate nodes with optimization hints:
 - Variable scope resolution
 - Table access purity analysis
 - Constant folding preparation
-- Table version tracking (`hash_version`/`array_version`) for inline cache invalidation
+- Table version tracking (`hash_version`) for inline cache invalidation
 - `yields_number` analysis for numeric for loops
 - Non-fast function parameter numeric detection (marks params used in arithmetic as native doubles)
 - Function parameter numeric-record array inference (traces `local bi = bodies[i]` + field accesses to prove numeric fields)
@@ -207,18 +208,20 @@ The optional dynamic path is kept separate from these AOT modules:
 
 ### Key Runtime Components
 
-#### StringPool
+#### StringPool / StringArena
 
-Open-addressed hash map for string interning. Each slot owns a baked allocation:
-`[uint32_t hash][uint32_t len][char data...\0]`. LValue stores a pointer to the char data
-(8 bytes past alloc start). One probe on hit, no `std::string`, no side map, no double lookup.
+Open-addressed hash map for string interning, backed by a block-based `StringArena` (64 KB
+blocks, bump-allocated). Each slot owns a baked allocation with a **16-byte header**
+`[uint64 hash][uint32 len][padding][char data...\0]`. LValue stores a pointer to the char data
+(16 bytes past alloc start). One probe on hit, no `std::string`, no side map, no double lookup.
 Supports `intern_preallocated()` for zero-allocation string concatenation.
 
 #### wyhash
 
-Fast, high-quality hash function used for table keys and string interning. Uses compile-time
-constant secrets with 128-bit multiply for excellent avalanche. For interned strings, the hash
-is baked into the allocation header, making `lvalue_hash()` a single 4-byte load.
+Fast, high-quality 64-bit hash function used for table keys and string interning. Uses
+compile-time constant secrets with 128-bit multiply (`clx_umul128`) for excellent avalanche.
+For interned strings, the hash is baked into the 16-byte allocation header, making
+`lvalue_hash()` a single 8-byte load.
 
 For strings ≤8 bytes, `swar_hash_8()` replaces `wyhash_str` — loads all bytes into one register
 with a single `memcpy` and mixes via `wyhash64`. Used consistently for both TAG_ISTR inline
@@ -226,13 +229,17 @@ strings and short interned strings so cross-type hash compatibility is maintaine
 
 #### Per-LTable Inline Cache
 
-Each `LTable` embeds a small fixed-size cache (`InlineCache ic[4]`) that accelerates repeated
-string-keyed reads. Each entry caches the key payload, entry index, and the table's
+Each `LTable`'s lazily-allocated `LTableExt` holds an 8-entry inline cache that accelerates
+repeated string-keyed reads. Each entry caches the key payload, entry index, and the table's
 `hash_version` at the time of the last successful probe. On the next read, the cache is checked
 first — if key and version match, the cached entry index is used directly, skipping the full
 hash-probe path. Cache invalidation is structural: `hash_version` increments only on inserts,
 deletes, or rehashes, not on value updates, so read-then-write patterns still hit the cache.
 Only non-GC value types are cached to avoid dangling pointers after collection.
+
+The cache lives in `LTableExt` (lazily allocated), so pure array-part tables never pay for it.
+The hot `table_get` fast path (array indexing + inline cache) stays inline; misses fall through
+to an out-of-line `table_get_slow` for the hash probe and `__index` dispatch.
 
 #### StringBuilder
 
@@ -242,8 +249,8 @@ a single interned string with baked hash on `to_string()`.
 
 #### Table Version Tracking
 
-Tables track `hash_version` and `array_version` that increment on structural changes (inserts,
-deletes, rehashes, array resizing). The per-LTable inline cache checks `hash_version` to detect
+Tables track `hash_version` that increments on structural changes (inserts, deletes,
+rehashes). The per-LTable inline cache checks `hash_version` to detect
 stale entries after table mutations. Value updates do not bump the version, allowing efficient
 read-then-write patterns.
 
@@ -310,3 +317,19 @@ Proxy nodes keep the referenced clx object alive from the VM side. The two colle
 Stop-the-world mark-and-sweep collector:
 - **Mark phase**: Traverse reachable objects from roots via worklist
 - **Sweep phase**: Deallocate unreachable objects, recycle freed LTable/LCFunction nodes into free lists
+
+Tables whose metatables are set are linked into a `meta_next` metatable list, so the mark
+phase scans only metatabled tables for finalizer references instead of every table. Permanent
+roots (a small set of long-lived objects, including the string/io metatables and default io
+handles) are marked directly each cycle so they are never collected. The mark phase validates
+GC-header fields before writing and skips opaque/external userdata.
+
+#### Per-function table arenas
+
+The optimizer performs escape analysis on table constructors. Tables proven not to escape
+their function (not returned, not stored in globals/upvalues/fields, not captured, not used
+in growing loops) are allocated from a per-function bump-pointer arena (`FuncArena`) instead
+of the collector heap. `arena_create_table` placement-news the whole table — `LTable` header,
+array part, type part, hash part, and `LTableExt` — into one arena blob, freed wholesale at
+function exit. This removes per-table `new`/`free` for the common temporary-table case and is
+excluded from GC accounting.
