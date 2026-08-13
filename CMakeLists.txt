@@ -16,8 +16,17 @@ set(MI_BUILD_TESTS OFF CACHE INTERNAL "")
 set(MI_OVERRIDE ON CACHE INTERNAL "")
 
 if(WIN32)
+    # Standard Windows system install: default to "%ProgramFiles%/clx". The
+    # project-local bin/ + lib/ dirs below are reserved for in-tree BUILD
+    # OUTPUTS (portable layout); the install prefix is separate and can be
+    # overridden with -DCMAKE_INSTALL_PREFIX=...
     if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
-        set(CMAKE_INSTALL_PREFIX "${CMAKE_CURRENT_SOURCE_DIR}" CACHE PATH "Default install prefix" FORCE)
+        if(DEFINED ENV{ProgramFiles})
+            set(CLX_DEFAULT_INSTALL_PREFIX "$ENV{ProgramFiles}/clx")
+        else()
+            set(CLX_DEFAULT_INSTALL_PREFIX "C:/Program Files/clx")
+        endif()
+        set(CMAKE_INSTALL_PREFIX "${CLX_DEFAULT_INSTALL_PREFIX}" CACHE PATH "Default install prefix" FORCE)
     endif()
 
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/bin)
@@ -33,7 +42,10 @@ if(WIN32)
 
     set_directory_properties(PROPERTIES ADDITIONAL_MAKE_CLEAN_FILES "${CMAKE_CURRENT_SOURCE_DIR}/bin;${CMAKE_CURRENT_SOURCE_DIR}/lib")
 else()
-    set(CMAKE_INSTALL_PREFIX /usr/local)
+    # Only default /usr/local when the user did not pass -DCMAKE_INSTALL_PREFIX.
+    if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+        set(CMAKE_INSTALL_PREFIX /usr/local)
+    endif()
 endif()
 
 set(RUNTIME_SOURCES
@@ -139,6 +151,10 @@ target_compile_definitions(clx PRIVATE
     CLX_VERSION="${PROJECT_VERSION}"
     CLX_DEFAULT_CXX="${CMAKE_CXX_COMPILER}"
     CLX_DEFAULT_CXX_NAME="${CMAKE_CXX_COMPILER_ID}"
+    CLX_INSTALL_PREFIX="${CMAKE_INSTALL_PREFIX}"
+    CLX_INSTALL_LIBDIR="${CMAKE_INSTALL_LIBDIR}"
+    CLX_INSTALL_BINDIR="${CMAKE_INSTALL_BINDIR}"
+    CLX_INSTALL_INCLUDEDIR="${CMAKE_INSTALL_INCLUDEDIR}"
 )
 
 string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" SYSTEM_PROC)

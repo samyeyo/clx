@@ -6,7 +6,7 @@ DO_INSTALL=false
 for arg in "$@"; do
     case $arg in
         clean)
-            sudo rm /usr/local/bin/clx /usr/local/include/clx.h /usr/local/lib/libclx.a /usr/local/lib/libclx.so 2>/dev/null || true
+            sudo rm /usr/local/bin/clx /usr/local/include/clx.h /usr/local/include/clx_runtime.h /usr/local/include/clx_simd.h /usr/local/lib/libclx.a /usr/local/lib/libclx_size.a /usr/local/lib/libclx_lua.a /usr/local/lib/libclx.so 2>/dev/null || true
             rm -rf build
             exit 0
             ;;

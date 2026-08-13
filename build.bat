@@ -11,6 +11,7 @@ if /I "%~1"=="clean" (
     rmdir /s /q lib 2>nul
     exit /b 0
 )
+if /I "%~1"=="uninstall" goto do_uninstall
 if /I "%~1"=="debug"   set BUILD_TYPE=Debug
 if /I "%~1"=="install" set DO_INSTALL=1
 shift
@@ -27,3 +28,16 @@ if errorlevel 1 exit /b %errorlevel%
 if "%DO_INSTALL%"=="1" (
     cmake --install build --config %BUILD_TYPE%
 )
+exit /b 0
+
+:do_uninstall
+if not exist "build\install_manifest.txt" (
+    echo Cannot find build\install_manifest.txt. Is the project installed?
+    exit /b 1
+)
+echo Uninstalling...
+for /f "usebackq tokens=*" %%f in ("build\install_manifest.txt") do (
+    if exist "%%f" del /f /q "%%f"
+)
+echo Uninstallation complete.
+exit /b 0
