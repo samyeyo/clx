@@ -10,6 +10,20 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 
 ### Changed
 
+* Shrunk LTable to 80 bytes using a lazy LTableExt indirection (6594386)
+* Trimmed the `create_table` hot path (b732bcf)
+* Restored table byte accounting and keep small arrays inline (97b90e9)
+* Implemented a slow path for table lookup with metamethods to fix the MSVC performance issue (34c0e42)
+* Maintain the metatable list in `setmetatable` (335c2c1)
+* Added metatable-list links, a dynamic inline cache, permanent roots, and a VM-proxy flag (5e3805c)
+* Fixed LTable accounting symmetry, retain array buffers, and protect only metatabled tables (6772dd8)
+* Track coroutine wrapper tables in the metatable list (b1dbf8a)
+* Hardened integer arithmetic (428afc2)
+* Precompute hashes for compile-time string literals in table codegen, avoiding repeated runtime hashing (2546bc4)
+* Optimized table constructor emission logic in CodeEmitter (59a92d8)
+* Emit `as_number()` for known numeric string-key table fields (6ee409b)
+* Rewrote numeric inference (parameters, returns, table fields, native integer tracking, function locals) in the optimizer (7cc3e98)
+* Upgraded clx to version 0.3.0 (eac8b8f)
 * Removed old per-function CacheSlot mechanism (114 lines net deletion) — replaced by per-LTable inline cache
 * Per-LTable inline cache: 4 entries indexed by `key ^ (key >> 17) ^ (key >> 33) % 4`, stores `(key_payload, entry_idx, table_ver)`. Uses `hash_version` (structural changes only) not per-entry version (every write), so read-then-write patterns hit — 64 bytes overhead per LTable
 * Simplified MultiValue to be trivially destructible: `inline_vals[3]` (was 8), `LState*` bump allocator for overflow (was `new[]/delete[]`), added 2-arg and 3-arg constructors, size reduced from 144 to 72 bytes
@@ -38,6 +52,12 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 
 ### Added
 
+* Added an embedded Lua 5.5 VM plus a runtime bridge, enabling `--dynamic`/`load()` execution (f8610bb, 5ea465e)
+* Added a `--dynamic` proxy for the `clx_lua` library (c77bfae)
+* Added VM proxy registration with the clx GC and pacing of the embedded VM's GC (`clx_register_vm_proxy`, `clx_free_vm_proxy_ptr`, `pace_vm_gc`) — VMTableProxy and VMFunction are now marked and registered (7db6d76, 2942a5d, 3247f9e, 77b580a, 50b5a58)
+* Added standard io streams: `io.stdin`, `io.stderr`, and `io.stdout` (cb8ea45)
+* Added faster coroutine context switching for x86_64 on Linux via `coro_switch_x86_64.s` (bd4faa1)
+* Added SIMD runtime scans for nil/non-nil values (bab993b)
 * Added `LState::alloc_overflow()` bump allocator for MultiValue overflow — no individual frees, reset at GC cycle
 * Added `MultiValue(a, b)` and `MultiValue(a, b, c)` constructors for common 2/3-value returns without array allocation
 * Added `file_line_prefix(L)` helper for consistent file:line error prefixes
@@ -77,6 +97,14 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 
 ### Fixed
 
+* Root the string metatable (6459b4e)
+* Root io `default_input`/`default_output` userdata to prevent GC collection (29b7698)
+* Replaced NaN representation with `std::numeric_limits` in `clx_to_vm_value_()` (4f36640)
+* Fixed mask calculation in `clx_find_first_nil()` for SIMD operations (f0be578)
+* Defined NOMINMAX for Windows and streamlined the CLX_MUSTTAIL definition (de02f22)
+* Fixed global declaration issue (0be2e3c)
+* Fixed temp directory path formatting when compiling multiple files on Windows (b2536d2)
+* Fixed gcc error using CLX_INLINE_HOT for `table_get()` and `table_set()` (db60d96)
 * Fixed `type_error` to extract actual type name from the argument at the given position (was hardcoded to "nil")
 * Fixed duplicate `hash_count = 0` assignment in `create_table`
 * Fixed redundant `!= Nil && == Function` checks in GC finalizer invocation (3 sites)
@@ -88,6 +116,15 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 * Fixed annoying MSVC warning message D9025 when compiling clx_size.lib (d716fa1)
 * Fixed GC quadratic hash scan, CacheSlot stability, sub-alloc tracking, double-free (5a1f442)
 * Fixed CacheSlot reads for numeric fields and int64 inner loops for `j=i+1` (e89a8e9)
+
+### Tests
+
+* Added a VM proxy RSS leak regression test (4c74675)
+* Added a table sweep stress regression test (586a7df)
+* Relaxed the gc.lua pool-reuse assertion to non-expansion (cf4d9b8)
+* Excluded load.lua from Lua file processing in run.bat (cdd7d6a)
+* Added VM boundaries tests — coroutine boundary, load()-aware assertions, and VM/clx incompatibility checks (8a4829f)
+* Added a test suite runner for dynamic loading of Lua code (a0ba7c9)
 
 ### Refactored
 
@@ -110,19 +147,42 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 * Enhanced vector path qualification by disqualifying non-simple keys in array optimizations (37c49e7)
 * Reverted fib.lua to tree-recursive (O(2^n)) for benchmarking — tail-recursive version is O(n) and too trivial to show CLX speedup
 * Rewrote coro.lua benchmark to 5M resume/yield cycles for meaningful comparison
+* Cleaned up helper comments in runtime code (08d8000)
 
 ### Documentation
 
 * Corrected spelling (86b5c03)
+* Updated installation instructions and enhanced runtime documentation (3fffdae)
+* Added installation path functions and updated library root logic for improved module loading (788342c)
+* Updated runtime documentation with details on string allocation, inline cache structure, and performance optimizations (ff90a6a)
+* Enhanced optimizations documentation — native integer tracking, table memory layout, and runtime optimizations (5b78a07)
+* Updated modules documentation with search paths for native modules (ef25def, 1c50b6e)
+* Added dynamic Lua VM documentation and corrected the index link (e784c30)
+* Updated the README with improved build instructions and output details (ec70a2e)
+* Fixed a typo in dynamic Lua documentation references (6df7da5)
+* Documented the `--dynamic` compiler option and the dynamic Lua feature (c99009b, 6d324dd, b7dc422, 6313cdd)
+* Fixed a typo in LICENSE (ba841cf)
+* Updated the website and documentation for API, architecture, benchmarks, CLI, and optimizations (f10535e, 0388524, 5d0ada9)
 
 ### Build
 
 * Installed `clx_simd.h` alongside the other public headers (9f0df50)
 * Derived `--version` from the CMake project version (c838d99)
+* Improved the artifact creation process for Linux and Windows (e48fd7d)
+* Enhanced the uninstall process and updated default install paths for Windows (6d2ed0d)
+* Added Lua runtime fetch scripts and embedded Lua VM CMake files (8a6ef1e, f03de7a)
 
 ### Benchmarks
 
 * Updated default N values in fannkuchredux and fasta benchmarks (78d8a7e)
+* Updated performance metrics for the docs and web page (49c5276)
+* Skip run_load_shim.lua in the benchmark scripts and the load() benchmark loop (5b7c756, 18b75b4)
+* Increased benchmark parameters for more meaningful times (934efc4)
+* Enhanced output formatting and added load()-specific benchmarking scripts, including on Windows (cfcbf70, c3b1920, ccff011)
+
+### Examples
+
+* Improved Mandelbrot rendering and zoom functionality (2433588)
 
 ---
 
