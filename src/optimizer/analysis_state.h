@@ -82,10 +82,6 @@ inline bool is_purely_integer_expr(const ASTContext& ctx, const AnalysisState& s
     const auto& n = ctx.nodes[node_idx];
     if (n.type == NodeType::Integer)
         return true;
-    if (n.type == NodeType::Number) {
-        double v = n.as.number.val;
-        return v == static_cast<double>(static_cast<int64_t>(v)) && v >= -9.0e15 && v <= 9.0e15;
-    }
     if (n.type == NodeType::Identifier) {
         std::string_view nm(n.as.ident.name, n.as.ident.length);
         return state.native_integers.count(nm) > 0;
@@ -108,6 +104,41 @@ inline bool is_purely_integer_expr(const ASTContext& ctx, const AnalysisState& s
         return is_purely_integer_expr(ctx, state, n.as.unary_op.expr);
     if (n.type == NodeType::ParenExpression)
         return is_purely_integer_expr(ctx, state, n.as.paren_expr.expr);
+    return false;
+}
+
+//------------------ is_integer_typed_expr: stricter than is_purely_integer_expr. Returns true only for
+// expressions whose value is an *integer* in the Lua sense (never a whole-valued float literal, which
+// tostring renders as "500000.0"). Used to pick integer formatting for string concatenation.
+inline bool is_integer_typed_expr(const ASTContext& ctx, const AnalysisState& state, uint32_t node_idx)
+{
+    if (node_idx == 0xFFFFFFFF || node_idx >= ctx.nodes.size())
+        return false;
+    const auto& n = ctx.nodes[node_idx];
+    if (n.type == NodeType::Integer)
+        return true;
+    if (n.type == NodeType::Identifier) {
+        std::string_view nm(n.as.ident.name, n.as.ident.length);
+        return state.native_integers.count(nm) > 0;
+    }
+    if (n.type == NodeType::BinaryOp) {
+        int bop = n.as.bin_op.op;
+        bool is_int_binop = (bop >= static_cast<int>(BinaryOp::Add) && bop <= static_cast<int>(BinaryOp::Mul))
+            || bop == static_cast<int>(BinaryOp::Mod) || bop == static_cast<int>(BinaryOp::And)
+            || bop == static_cast<int>(BinaryOp::Or) || bop == static_cast<int>(BinaryOp::FloorDiv)
+            || bop == static_cast<int>(BinaryOp::BitAnd) || bop == static_cast<int>(BinaryOp::BitOr)
+            || bop == static_cast<int>(BinaryOp::BitXor) || bop == static_cast<int>(BinaryOp::Shl)
+            || bop == static_cast<int>(BinaryOp::Shr);
+        if (is_int_binop)
+            return is_integer_typed_expr(ctx, state, n.as.bin_op.left)
+                && is_integer_typed_expr(ctx, state, n.as.bin_op.right);
+    }
+    if (n.type == NodeType::UnaryOp
+        && (n.as.unary_op.op == static_cast<int>(UnaryOp::Minus)
+            || n.as.unary_op.op == static_cast<int>(UnaryOp::BNot)))
+        return is_integer_typed_expr(ctx, state, n.as.unary_op.expr);
+    if (n.type == NodeType::ParenExpression)
+        return is_integer_typed_expr(ctx, state, n.as.paren_expr.expr);
     return false;
 }
 
