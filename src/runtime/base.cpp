@@ -5,8 +5,8 @@
 // │  base.cpp · Base module (print, type, etc)  │
 // └─────────────────────────────────────────────┘
 
-#include "../include/clx_simd.h"
 #include "clx.h"
+#include "../include/clx_simd.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -238,7 +238,7 @@ static MultiValue tostring(LState* L, const LValue* args, size_t count)
         return MultiValue(LValue::istr(v.as_bool() ? "true" : "false", v.as_bool() ? 4 : 5));
     case Double: {
         char buf[64];
-        int n = std::snprintf(buf, sizeof(buf), "%.17g", v.as_number());
+        int n = clx_format_double(buf, sizeof(buf), v.as_number());
         return MultiValue(clx::string(L, buf, (size_t)n));
     }
     case Int64: {
