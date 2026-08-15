@@ -611,7 +611,13 @@ void CodeEmitter::emit_native(uint32_t n_idx)
             return;
         }
         if (n.type == NodeType::Number) {
-            out << n.as.number.val;
+            double d = n.as.number.val;
+            char buf[64];
+            int len = std::snprintf(buf, sizeof(buf), "%.17g", d);
+            out << buf;
+            if (buf[strspn(buf, "-0123456789")] == '\0' && len < 62) {
+                out << ".0";
+            }
             return;
         }
         if (n.type == NodeType::Integer) {
@@ -3297,10 +3303,17 @@ void CodeEmitter::emitBinaryOp(const ASTNode& node, uint32_t node_idx)
                     out << "clx_memcpy(_p, \"" << cpp_escape(d) << "\", " << d.length() << "); _p += " << d.length()
                         << "; ";
                 } else {
-                    out << "_p += std::snprintf(_p, " << (total_str_len + 1)
-                        << " - (_p - _buf), \"%g\", static_cast<double>(";
-                    emit_native(op);
-                    out << ")); ";
+                    if (is_integer_typed_expr(ctx, state, op)) {
+                        out << "_p += std::snprintf(_p, " << (total_str_len + 1)
+                            << " - (_p - _buf), \"%lld\", static_cast<long long>(";
+                        emit_native(op);
+                        out << ")); ";
+                    } else {
+                        out << "_p += clx::clx_format_double(_p, " << (total_str_len + 1)
+                            << " - (_p - _buf), ";
+                        emit_native(op);
+                        out << "); ";
+                    }
                 }
             }
             out << "*_p = '\\0'; return clx::LValue(L->intern_string(_buf, static_cast<size_t>(_p - _buf))); }())";
