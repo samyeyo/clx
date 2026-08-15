@@ -285,9 +285,9 @@ std::string LValue::to_string(LState* L) const
     case Boolean:
         return as_bool() ? "true" : "false";
     case Double: {
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "%.17g", as_number());
-        return std::string(buf);
+        char buf[64];
+        int n = clx_format_double(buf, sizeof(buf), as_number());
+        return std::string(buf, (size_t)n);
     }
     case Int64:
         return std::to_string(as_integer());
