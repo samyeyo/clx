@@ -346,6 +346,55 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
         }
     }
 
+    auto block_writes_table = [&](auto& self, uint32_t block_idx, std::string_view table_name) -> bool {
+        if (block_idx == 0xFFFFFFFF || block_idx >= ctx.nodes.size())
+            return false;
+        const auto& block = ctx.nodes[block_idx];
+        if (block.type != NodeType::Block)
+            return false;
+        for (uint32_t i = 0; i < block.as.block.count; ++i) {
+            uint32_t s_idx = ctx.block_statements[block.as.block.first_statement + i];
+            const auto& stmt = ctx.nodes[s_idx];
+            if (stmt.type == NodeType::Assignment) {
+                for (uint32_t t = 0; t < stmt.as.assign.target_count; ++t) {
+                    uint32_t tgt = ctx.block_statements[stmt.as.assign.first_target + t];
+                    auto table_of_target = [&](auto& self2, uint32_t node_idx) -> uint32_t {
+                        const auto& n = ctx.nodes[node_idx];
+                        if (n.type == NodeType::TableAccess)
+                            return self2(self2, n.as.table_access.table);
+                        return node_idx;
+                    };
+                    uint32_t base = table_of_target(table_of_target, tgt);
+                    if (base < ctx.nodes.size() && ctx.nodes[base].type == NodeType::Identifier) {
+                        std::string_view base_name(ctx.nodes[base].as.ident.name, ctx.nodes[base].as.ident.length);
+                        if (base_name == table_name)
+                            return true;
+                    }
+                }
+            } else if (stmt.type == NodeType::Block) {
+                if (self(self, s_idx, table_name))
+                    return true;
+            } else if (stmt.type == NodeType::ForStatement) {
+                if (self(self, stmt.as.for_stmt.body_block, table_name))
+                    return true;
+            } else if (stmt.type == NodeType::WhileStatement) {
+                if (self(self, stmt.as.while_stmt.body_block, table_name))
+                    return true;
+            } else if (stmt.type == NodeType::RepeatStatement) {
+                if (self(self, stmt.as.repeat_stmt.body_block, table_name))
+                    return true;
+            } else if (stmt.type == NodeType::IfStatement) {
+                if (stmt.as.if_stmt.then_block < ctx.nodes.size()
+                    && self(self, stmt.as.if_stmt.then_block, table_name))
+                    return true;
+                if (stmt.as.if_stmt.else_block != 0xFFFFFFFF
+                    && self(self, stmt.as.if_stmt.else_block, table_name))
+                    return true;
+            }
+        }
+        return false;
+    };
+
     for (const auto& node : ctx.nodes) {
         if (node.type == NodeType::Block) {
             std::map<uint32_t, uint32_t> pending_tables;
@@ -425,11 +474,13 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
                     for (auto& pair : pending_tables) {
                         uint32_t table_node = pair.second;
                         if (state.table_presize.find(table_node) == state.table_presize.end()) {
-                            if (!has_forward_ref(stmt.as.for_stmt.limit_expr, _pending_names)) {
+                            std::string table_name = get_ast_string(ctx, pair.first);
+                            bool hw = !table_name.empty()
+                                && block_writes_table(block_writes_table, stmt.as.for_stmt.body_block, table_name);
+                            if (hw && !has_forward_ref(stmt.as.for_stmt.limit_expr, _pending_names)) {
                                 state.table_presize[table_node] = stmt.as.for_stmt.limit_expr;
-                                std::string t_str = get_ast_string(ctx, pair.first);
-                                if (!t_str.empty())
-                                    array_bounds[t_str] = stmt.as.for_stmt.limit_expr;
+                                if (!table_name.empty())
+                                    array_bounds[table_name] = stmt.as.for_stmt.limit_expr;
                             }
                         }
                     }
