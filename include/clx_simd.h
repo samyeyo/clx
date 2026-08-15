@@ -9,8 +9,14 @@
 #define CLX_SIMD_H
 
 #include <cstddef>
-#include <clx_runtime.h>
 #include <cstdint>
+
+#ifndef CLX_INLINE_HOT
+#define CLX_INLINE_HOT inline
+#endif
+#ifndef CLX_INLINE
+#define CLX_INLINE inline
+#endif
 
 //------------------ Platform detection
 #if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
