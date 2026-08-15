@@ -98,6 +98,8 @@ void clx_coro_init(CoroutineContext* ctx, void* stack_top, void* entry);
 #define CLX_INLINE inline
 #endif
 
+#include "clx_simd.h"
+
 namespace clx {
 
 #if defined(_MSC_VER)
@@ -145,6 +147,23 @@ constexpr auto Thread = ValueType::Thread;
 //------------------ Type name strings by ValueType index
 static constexpr const char* VALUE_TYPE_NAMES[]
     = { "nil", "boolean", "integer", "number", "string", "table", "function", "userdata", "thread" };
+
+//------------------ clx_format_double: Lua-compatible number-to-string. Mirrors Lua 5.5's
+// tostringbuffFloat (lobject.c): try "%.15g", and only if reading it back does not round-trip
+// (e.g. 3.14 -> "3.14" is fine, but math.pi needs all digits) retry with "%.17g". Then append
+// ".0" when the result looks like an integer (no '.', 'e', or 'E') so tostring(100.0) == "100.0".
+// Returns the number of characters written (excluding NUL).
+CLX_INLINE_HOT int clx_format_double(char* buf, size_t cap, double v)
+{
+    int n = std::snprintf(buf, cap, "%.15g", v);
+    if (std::strtod(buf, nullptr) != v)
+        n = std::snprintf(buf, cap, "%.17g", v);
+    if (buf[strspn(buf, "-0123456789")] == '\0' && n + 2 < static_cast<int>(cap)) {
+        buf[n++] = '.';
+        buf[n++] = '0';
+    }
+    return n;
+}
 
 //------------------ GC object header
 struct LHeader {
@@ -406,7 +425,6 @@ struct LValue {
     CLX_INLINE_HOT LValue operator>=(const LValue& other) const { return other.operator<=(*this); }
 
     std::string to_string(LState* L = nullptr) const;
-
 private:
     LValue slow_eq(const LValue& other) const;
     LValue slow_lt(const LValue& other) const;
@@ -1852,6 +1870,18 @@ CLX_INLINE_COLD LValue len(LState* L, const LValue& a)
             return call_bin_metamethod(L, a, a, "__len");
     }
 
+    if (t->array_size > 0) {
+        size_t n = clx_find_first_nil(reinterpret_cast<const uint8_t*>(t->array_types), t->array_size);
+        if (n == t->array_size) {
+            size_t hc = (t->ext != nullptr) ? t->ext->hash_count : 0;
+            if (hc == 0)
+                return LValue(static_cast<int64_t>(t->array_size));
+            LValue next = t->gettable(LValue(static_cast<int64_t>(t->array_size + 1)));
+            if (next.type == ValueType::Nil)
+                return LValue(static_cast<int64_t>(t->array_size));
+        }
+    }
+
     int64_t lo = 0;
     int64_t hi = static_cast<int64_t>(t->array_size) + 1;
     while (true) {
@@ -1957,7 +1987,7 @@ CLX_INLINE_COLD LValue concat_multi(LState* L, const LValue* args, size_t count)
                     lens[i] = static_cast<size_t>(
                         std::snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(args[i].val.payload.i64)));
                 } else {
-                    lens[i] = static_cast<size_t>(std::snprintf(buf, sizeof(buf), "%.14g", args[i].val.payload.f64));
+                    lens[i] = static_cast<size_t>(clx_format_double(buf, sizeof(buf), args[i].val.payload.f64));
                 }
                 char* s = new char[lens[i]];
                 clx_memcpy(s, buf, lens[i]);
