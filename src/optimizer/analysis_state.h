@@ -71,6 +71,7 @@ struct AnalysisState {
     std::string ref_capture;
     uint32_t current_func_body = 0xFFFFFFFF;
     uint32_t current_arena_func = 0xFFFFFFFF;
+    uint32_t current_func_idx = 0xFFFFFFFF;
 };
 
 //------------------ is_purely_integer_expr: returns true if a node always evaluates to an integer.

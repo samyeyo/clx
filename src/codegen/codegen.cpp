@@ -1049,7 +1049,9 @@ void CodeEmitter::emitCallExpression(const ASTNode& node, uint32_t node_idx)
         out << "    for (size_t _mi = 0; _mi < _mret.count; ++_mi) _dyn_buf[_dyn_count++] = _mret[_mi];\n";
 
         if (is_direct) {
+            out << "    size_t _ssaved = L->shadow_top;\n";
             out << "    clx::MultiValue _main_ret = _impl_" << fname << "(L, _dyn_buf, _dyn_count);\n";
+            out << "    L->shadow_top = _ssaved;\n";
         } else if (!is_method_call && node.as.call_expr.target < ctx.nodes.size()
             && ctx.nodes[node.as.call_expr.target].type == NodeType::TableAccess) {
             auto _chit = state.hoisted_lookups.find(node.as.call_expr.target);
@@ -1126,8 +1128,10 @@ void CodeEmitter::emitCallExpression(const ASTNode& node, uint32_t node_idx)
             }
             out << "};\n";
             if (is_direct) {
+                out << "    size_t _ssaved = L->shadow_top;\n";
                 out << "    clx::MultiValue _main_ret = _impl_" << fname << "(L, args, " << node.as.call_expr.arg_count
                     << ");\n";
+                out << "    L->shadow_top = _ssaved;\n";
             } else if (!is_method_call && node.as.call_expr.target < ctx.nodes.size()
                 && ctx.nodes[node.as.call_expr.target].type == NodeType::TableAccess) {
                 auto _chit = state.hoisted_lookups.find(node.as.call_expr.target);
@@ -1180,7 +1184,9 @@ void CodeEmitter::emitCallExpression(const ASTNode& node, uint32_t node_idx)
             }
         } else {
             if (is_direct) {
+                out << "    size_t _ssaved = L->shadow_top;\n";
                 out << "    clx::MultiValue _main_ret = _impl_" << fname << "(L, nullptr, 0);\n";
+                out << "    L->shadow_top = _ssaved;\n";
             } else if (!is_method_call && node.as.call_expr.target < ctx.nodes.size()
                 && ctx.nodes[node.as.call_expr.target].type == NodeType::TableAccess) {
                 auto _chit = state.hoisted_lookups.find(node.as.call_expr.target);
@@ -1520,6 +1526,10 @@ void CodeEmitter::emitFunctionDef(const ASTNode& node, uint32_t node_idx)
         << node.as.func_def.param_count << ") : 0;\n";
     out << "const clx::LValue* _va_args = _va_count > 0 ? (args + " << node.as.func_def.param_count << ") : nullptr;\n";
 
+    uint32_t prev_func_idx = state.current_func_idx;
+    state.current_func_idx = node_idx;
+    out << "size_t _sg_func_" << node_idx << " = L->shadow_top;\n";
+
     size_t prev_native_count_for_params = state.native_numbers.size();
 
     for (uint32_t i = 0; i < node.as.func_def.param_count; ++i) {
@@ -1595,11 +1605,13 @@ void CodeEmitter::emitFunctionDef(const ASTNode& node, uint32_t node_idx)
     state.native_numbers.resize(prev_native_count_for_params);
     state.in_function_def = prev_in_func;
     state.current_func_body = saved_func_body;
+    state.current_func_idx = prev_func_idx;
     state.direct_callables = std::move(saved_direct_callables);
     state.fast_callables = std::move(saved_fast_callables);
     if (state.arena_table_sizes.count(node_idx))
         out << "clx::arena_reset(&_arena);\n";
     state.current_arena_func = saved_arena_func;
+    out << "L->shadow_top = _sg_func_" << node_idx << ";\n";
     out << "return clx::MultiValue();\n";
     out << "}";
     if (!is_raw)
@@ -1612,6 +1624,11 @@ void CodeEmitter::emitReturnStatement(const ASTNode& node, uint32_t node_idx)
     out << "#line " << node.line << " \"" << ctx.filename << "\"\n";
     uint32_t v_count = node.as.return_stmt.value_count;
     uint32_t first_v = node.as.return_stmt.first_value;
+
+    auto emit_shadow_restore = [&]() {
+        if (state.in_function_def && state.current_func_idx != 0xFFFFFFFF)
+            out << "L->shadow_top = _sg_func_" << state.current_func_idx << ";\n";
+    };
 
     if (state.in_fast_function) {
         if (v_count == 0) {
@@ -1632,6 +1649,7 @@ void CodeEmitter::emitReturnStatement(const ASTNode& node, uint32_t node_idx)
         if (state.in_function_def) {
             if (state.current_arena_func != 0xFFFFFFFF)
                 out << "clx::arena_reset(&_arena);\n";
+            emit_shadow_restore();
             out << "return clx::MultiValue();\n";
         } else {
             out << "return clx::LValue();\n";
@@ -1686,6 +1704,7 @@ void CodeEmitter::emitReturnStatement(const ASTNode& node, uint32_t node_idx)
                 if (state.in_function_def) {
                     if (state.current_arena_func != 0xFFFFFFFF)
                         out << "    clx::arena_reset(&_arena);\n";
+                    emit_shadow_restore();
                     out << "    CLX_MUSTTAIL return _impl_" << fname << "(L, _dyn_buf, _dyn_count);\n";
                 } else {
                     out << "    clx::MultiValue _res = _impl_" << fname << "(L, _dyn_buf, _dyn_count);\n";
@@ -1723,6 +1742,7 @@ void CodeEmitter::emitReturnStatement(const ASTNode& node, uint32_t node_idx)
                     if (state.in_function_def) {
                         if (state.current_arena_func != 0xFFFFFFFF)
                             out << "    clx::arena_reset(&_arena);\n";
+                        emit_shadow_restore();
                         out << "    CLX_MUSTTAIL return _impl_" << fname << "(L, args_" << last_v_idx << ", "
                             << call_node.as.call_expr.arg_count << ");\n";
                     } else {
@@ -1751,6 +1771,7 @@ void CodeEmitter::emitReturnStatement(const ASTNode& node, uint32_t node_idx)
                     if (state.in_function_def) {
                         if (state.current_arena_func != 0xFFFFFFFF)
                             out << "    clx::arena_reset(&_arena);\n";
+                        emit_shadow_restore();
                         out << "    CLX_MUSTTAIL return _impl_" << fname << "(L, nullptr, 0);\n";
                     } else {
                         out << "    clx::MultiValue _res = _impl_" << fname << "(L, nullptr, 0);\n";
@@ -1793,6 +1814,7 @@ void CodeEmitter::emitReturnStatement(const ASTNode& node, uint32_t node_idx)
         if (state.in_function_def) {
             if (state.current_arena_func != 0xFFFFFFFF)
                 out << "    clx::arena_reset(&_arena);\n";
+            emit_shadow_restore();
             out << "    return clx::MultiValue(_ret_args, " << v_count << ", L);\n";
         } else {
             out << "    return _ret_args[0];\n";
@@ -1818,6 +1840,7 @@ void CodeEmitter::emitReturnStatement(const ASTNode& node, uint32_t node_idx)
         if (state.in_function_def) {
             if (state.current_arena_func != 0xFFFFFFFF)
                 out << "    clx::arena_reset(&_arena);\n";
+            emit_shadow_restore();
             out << "    return clx::MultiValue(_ret_vals, L);\n";
         } else {
             out << "    return (!_ret_vals.empty()) ? _ret_vals[0] : clx::LValue();\n";
