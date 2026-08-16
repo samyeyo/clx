@@ -1717,7 +1717,7 @@ CLX_INLINE_HOT LValue div(LState* L, const LValue& a, const LValue& b)
 //------------------ Equality with metamethod fallback
 CLX_INLINE_HOT LValue eq(LState* L, const LValue& a, const LValue& b)
 {
-    if (a.val.payload.u64 == b.val.payload.u64 && a.type == b.type)
+    if (a.type != ValueType::Double && a.type == b.type && a.val.payload.u64 == b.val.payload.u64)
         return LValue(true);
     if (a.type == ValueType::Int64 && b.type == ValueType::Double)
         return LValue(static_cast<double>(a.val.payload.i64) == b.val.payload.f64);
