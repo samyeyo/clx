@@ -71,6 +71,58 @@ for %%D in (conformance regression stress compiler_killers edge_cases) do (
 )
 
 :: ----------------------------------------------------------------------
+:: Real-world compatibility tests (each dir has a test.lua entry point;
+:: compile all of the dir's .lua files together)
+:: ----------------------------------------------------------------------
+if exist "realworld" (
+    for /f "delims=" %%D in ('dir /b /ad "realworld" 2^>nul') do (
+        set "rwtest=%SCRIPT_DIR%\realworld\%%D\test.lua"
+        if exist "!rwtest!" (
+            set "name=%%D"
+            set "bin=%SCRIPT_DIR%\realworld_!name!"
+
+            REM Build the list of top-level .lua sources in the directory
+            set "SRCS="
+            for /f "delims=" %%F in ('dir /b "realworld\!name!\*.lua" 2^>nul') do (
+                set "SRCS=!SRCS! "realworld\!name!\%%F""
+            )
+
+            echo --- realworld\%%D ---
+            "%COMPILER%" !SRCS! --output "!bin!" > "!bin!_compile.log" 2>&1
+
+            if exist "!bin!.exe" (
+                "!bin!.exe" > "!bin!_output.log" 2>&1
+                set "EXIT_CODE=!errorlevel!"
+                type "!bin!_output.log"
+
+                if !EXIT_CODE! neq 0 (
+                    echo [FAIL] realworld/!name! -- runtime exit code !EXIT_CODE!
+                    set /a FAIL+=1
+                ) else (
+                    findstr /c:"[FAIL]" "!bin!_output.log" >nul 2>&1
+                    if !errorlevel! equ 0 (
+                        echo [FAIL] realworld/!name!
+                        set /a FAIL+=1
+                    ) else (
+                        echo [PASS] realworld/!name!
+                        set /a PASS+=1
+                    )
+                )
+                del /f /q "!bin!.exe" >nul 2>&1
+                del /f /q "!bin!_compile.log" >nul 2>&1
+                del /f /q "!bin!_output.log" >nul 2>&1
+            ) else (
+                echo [FAIL] realworld/!name! -- compilation failed
+                type "!bin!_compile.log"
+                del /f /q "!bin!_compile.log" >nul 2>&1
+                set /a FAIL+=1
+            )
+            echo.
+        )
+    )
+)
+
+:: ----------------------------------------------------------------------
 :: Native module test (--modules)
 :: ----------------------------------------------------------------------
 echo.
