@@ -20,6 +20,18 @@
 
 namespace clx {
 
+//------------------ is_zero_number_literal: is a node a numeric literal equal to zero?
+// Real-world libraries express infinities/NaN with the Lua idiom `1/0`, `-1/0`, `0/0`.
+// Emitting that as a literal `/ 0` makes MSVC fail constant evaluation (C2124), so the
+// codegen must avoid a literal constant-expression divisor of zero. This predicate is
+// used to substitute an IEEE-equivalent multiply-by-infinity instead.
+static bool is_zero_number_literal(const ASTContext& ctx, uint32_t n_idx)
+{
+    const ASTNode& n = ctx.nodes[n_idx];
+    return (n.type == NodeType::Number && n.as.number.val == 0.0)
+        || (n.type == NodeType::Integer && n.as.integer.val == 0);
+}
+
 //------------------ lookup_builtin: maps "module.func" to C++ function name
 const char* lookup_builtin(std::string_view module, std::string_view func)
 {
@@ -666,11 +678,17 @@ void CodeEmitter::emit_native(uint32_t n_idx)
             }
             if (op >= static_cast<int>(BinaryOp::Add) && op <= static_cast<int>(BinaryOp::Div)) {
                 if (op == static_cast<int>(BinaryOp::Div)) {
-                    out << "(static_cast<double>(";
-                    emit_native(n.as.bin_op.left);
-                    out << ") / static_cast<double>(";
-                    emit_native(n.as.bin_op.right);
-                    out << "))";
+                    if (is_zero_number_literal(ctx, n.as.bin_op.right)) {
+                        out << "(static_cast<double>(";
+                        emit_native(n.as.bin_op.left);
+                        out << ") * std::numeric_limits<double>::infinity())";
+                    } else {
+                        out << "(static_cast<double>(";
+                        emit_native(n.as.bin_op.left);
+                        out << ") / static_cast<double>(";
+                        emit_native(n.as.bin_op.right);
+                        out << "))";
+                    }
                     return;
                 }
                 out << "(";
@@ -3158,11 +3176,17 @@ void CodeEmitter::emitBinaryOp(const ASTNode& node, uint32_t node_idx)
             return;
         }
         if (op == static_cast<int>(BinaryOp::Div)) {
-            out << "clx::LValue(static_cast<double>(";
-            emit_native(node.as.bin_op.left);
-            out << ") / static_cast<double>(";
-            emit_native(node.as.bin_op.right);
-            out << "))";
+            if (is_zero_number_literal(ctx, node.as.bin_op.right)) {
+                out << "clx::LValue(static_cast<double>(";
+                emit_native(node.as.bin_op.left);
+                out << ") * std::numeric_limits<double>::infinity())";
+            } else {
+                out << "clx::LValue(static_cast<double>(";
+                emit_native(node.as.bin_op.left);
+                out << ") / static_cast<double>(";
+                emit_native(node.as.bin_op.right);
+                out << "))";
+            }
             return;
         }
         if (op == static_cast<int>(BinaryOp::Mod)) {
