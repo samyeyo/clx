@@ -1,435 +1,174 @@
-# clx C++ API Reference
+# clx C++ API
 
-All functions are in `namespace clx`. Include `<clx.h>` to use the full API.
-The API is value-based (no stack) — values are `LValue` objects, not stack indices.
+If you want to extend clx with native C++ code — for example a high-performance
+library module — this guide shows you the API.
 
-## Lifecycle
+Everything lives in `namespace clx` and starts with `#include <clx.h>`.
+
+One thing sets clx apart from the classic Lua C API: **there's no stack**. You
+work directly with `LValue` objects, which is closer to normal C++. That makes
+the API smaller and less error-prone.
+
+## Setting up and tearing down
 
 ```cpp
-LState* L = open(argc, argv);  // create a clx state
-luastd_base(L);                      // register base lib (_G, pcall, type, ...)
-luastd_math(L);                      // register math lib
-luastd_string(L);                    // register string lib
-luastd_coroutine(L);                 // register coroutine lib
-close(L);                           // cleanup
+clx::LState* L = clx::open();        // create a runtime
+clx::openlibs(L);                    // load the standard libraries
+// ... your code ...
+clx::close(L);                       // clean up
 ```
 
-`L` owns all memory (string pool, GC objects, threads). Call `close()` exactly once.
+`L` owns all the memory (strings, tables, threads). Call `close()` exactly once
+when you're done.
 
-## Values (`LValue`)
+## Values: `LValue`
 
-LValue is a 16-byte value (8-byte payload + separate `ValueType` tag). Construct via factory functions:
+An `LValue` can hold any Lua value: `nil`, boolean, number, string, table,
+function, userdata, or thread. You create values with factory functions rather
+than pushing them onto a stack:
 
-| Function | Returns |
+| Function | Gives you |
 |---|---|
-| `nil()` | `Nil` |
-| `boolean(bool)` | `Boolean` |
-| `number(double)` | `Double` |
-| `integer(int64_t)` | `Int64` |
-| `string(L, s)` / `string(L, s, len)` | `String` (interned; ≤6 bytes are TAG_ISTR inline) |
-| `table(L, asize, hsize)` | `Table` |
-| `cfunction(L, func)` | `Function` (CFunctionType) |
-| `thread(LThread*)` | `Thread` |
-| `lightuserdata(void*)` | `UserData` |
+| `nil()` | `nil` |
+| `boolean(bool)` | a boolean |
+| `number(double)` | a floating-point number |
+| `integer(int64_t)` | an integer |
+| `string(L, s)` | a string (short strings are stored in place, no allocation) |
+| `table(L)` | a table |
+| `cfunction(L, func)` | a function |
+| `lightuserdata(void*)` | an opaque pointer |
 
-Strings ≤6 bytes are stored directly in the LValue (TAG_ISTR) — no heap allocation, no interning.
-`as_string()` returns a valid C string pointer for both inline and heap strings.
-
-### ValueType short aliases
-
-`ValueType` is a scoped enum. Short aliases are provided in the `clx` namespace:
+Read values back with the `as_*` helpers:
 
 ```cpp
-clx::Nil      // ValueType::Nil      (0)
-clx::Boolean  // ValueType::Boolean  (1)
-clx::Int64    // ValueType::Int64    (2)
-clx::Double   // ValueType::Double   (3)
-clx::String   // ValueType::String   (4)
-clx::Table    // ValueType::Table    (5)
-clx::Function // ValueType::Function (6)
-clx::UserData // ValueType::UserData (7)
-clx::Thread   // ValueType::Thread   (8)
+double n = v.as_number();      // as a number
+int64_t i = v.as_integer();    // as an integer
+const char* s = v.as_string(); // as a string
 ```
 
-Use these instead of `clx::ValueType::String` etc.
-
-### Raw member access (from `clx_runtime.h`)
+### Quick type checking
 
 ```cpp
-ValueType t = v.type;
-double n = v.as_number();
-int64_t i = v.as_integer();
-bool   b = v.as_bool();
-const char* s = v.as_string();     // raw pointer (String only)
-void*  p = v.as_pointer();         // raw pointer (GC objects / userdata)
-bool ok = v.to_number(double& out); // string-to-number conversion
-std::string s = v.to_string(L);    // any type → string (respects __tostring)
-uint32_t len = v.string_len();     // string length (inline or heap)
+clx::is_number(v);   clx::is_string(v);   clx::is_table(v);
+clx::is_function(v); clx::is_integer(v);  clx::is_nil(v);
+clx::is_bool(v);     clx::is_userdata(v);
+clx::type_name(v);   // "number", "string", ...
 ```
 
-## Type Queries
+## Conversions
+
+Two families help you read arguments safely:
+
+**`to_*`** — lenient. Use a default when the value isn't what you expect:
 
 ```cpp
-ValueType type_of(v);
-bool   is_nil(v), is_bool(v), is_number(v), is_integer(v);
-bool   is_string(v), is_table(v), is_function(v), is_thread(v), is_userdata(v);
-bool   is_none(v);       // always false — no stack sentinel
-bool   is_noneornil(v);  // true if v is nil
+double d = clx::to_number(v, 0.0);   // v, or 0.0 if v isn't a number
 ```
 
-## Type Names
+**`check_*`** — strict. Throw a `LRuntimeException` on mismatch:
 
 ```cpp
-const char* type_name(ValueType t);     // e.g. "number", "string"
-const char* type_name(const LValue& v); // overload — same lookup
+double d = clx::check_number(L, args[0]);
+const char* s = clx::check_string(L, args[1]);
 ```
 
-## State Queries
+**`opt_*`** — treat `nil` as the default, otherwise throw on mismatch:
 
 ```cpp
-bool isyieldable(L);  // true if current thread is not main
-int   status(t);      // THREAD_SUSPENDED(0), RUNNING(1), DEAD(2), NORMAL(3)
+double d = clx::opt_number(L, args[0], 1.0);
 ```
-
-## Lenient Conversions (use default on failure)
-
-```cpp
-double  to_number(v, def = 0.0);
-int64_t to_integer(v, def = 0);
-int64_t to_integerx(v, &isnum);  // *isnum = true/false
-double  to_numberx(v, &isnum);
-bool    to_boolean(v);
-const char*  to_string(L, v, def = "");
-void*        touserdata(v);
-LThread*     tothread(v);
-const void*  topointer(v);
-LValue       stringtonumber(L, s);  // "3.14" → number(3.14), else nil
-```
-
-## Strict Conversions (throw `LRuntimeException` on failure)
-
-```cpp
-double      check_number(L, v);
-int64_t     check_integer(L, v);
-const char* check_string(L, v);
-LTable*     check_table(L, v);
-LCFunction* check_function(L, v);
-```
-
-## Checked Field Access (throw on type mismatch)
-
-```cpp
-int64_t     check_field_integer(L, v, "field_name");
-double      check_field_number(L, v, "field_name");
-const char* check_field_string(L, v, "field_name");
-```
-
-These validate that `v` has the expected type and return the value.
-On mismatch they throw `LRuntimeException` with a message like
-`field 'x' (integer expected, got string)` — unlike bare `as_integer()`
-which silently produces garbage on the wrong type.
-
-## Optional Conversions (nil → default, otherwise throw on mismatch)
-
-```cpp
-double      opt_number(L, v, def);
-int64_t     opt_integer(L, v, def);
-const char* opt_string(L, v, def);
-```
-
-## String Conversion (__tostring aware)
-
-```cpp
-LValue tolstring(L, v);  // string conversion with __tostring support
-```
-
-Returns the value as a string LValue. If `v` is already a string, returns `v` directly.
-If `v` has a `__tostring` metamethod, calls it and returns the result.
-Otherwise falls back to `to_string` + intern.
-
-## Argument Validation
-
-```cpp
-void checktype(L, argnum, v, LType t);    // asserts v.type() == t
-void checkany(L, v);                       // no-op
-void argcheck(L, cond, argnum, msg);       // asserts cond
-void argexpected(L, cond, argnum, v, wanted_type, extramsg = nullptr);  // asserts cond, reports actual type
-```
-
-## Error Helpers (all `[[noreturn]]`)
-
-```cpp
-void error(L, msg);          // throw LRuntimeException(string)
-void arg_error(L, n, expected);   // "bad argument #N (expected expected)"
-void type_error(L, n, expected, args, count);  // "bad argument #N (expected expected, got type)"
-```
-
-## File:Line Prefix
-
-```cpp
-std::string file_line_prefix(L);  // e.g. "main.lua:12: " or "" if no file context
-```
-
-Returns a `"<file>:<line>: "` string from the current thread's file/line state, or an empty
-string if no file context is set. Useful for building error messages with source locations.
 
 ## Globals
 
 ```cpp
-LValue get_global(L, name);
-void   set_global(L, name, val);        // val: LValue
-void   set_global(L, name, double);     // convenience — wraps number
-void   set_global(L, name, int64_t);    // convenience — wraps integer
-void   set_global(L, name, const char*);// convenience — auto-interns string
+clx::LValue g = clx::get_global(L, "name");
+clx::set_global(L, "name", val);
+clx::set_global(L, "price", 3.14);        // numbers auto-wrapped
+clx::set_global(L, "count", int64_t(42)); // integers
+clx::set_global(L, "greeting", "hi");     // strings auto-interned
 ```
 
-`_G` is accessible via `get_global(L, "_G")` or the internal `L->_G`.
+## Tables
+
+Read and write with the `get_field` / `set_field` helpers (which respect
+`__index` / `__newindex`), or use `raw_get` / `raw_set` to bypass metatables:
 
 ```cpp
-clx::set_global(L, "pi",    3.14);         // double
-clx::set_global(L, "count", int64_t(42));  // integer
-clx::set_global(L, "name",  "hello");      // string (interned)
+clx::LValue v = clx::get_field(L, t, "key");     // t["key"], with __index
+clx::set_field(L, t, "key", val);                 // t["key"] = val
+clx::LValue v = clx::raw_get(L, t, 7);            // raw access, any key type
 ```
 
-## Table Helpers
-
-### With metamethod respect (`__index`, `__newindex`)
+Iterate a table with a C++ range loop:
 
 ```cpp
-LValue get_field(L, table, "key");
-void   set_field(L, table, "key", val);
-```
-
-### Raw access (no metamethods)
-
-```cpp
-LValue raw_get(L, table, key);       // any key type (LValue, const char*, double, int64_t)
-void   raw_set(L, table, key, val);
-LValue raw_get_i(L, table, idx);     // integer key (1-based)
-void   raw_set_i(L, table, idx, val);
-```
-
-Convenience overloads accept native C++ types directly:
-
-```cpp
-clx::raw_get(L, t, "hello");        // const char* key
-clx::raw_get(L, t, 42.0);           // double key
-clx::raw_get(L, t, int64_t(7));     // integer key (not implicitly converted from int)
-clx::raw_set(L, t, "key", val);     // same for write
-```
-
-### Binding helpers
-
-```cpp
-void set_function(L, table, "name", func);    // binds a CFunctionType (renamed from bind_function)
-void set_value(L, table, "name", val);         // binds an LValue raw (renamed from bind_value)
-void set_functions(L, table, {reg1, reg2, ...}); // binds initializer_list<LReg> (renamed from bind_all)
-void set_functions(L, table, regs);              // binds LReg[] (nullptr-terminated)
-
-LValue new_lib(L, regs);         // create table + bind LReg[] (nullptr-terminated)
-```
-
-### Lazy function registration (no eager closures)
-
-```cpp
-void set_lazy_funcs(L, table, lazy_regs, count);
-```
-
-`set_lazy_funcs` attaches a `__index` metamethod that creates `LCFunction` closures on first
-access and caches them on the table. Uses `constexpr`-friendly `LazyReg` arrays:
-
-```cpp
-static constexpr LazyReg my_funcs[] = {
-    {"sin", my_sin},
-    {"cos", my_cos},
-};
-clx::set_lazy_funcs(L, table, my_funcs, 2);
-```
-
-Subsequent lookups hit the cache directly (no metamethod call).
-
-### `LReg` struct
-
-```cpp
-struct LReg {
-    const char* name;
-    CFunctionType func;  // std::function<MultiValue(LState*, const LValue*, size_t)>
-};
-```
-
-### `LazyReg` struct
-
-```cpp
-struct LazyReg {
-    const char* name;
-    RawCFunction func;  // raw function pointer — constexpr-friendly
-};
-using RawCFunction = MultiValue(*)(LState*, const LValue*, size_t);
-```
-
-`LazyReg` uses raw function pointers instead of `std::function`, making the array `constexpr`.
-`set_lazy_funcs` stores the `LazyReg*` as light userdata on the metatable; the array must
-persist in static storage.
-
-## Metatable Helpers
-
-```cpp
-LValue getmetatable(L, obj);          // returns metatable or nil (respects __metatable)
-void   setmetatable(L, obj, mt);      // sets metatable (nil or table)
-bool   rawequal(a, b);                // equality without __eq
-MultiValue next(L, table, key);       // iterator — call with nil to start
-LValue getmetafield(L, obj, field);   // get metatable[field] or nil
-bool   callmeta(L, obj, event);       // call metatable[event](obj), returns true if called
-```
-
-## Table Iteration
-
-```cpp
-table_iterator iterate(L, table);  // range-style iteration over table entries
-```
-
-Returns a `table_iterator` yielding `{key, value}` pairs via `operator*`.
-The iterator is truthy while there are more entries:
-
-```cpp
-for (auto it = iterate(L, my_table); it; ++it) {
-    auto [key, value] = *it;  // structured binding (C++17)
-    // use key, value
+for (auto it = clx::iterate(L, t); it; ++it) {
+    auto [key, value] = *it;
+    // use key and value
 }
 ```
 
-The iterator calls `next()` internally and handles all table types (array + hash).
-
-## Length / Concat
+Length and concatenation:
 
 ```cpp
-int64_t len(L, v);        // # operator, respects __len
-int64_t rawlen(v);        // raw #, bypasses __len (string/table only)
-LValue concat(L, a, b);   // .. operator, respects __concat
+clx::len(L, v);      // # operator
+clx::concat(L, a, b); // string concatenation
 ```
 
-## Function Call
+## Calling functions
 
 ```cpp
-MultiValue call(L, func, args, count);        // direct call, throws on error
-MultiValue call(L, func, arg1, arg2, ...);    // variadic — native C++ types accepted
-MultiValue pcall(L, func, args, count);       // protected call — returns {true, ...} or {false, err}
-MultiValue pcall(L, func, arg1, arg2, ...);   // variadic — native C++ types accepted
+clx::LValue f = clx::get_global(L, "myfunc");
+clx::LValue args[] = { clx::number(1.0), clx::number(2.0) };
+clx::MultiValue r = clx::call(L, f, args, 2);   // throws on error
 ```
 
-`args` is a pointer to `count` LValues. Use a single LValue for 1 arg, an array for many:
+Or use `pcall` to catch errors instead of throwing:
 
 ```cpp
-LValue arg = number(42);
-MultiValue r = call(L, myfunc, &arg, 1);
+clx::MultiValue r = clx::pcall(L, f, args, 2);  // {true, ...} or {false, err}
 ```
 
-The variadic overload accepts any mix of LValue and native C++ types:
+A variadic form accepts native C++ values directly:
 
 ```cpp
-MultiValue r = call(L, myfunc, number(10), integer(20), "hello", 3.14);
-// Equivalent to: myfunc(10, 20, "hello", 3.14)
+clx::MultiValue r = clx::call(L, f, clx::number(1), "hello", 3.14);
 ```
 
 ## Coroutines
 
 ```cpp
-LValue      create_thread(L, func, stack_size = 1<<20);    // create a coroutine
-MultiValue  resume(L, thread, args, count);  // resume suspended coroutine
-MultiValue  yield(L, args, count);           // yield from current coroutine (non-main only)
-MultiValue  close_thread(L, thread);         // close a suspended coroutine
+clx::LValue t = clx::create_thread(L, func);
+clx::MultiValue r = clx::resume(L, t, args, 1);  // resume a coroutine
+clx::MultiValue r = clx::yield(L, args, 1);      // yield from a coroutine
 ```
 
-`resume` returns `{true, ...yielded_values}` or `{false, error_msg}`.
-`yield` returns the MultiValue passed to the next `resume`.
-`close_thread` resumes the coroutine with a close request, returning `{true}` if it terminates.
+`resume` returns `{true, ...results}` or `{false, error_message}`.
 
-## Core Types (from `clx_runtime.h`, exposed via `<clx.h>`)
+## Errors
 
-```
-LType         — tagged type enum
-LValue        — 16-byte value (TValue payload + ValueType tag)
-MultiValue    — multi-return container (count, operator[])
-LState        — VM state (opaque)
-LThread       — coroutine (opaque, use create_thread/resume/yield/close_thread)
-LTable        — table (gettable/settable for raw access)
-LCFunction    — C function closure
-LReg          — {name, CFunctionType} for module registration
-LazyReg       — {name, RawCFunction} for constexpr lazy registration
-RawCFunction  — raw C function pointer type
-CFunctionType — std::function<MultiValue(LState*, const LValue*, size_t)>
-LRuntimeException — thrown on Lua errors; .error_obj holds the error LValue
-```
-
-### `LValue` constructors (raw, from `clx_runtime.h`)
+Throw errors as exceptions:
 
 ```cpp
-LValue();                    // nil
-LValue(bool);
-LValue(double);
-LValue(int64_t);
-LValue(const char*);         // raw interned string pointer (or string literal)
-LValue(LType, LHeader*);     // GC object
-LValue::istr(s, len);        // static — inline string (≤6 bytes, no interning)
+clx::error(L, "something went wrong");
+// or
+throw clx::LRuntimeException(clx::string(L, "oops"));
 ```
 
-### `MultiValue`
-
-`MultiValue` is trivially destructible and stores up to `INLINE_CAP = 3` values inline.
-Larger returns use bump-allocator overflow via `LState::alloc_overflow()`.
+There are helpers for common argument errors:
 
 ```cpp
-struct MultiValue {
-    static constexpr size_t INLINE_CAP = 3;
-    size_t count = 0;
-    LValue  operator[](size_t i) const;  // access by index
-    LValue &operator[](size_t i);        // mutable access
-
-    MultiValue();                         // empty
-    MultiValue(const LValue &single);     // single value
-    MultiValue(const LValue &a, const LValue &b);              // 2 values
-    MultiValue(const LValue &a, const LValue &b, const LValue &c); // 3 values (inline)
-    MultiValue(const LValue *arr, size_t c, LState *L = nullptr);  // array+size (overflow for c > 3)
-    MultiValue(std::initializer_list<LValue> init, LState *L = nullptr);
-};
+clx::arg_error(L, 1, "number"); // "bad argument #1 (number expected)"
+clx::type_error(L, 1, "number"); // "bad argument #1 (number expected, got X)"
 ```
 
-## Thread Status Constants
+## Writing a module
 
-```cpp
-constexpr int THREAD_SUSPENDED = 0;
-constexpr int THREAD_RUNNING   = 1;
-constexpr int THREAD_DEAD      = 2;
-constexpr int THREAD_NORMAL    = 3;
-```
+A native module is a C++ source file that exports one function
+(`luaopen_<name>`) which returns a table. See [Modules](./modules.md) for the
+full worked example and how to compile and link it.
 
-## Module Registration
-
-Each standard module has a `luastd_*` function that creates and sets the global table:
-
-```cpp
-void luastd_base(LState* L);       // registers _G, print, pcall, type, error, ...
-void luastd_math(LState* L);       // registers math table
-void luastd_string(LState* L);     // registers string table
-void luastd_coroutine(LState* L);  // registers coroutine table
-```
-
-Or call `openlibs(L)` to register all libraries at once. Call individual `luastd_*` functions after `open()` before using the corresponding Lua features.
-
-## Global Helpers
-
-```cpp
-LValue get_global(L, name);
-void   set_global(L, name, val);
-```
-
-## `LValue` to-string (raw, from `clx_runtime.h`)
-
-```cpp
-std::string v.to_string(L);  // any type → string (respects __tostring)
-```
-
-## Example: C++ module with lazy registration
+A complete example using lazy registration:
 
 ```cpp
 #include <clx.h>
@@ -453,24 +192,15 @@ CLX_API clx::LValue luaopen_mylib(clx::LState* L) {
 }
 ```
 
-Compile this file into an object/library, then link it with `clx main.lua --modules mylib`.
-clx's generated `main()` calls `register_module("mylib", luaopen_mylib)` at startup.
-The module becomes available via `require("mylib")` at runtime.
+Compile this into an object or library, then link it with:
 
-## Example: coroutine
-
-```cpp
-clx::LValue co_func = clx::cfunction(L, [](clx::LState* L2, const clx::LValue* a, size_t n) {
-    double v = clx::check_number(L2, a[0]);
-    clx::LValue y = clx::number(v * 2);
-    auto resumed = clx::yield(L2, &y, 1);          // yield twice the input
-    double r = clx::check_number(L2, &resumed[0], 1);
-    return {clx::number(r * 3)};                    // triple the resume value
-});
-
-clx::LValue th = clx::create_thread(L, co_func);
-clx::LValue arg = clx::number(10);
-auto r = clx::resume(L, th, &arg, 1);              // {true, 20}
-clx::LValue arg2 = clx::number(7);
-auto r2 = clx::resume(L, th, &arg2, 1);            // {true, 21}
+```bash
+clx main.lua --modules mylib
 ```
+
+Your module then becomes available as `require("mylib")`.
+
+## Porting an existing Lua C module?
+
+The [Migration Guide](./migration-guide.md) walks you through converting a module
+written against the classic Lua C API.

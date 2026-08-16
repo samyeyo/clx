@@ -1,5 +1,9 @@
 # Getting started with clx
 
+This guide walks you through building clx, compiling your first program, and
+using the Lua language just like you normally would. clx turns your Lua source
+into a fast native executable, so you can keep writing plain Lua.
+
 ## Quickstart
 
 ### Build clx
@@ -18,11 +22,14 @@ cd clx
 # Build and install to system
 ./build.sh install
 
+# Uninstall clx
+./build.sh uninstall
+
 # Clean build directory
 ./build.sh clean
 ```
 
-Alternatively, build manually with CMake:
+You can also build manually with CMake:
 
 ```bash
 mkdir build
@@ -62,14 +69,14 @@ end
 print("Fibonacci(20) = " .. fib(20))
 ```
 
-Compile it with `--fast` flag for better performances:
+Compile it with `--fast` for the best performance:
 
 ```bash
 ./build/clx --fast fib.lua
 ./fib
 ```
 
-It should run faster than Lua 5.5
+It should run faster than the reference Lua 5.5 interpreter.
 
 ## Language Features
 
@@ -177,11 +184,11 @@ end
 -- Table with methods
 local vector = {
     x = 0, y = 0,
-    
+
     add = function(self, other)
         return { x = self.x + other.x, y = self.y + other.y }
     end,
-    
+
     __tostring = function(self)
         return "(" .. self.x .. "," .. self.y .. ")"
     end
@@ -275,12 +282,14 @@ print(256 >> 4)       -- 16
 print(~0)             -- -1
 ```
 
-## Performance tips
+## Writing fast Lua
+
+A few habits help clx generate the fastest code:
 
 ### Use local variables
 
 ```lua
--- Good: local variables are faster
+-- Good: locals are the fastest to access
 local function compute()
     local result = 0
     for i = 1, 1000 do
@@ -291,50 +300,52 @@ local function compute()
 end
 ```
 
-### Prefer numeric for loops
+### Prefer numeric loops
 
 ```lua
--- Good: numeric for loops can be optimized
+-- Good: numeric for loops get optimized heavily
 for i = 1, 1000000 do
     -- body
 end
 ```
 
-### Avoid mixing types
+### Keep types consistent
 
 ```lua
--- Slower: mixed type operations
-local x = 1 + "2"  -- Requires runtime type check
+-- Slower: mixing a number and a string needs extra handling
+local x = 1 + "2"
 
--- Faster: same types
-local x = 1 + 2    -- Direct arithmetic
+-- Faster: plain numbers can go straight to native arithmetic
+local x = 1 + 2
 ```
 
-## Common issues
+## Troubleshooting
 
-### Debugging Compilation Errors
+### Seeing the generated C++
 
-If you get a C++ compilation error, you can see the generated code:
+If compilation produces an error and you want to see exactly what clx
+generated, use `--cpp` to emit the C++ source without compiling it:
 
 ```bash
 clx script.lua --cpp
-# This creates script.cpp
-# You can examine it to see what's being generated
+# This creates script.cpp in the current directory
 ```
 
-### Understanding runtime errors
+### Reading runtime errors
 
-Runtime errors show the Lua line where the error occurred:
+Runtime errors show the Lua file and line where the problem happened:
 
 ```
 Error: script.lua:10: attempt to perform arithmetic on a number value
 ```
 
-The format is `filename:line: message`
+The format is `filename:line: message`.
 
 ## Next Steps
 
-- Read the [Architecture](./architecture.md) document
-- Learn about [Optimizations](./optimizations.md)
-- Explore the [Runtime](./runtime.md) implementation
-- Check out the [CLI](./cli.md) options
+- See the [CLI options](./cli.md) for build modes and flags
+- Learn about [Lua modules](./modules.md) and native C++ modules
+- Explore [Dynamic Lua](./dynamic-lua.md) for loading code at runtime
+- Compare [benchmarks](./benchmarks.md) with other Lua runtimes
+- Check [Lua 5.5 compatibility](./compatibility.md)
+- Dive into the [internals](./internals/index.md) when you're ready

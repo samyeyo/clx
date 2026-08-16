@@ -1,30 +1,34 @@
 # clx Documentation
 
-Welcome to the clx documentation. This folder contains comprehensive guides for understanding, using, and contributing to the clx Lua compiler.
+Welcome to the clx documentation. This folder collects guides for using and
+extending clx, the Lua to native compiler.
 
-## Getting Started
+## Getting started
 
-- **[Getting Started](./getting-started.md)** - Quick start guide, basic examples, and common patterns
-- **[CLI Reference](./cli.md)** - Command-line interface documentation
-- **[Dynamic Lua](./dynamic-lua.md)** - Runtime Lua loading with `--dynamic`
-- **[Lua 5.5 compatibility](./compatibility.md)** - Lua compatibility status
-- **[Modules](./modules.md)** - Lua source modules, C++ native modules, and dynamic libraries
-- **[Migration Guide](./migration-guide.md)** - Porting Lua C API modules to clx C++ API
+- **[Getting Started](./getting-started.md)** - Your first program and a tour of the language
+- **[CLI Reference](./cli.md)** - All the command-line options
+- **[Lua modules](./modules.md)** - Splitting your project across files, plus native C++ modules
+- **[Dynamic Lua](./dynamic-lua.md)** - Loading and running Lua at runtime with `--dynamic`
+- **[Lua 5.5 compatibility](./compatibility.md)** - What's supported and what isn't
+- **[Benchmarks](./benchmarks.md)** - How clx compares with other Lua runtimes
 
-## Deep Dives
+## For developers
 
-- **[Architecture](./architecture.md)** - System architecture, components, and data flow
-- **[Optimizations](./optimizations.md)** - Compile-time and runtime optimizations
-- **[Benchmarks](./benchmarks.md)** - Benchmarks descriptions and results
-- **[Runtime](./runtime.md)** - Runtime library implementation details
+- **[C++ API](./api.md)** - Write native C++ modules
+- **[Migration Guide](./migration-guide.md)** - Port existing Lua C modules to the clx C++ API
+
+## Internals
+
+Want to know how clx works under the hood? See **[Internals](./internals/index.md)** — intended for contributors.
 
 ## Contributing
 
-Contributions are welcome! Please ensure before any Pull Request :
+Contributions are welcome! Before submitting a pull request, please ensure:
+
 1. Tests pass (`./tests/run.sh` or `tests\run.bat` on Windows)
-2. Code follows existing coding style and uses C++20
-3. Documentation (in `./doc` folder, in Markdown format) is updated for PR with new features
+2. Code follows the existing style and uses C++20
+3. Documentation in `./doc` (Markdown) is updated for any new features
 
 ## License
 
-clx MIT Licensed - Copyright (c) Tine Samir 2026
+clx is MIT Licensed - Copyright (c) Tine Samir 2026

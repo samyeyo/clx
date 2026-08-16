@@ -1,22 +1,21 @@
 # Modules in clx
 
-clx supports two ways to organize and load modules:
+Modules help you split your Lua project across multiple files. clx supports two
+ways to organize and load them, both used through Lua's familiar `require()`:
 
-- **Lua source modules** compiled alongside your entry point (static preload)
-- **Statically linked C++ modules** with `--modules`
+- **Lua source modules** — other `.lua` files compiled together with your entry point
+- **Native C++ modules** — precompiled code you link with `--modules`
 
-Both are consumed via Lua's `require()` function.
+## Lua source modules
 
-## Lua Source Modules
-
-Pass multiple `.lua` files to clx — the first is the entry point, the rest become
-modules loadable via `require`:
+Pass multiple `.lua` files to clx — the **first** one is the entry point, the
+rest become modules you can load with `require`:
 
 ```bash
 clx main.lua mymodule.lua utils.lua --output myapp
 ```
 
-Inside `main.lua`, require them by name (filename without `.lua`):
+Inside `main.lua`, load them by name (the filename without `.lua`):
 
 ```lua
 -- main.lua
@@ -27,56 +26,25 @@ mymodule.say_hello()
 utils.help()
 ```
 
-### How it works
-
-clx compiles each `.lua` file into a C++ function `luaopen_<module>` with `extern`
-linkage (the name is unmangled since it's a plain C++ function). The generated `main()` calls `L->register_module()`
-for non-entry modules — this stores the function in `package.preload[name]` **without
-calling it**. The function runs only on the first `require("name")` from Lua code:
-
-```
-main() {
-    open()
-    openlibs(L)
-
-    register_module("mymodule", luaopen_mymodule)  // stored in preload, NOT called
-    register_module("utils",    luaopen_utils)     // stored in preload, NOT called
-
-    luaopen_main(L)                                 // entry point runs immediately
-
-    close(L)
-}
-```
-
 When Lua calls `require("mymodule")`:
 
-1. Checks `package.loaded["mymodule"]` — if present, returns it immediately
-2. Checks `package.preload["mymodule"]` — calls the registered function
+1. If `mymodule` was already loaded, the cached value is returned immediately.
+2. Otherwise the module's code runs just once so your module can set up
+   functions and return whatever it wants (typically a table).
 
-### Linking
+There's nothing special to write — just ordinary Lua files. clx bundles them
+into a single native binary, so there's nothing to copy alongside your program.
 
-All builds link statically against `libclx.a`. No shared library is needed at runtime.
+## Native C++ modules
 
-## C++ Native Modules (Statically Linked)
-
-You can link precompiled C++ code exposing a `luaopen_*` function using `--modules`:
+If you have existing C++ code (or want extra performance), you can compile it
+into a module and link it in:
 
 ```bash
 clx main.lua --modules my_native_mod
 ```
 
-The function must have this signature with `CLX_API` (which provides `extern`
-linkage and proper symbol visibility):
-
-```cpp
-CLX_API clx::LValue luaopen_my_native_mod(clx::LState* L);
-```
-
-The generated `main()` calls `register_module("my_native_mod", luaopen_my_native_mod)`,
-which stores the wrapper in `package.preload` — the function runs only on first
-`require("my_native_mod")`, not at startup.
-
-### Writing a C++ native module
+Your module is a C++ file that exposes a single registration function:
 
 ```cpp
 // my_native_mod.cpp
@@ -96,115 +64,70 @@ CLX_API clx::LValue luaopen_my_native_mod(clx::LState* L) {
 }
 ```
 
-Compile to a static library:
+Then compile it to a static library and link it:
 
 ```bash
-# Linux/macOS (g++/clang++):
+# Linux/macOS
 g++ -c -std=c++20 -I/path/to/clx/include my_native_mod.cpp -o my_native_mod.o
 ar rcs my_native_mod.a my_native_mod.o
 
-# Windows (MSVC):
+# Windows (MSVC)
 cl /c /std:c++20 /I.\path\to\clx\include my_native_mod.cpp /Fomy_native_mod.obj
 lib /OUT:my_native_mod.lib my_native_mod.obj
-```
 
-Then link with your Lua script:
-
-```bash
+# Link with your Lua program
 clx main.lua --modules my_native_mod
 ```
 
-clx looks for `my_native_mod.a` (or `my_native_mod.lib` on Windows) in the current directory,
-then in `<install-prefix>/lib/clx/` for each candidate prefix, then in `../lib/clx/`
-relative to the clx binary. On POSIX the install prefix is resolved from CMake/GNUInstallDirs
-(typically `/usr/local`), so installed modules live in `/usr/local/lib/clx/`; on Windows it is
-`%ProgramFiles%\clx`, so installed modules live in `%ProgramFiles%\clx\lib\clx\`. You can
-override the search with `-L <dir>` flags, which clx also scans.
+clx looks for the module (`.a` / `.lib`) in the current directory first, then a
+few standard install locations. The `--modules` name is the filename without
+its extension. Need more details on where it searches or how to write native
+modules? See the [C++ API](./api.md).
 
-### Linking with external libraries
-
-If your native module depends on external libraries, pass link flags directly:
+If your native module depends on external libraries, pass the link flags too:
 
 ```bash
 clx main.lua --modules my_native_mod -lm -lz
 ```
 
-## Compiling Lua to Libraries
+## Building Lua as a library
 
-### Static Library
-
-```bash
-clx mylib.lua --static --output mylib
-# Produces libmylib.a (Linux/macOS) or mylib.lib (Windows)
-```
-
-### Object File
+You can also compile a `.lua` file into a static library or object file that
+other programs can link:
 
 ```bash
-clx mylib.lua --object --output mylib
-# Produces mylib.o (Linux/macOS) or mylib.obj (Windows)
+clx mylib.lua --static --output mylib   # libmylib.a / mylib.lib
+clx mylib.lua --object --output mylib   # mylib.o / mylib.obj
 ```
 
-All export a `luaopen_mylib` function. A host C++
-program can link against the library and call it via `register_module`:
+These export a `luaopen_mylib` function that a host C++ program can register and
+call. See the [C++ API](./api.md) for the details.
 
-```cpp
-#include <clx.h>
+## Combining approaches
 
-CLX_API clx::LValue luaopen_mylib(clx::LState* L);
-
-int main() {
-    clx::LState* L = clx::open();
-    clx::openlibs(L);
-
-    // Register in package.preload (NOT called yet)
-    L->register_module("mylib", luaopen_mylib);
-
-    clx::close(L);
-    return 0;
-}
-```
-
-## Combining Lua and Native Modules
-
-All approaches combine in a single build:
+You can mix all of these in one build:
 
 ```bash
 clx main.lua utils.lua --modules native_processor --output app
 ```
 
-In `main.lua`:
-
 ```lua
-local utils = require("utils")             -- Lua source module (preload)
-local proc = require("native_processor")   -- C++ native module (preload)
-local extra = require("extra_plugin")      -- Static module (preload)
+local utils = require("utils")            -- Lua source module
+local proc = require("native_processor")  -- native C++ module
 ```
 
-The generated `main()` registers all modules in `package.preload`.
+## Options at a glance
 
-## Options Reference
+| Option | What it does |
+|--------|--------------|
+| `--modules <list>` | Link prebuilt C++ modules (comma-separated) |
+| `--minimal` | Leave out non-essential libraries (string, table, io, os, math, utf8, coroutine) |
+| `--static` | Build a static library that exports `luaopen_*` |
+| `--object` | Build an object file that exports `luaopen_*` |
 
-| Option | Description |
-|--------|-------------|
-| `--modules <list>` | Comma-separated list of precompiled C++ modules to link |
-| `--minimal` | Exclude non-essential modules (string, table, io, os, math, utf8, coroutine); keeps base + package |
-| `--static` | Compile to static library (exports `luaopen_*`) |
-| `--object` | Compile to object file (exports `luaopen_*`) |
+## More on the C++ API
 
-## API Reference
-
-```cpp
-// Register a native module for lazy loading via require()
-// Stores a wrapper in package.preload[name]; does NOT call luaopen_*
-void LState::register_module(const std::string& name, LValue (*func)(LState*));
-
-// Initialize clx runtime
-LState* open(int argc = 0, char* argv[] = nullptr);
-
-// Open optional standard libraries (string, table, io, os, math, utf8, coroutine)
-void openlibs(LState* L);
-
-// Destroy clx runtime
-void close(LState* L);
-```
+For a full look at the native C++ API — values, tables, calling functions,
+coroutines, and error handling — see the [C++ API reference](./api.md). If
+you're porting an existing Lua C (C API) module, the [Migration Guide](./migration-guide.md)
+walks you through it step by step.

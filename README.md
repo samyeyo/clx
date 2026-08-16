@@ -32,118 +32,69 @@ clx examples/hello/hello.lua
 Hello clx !
 ```
 
-## Features
+## What makes clx useful
 
-- **Competitive performance** with strong results on many AOT-friendly workloads
-- **No bytecode interpreter overhead** — compiles to standalone native executables
-- **Aggressive optimizations** — leverages modern optimizations via Clang/GCC/MSVC
-- **Small binaries** — size-oriented builds can produce very compact executables (Lua programs can be under 100 KB with `--minimal`)
-- **Targets Lua 5.5 compatibility** — coroutines, metamethods, tables, and more
-- **16-byte tagged values** — 8-byte payload + separate type tag
-- **Inline string** optimization (strings ≤ 6 bytes stored in value, no allocation)
-- **Fast-path** table access caches
-- **Lightweight** AOT-oriented runtime
-- **clx C++ API**: develop portable native modules using a value-oriented API
+- **Just write Lua.** clx targets Lua 5.5, so your code works like ordinary Lua.
+- **Fast native speed** — your scripts are compiled to native machine code.
+- **Standalone binaries** — no interpreter or extra runtime to install alongside your program.
+- **Small outputs** — size-friendly builds can create very compact executables.
+- **Cross-platform** — works on Linux, macOS, and Windows.
+- **Extensible** — add native C++ modules when you need extra performance.
 
-## Examples built with **clx**
+## Examples built with clx
 
-**clx** comes with examples, that uses a Sokol clx binary module for graphics, and demonstrate native desktop application development with standard Lua code.
+clx ships real, runnable examples that show native desktop application development using standard Lua code.
 
 ### Pong
 
 ![Pong](examples/pong/pong.gif)
 
-**pong** : a complete game written in Lua and compiled into a standalone native executable.
+A complete game written in Lua and compiled into a standalone native executable.
 
 ### Mandelbrot viewer
 
 ![Mandelbrot](examples/mandelbrot/mandelbrot.jpg)
 
-**Mandelbrot** : a Mandelbrot viewer written in Lua and compiled into a standalone native executable.
+A Mandelbrot viewer written in Lua and compiled into a standalone native executable.
 
 ## Project status
 
-**clx** is currently in beta.
-The compiler is already capable of compiling non-trivial Lua applications, but compatibility work and optimization improvements are ongoing.
+clx is currently in **beta**. It can already compile real Lua applications, and compatibility and performance work continues.
 
 ## Requirements
 
 - **Linux**: `g++` or `clang++`
 - **macOS**: `clang++` (Xcode) or `g++` via Homebrew
 - **Windows**: `g++` (LLVM) or MSVC
-- **CMake 3.15+** for building
+- **CMake 3.15+** to build from source
 
-> **Note:** The compiler used to build `clx` is fixed at build time via CMake and used for all Lua script compilation. This ensures ABI compatibility between the runtime libraries and generated code. Rebuild clx with a different compiler if you need a different backend.
+> The compiler that builds clx is the same one used to compile your Lua scripts, keeping everything consistent. If you need a different compiler, just rebuild clx with it.
 
-## Build
+## Using clx
 
-### POSIX
-
-```bash
-./build.sh              # Release (default)
-./build.sh debug        # Debug
-./build.sh clean        # Removes build/ + /usr/local install
-./build.sh install      # Release + install to /usr/local
-./build.sh uninstall    # Removes installed files in /usr/local
-```
-
-### Windows
+The easiest way to use clx is to compile a Lua file into a runnable program:
 
 ```bash
-./build.bat              # Release (default)
-./build.bat debug        # Debug
-./build.bat clean        # Removes build/ + in-tree ./bin and ./lib outputs
-./build.bat install      # Release + install to %ProgramFiles%\clx (see below)
-./build.bat uninstall    # Removes previously installed clx
+clx file.lua          # compiles file.lua and produces an executable
+./file                # run it
 ```
 
-Also works directly with CMake:
+A few common options when you need more control:
 
 ```bash
-mkdir -p build && cmake -S . -B build && cmake --build build
+clx file.lua --size        # optimize for size (default)
+clx file.lua --fast        # optimize for speed
+clx file.lua --output app  # give the output a custom name
+clx file.lua --dynamic     # allow loading Lua code at runtime
+clx --help                 # see all options
 ```
 
-Once compiled, you will find the following compiled files (in `build/`):
-
-| Output | POSIX | Windows |
-|----------|-------|---------|
-| Compiler executable | `build/clx` | `build/clx.exe` |
-| Static runtime library | `build/libclx.a` | `build/clx.lib` |
-| Runtime library optimized for size | `build/libclx_size.a` | `build/clx_size.lib` |
-| Embedded Lua 5.5 VM + clx bridge (needed only for `--dynamic`) | `build/clx_lua/libclx_lua.a` | `build/clx_lua/clx_lua.lib` |
-
-clx locates its runtime libraries, headers, and native modules from the in-tree `build/` dir first, then the install prefix resolved from CMake/GNUInstallDirs (`/usr/local` on POSIX, `%ProgramFiles%\clx` on Windows).
-
-## Usage
-
-```bash
-./build/clx file.lua                         # Compile to executable (default flags)
-./build/clx --object file.lua                # Object file (.o/.obj)
-./build/clx --static file.lua                # Static clx module (.a/.lib)
-./build/clx --cpp file.lua                   # Generate C++ source, don't compile
-./build/clx file.lua -O2                     # Forward unknown clx flags to the backend compiler (here MSVC)
-./build/clx file.lua --output f.exe          # Custom output name
-./build/clx file.lua --debug                 # No optimizations, debug symbols
-./build/clx file.lua --minimal               # base + package modules only
-./build/clx file.lua --fast                  # Optimize for speed
-./build/clx file.lua --size                  # Optimize for size (default)
-./build/clx app.lua --dynamic                # Embed the Lua VM; enables load/loadfile/dofile
-./build/clx --version                        # Print version
-./build/clx --help                           # Display help
-```
-
-#### Known limitations
-- **`load()` / `loadfile()` / `dofile()`** — available only when the generated program is compiled with `--dynamic`; the source executes in the embedded Lua VM rather than in the AOT code path. They are absent from ordinary and `--minimal` builds.
-- **AOT `string.dump()` / `debug`** — these are not provided by the clx AOT runtime, only available when running dynamic code with the embedded VM’s own standard libraries.
-- The traditional Lua C API is not supported.
-- Binary modules should be written using the clx C++ API.
-
-See [Dynamic Lua](./doc/dynamic-lua.md) for activation, environments, `require`, and bridge limitations.
-
+- **`load()` / `loadfile()` / `dofile()`** run on an embedded Lua engine and are only available when you compile with `--dynamic`. See [Dynamic Lua](./doc/dynamic-lua.md).
+- To write native modules, clx uses its own **C++ API** (the classic Lua C API is not supported). See [Modules](./doc/modules.md).
 
 ## Benchmarks
 
-Results are expressed in speedup factor against standard Lua 5.5 interpreter :
+clx compares well against the reference Lua 5.5 interpreter:
 
 | Script | lua 5.5 | LuaJIT | clx `--fast` |
 |--------|---------|--------|--------------------------|
@@ -153,26 +104,23 @@ Results are expressed in speedup factor against standard Lua 5.5 interpreter :
 | canada.lua | 0.347s (1.00x) | **0.134s (2.59x)** | 0.231s (1.50x) |
 | warmup.lua | **0.003s (1.00x)** | 0.005s (0.60x) | 0.006s (0.50x) |
 
-> Measured on Intel® Core™ i5 Ultra 125U CPU @ 4.30GHz · Linux · GCC 13.3.0 · Avg of 10 runs
+> Measured on an Intel® Core™ i5 Ultra 125U CPU @ 4.30GHz · Linux · GCC 13.3.0 · Average of 10 runs
 
 > Full benchmarks are available in **[clx benchmarks](./doc/benchmarks.md)**
 
 ## Documentation
 
-Documentation is available in the `doc/` directory, including :
+Detailed guides live in the `doc/` directory:
 
-- Getting Started
-- CLI Reference
-- Dynamic Lua loading
-- Compatibility Status
-- Modules and Migration Guide
-- C++ API Reference
-- Runtime Internals
-- Architecture Overview
-- Optimizations
-- Benchmarks
+- [Getting Started](./doc/getting-started.md)
+- [CLI Reference](./doc/cli.md)
+- [Dynamic Lua](./doc/dynamic-lua.md)
+- [Compatibility](./doc/compatibility.md)
+- [Modules & C++ API](./doc/modules.md)
+- [Migration Guide](./doc/migration-guide.md)
+- [Benchmarks](./doc/benchmarks.md)
 
-See **[Documentation Index](./doc/index.md)**. For runtime Lua loading, see **[Dynamic Lua](./doc/dynamic-lua.md)**.
+Start at the **[Documentation Index](./doc/index.md)**.
 
 ## License
 

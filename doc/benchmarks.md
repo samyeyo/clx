@@ -1,41 +1,36 @@
 # Benchmarks
 
-clx ships a suite of benchmarks under the `benchmarks/` directory. Each one
-is a self-contained Lua script that can be run with plain Lua, LuaJIT, or as
-a clx-compiled native binary so the three can be compared directly.
+clx ships a suite of benchmarks under the `benchmarks/` directory. Each is a
+self-contained Lua script you can run with plain Lua, LuaJIT, or as a
+clx-compiled binary, so the three can be compared directly.
 
----
-
-## Prerequisites
+## What you need
 
 | Tool | Purpose |
 |---|---|
 | `lua` (5.5) | Reference interpreter |
-| `luajit` (2.1) | JIT baseline |
+| `luajit` (2.1) | JIT comparison |
 | `clx` | Built from source — see [Getting Started](getting-started.md) |
-| `hyperfine` (POSIX only) | Timing harness for the manual workflow |
+| `hyperfine` (POSIX only) | Optional, for the manual timing workflow |
 
-> Windows users : you must create a lua\ folder in the root clx directory, that contains the lua55.exe / luajit.exe interpreters with their lua55.dll / lua51.dll libraries
+> Windows users: create a `lua\` folder in the clx root containing `lua55.exe` /
+> `luajit.exe` plus their `lua55.dll` / `lua51.dll` libraries.
 
----
+## Running the suite
 
-## Running the full suite
+### Linux / macOS
 
-### POSIX (Linux / macOS)
-
-Run the automated script from the project root:
+From the project root:
 
 ```sh
-cd /path/to/clx
 ./benchmarks/run.sh
 ```
 
-The script compiles every benchmark with clx, times all three engines over 10
-runs (3 warmup), pins execution to a single CPU core when `taskset` is
-available, and prints a formatted speedup table.
+The script compiles each benchmark with clx, times all three engines over 10
+runs (plus 3 warmup), pins to a single CPU core when possible, and prints a
+formatted speedup table.
 
-To pass extra flags to the C++ backend — for example to test a different
-optimisation level:
+To tweak the C++ compiler flags (for example, a different optimization level):
 
 ```sh
 CPPFLAGS="-O2" ./benchmarks/run.sh
@@ -49,21 +44,17 @@ A `hyperfine`-based variant is also provided:
 
 ### Windows
 
-Run the automated script from a Developer Command Prompt with MSVC paths set.
-A lua\ folder in the root clx directory must exists :  it should contain the lua55.exe / luajit.exe interpreters with their lua55.dll / lua51.dll libraries
+Run from a Developer Command Prompt with MSVC. A `lua\` folder with the
+interpreters must exist as described above.
 
 ```bat
 cd \path\to\clx
 benchmarks\run.bat
 ```
 
-The script uses PowerShell's `System.Diagnostics.Stopwatch` for sub-millisecond
-timing and forces `InvariantCulture` so decimal separators are correct on
-European locales.  It performs 1 warmup run and 10 timed runs per benchmark.
+## Current results
 
-## Benchmark Results
-
-Performance improvements vs lua 5.5 (10 runs average, single CPU, hyperfine) :
+Speedups vs. Lua 5.5 (10-run average, single CPU, `hyperfine`):
 
 | Script | lua 5.5 | LuaJIT | clx (speedup, `--fast`) |
 |--------|---------|--------|--------------------------|
@@ -88,110 +79,41 @@ Performance improvements vs lua 5.5 (10 runs average, single CPU, hyperfine) :
 | spectralnorm.lua | 0.382s (1.00x) | **0.020s (19.10x)** | 0.036s (10.61x) |
 | warmup.lua | **0.003s (1.00x)** | 0.005s (0.60x) | 0.006s (0.50x) |
 
-> Measured on Intel® Core™ i5 Ultra 125U CPU @ 4.30GHz · Linux · GCC 13.3.0
+> Measured on an Intel® Core™ i5 Ultra 125U CPU @ 4.30GHz · Linux · GCC 13.3.0
 
----
+## What each benchmark tests
 
-## Benchmark descriptions
+| Script | What it stresses |
+|--------|------------------|
+| **fib** | Recursive Fibonacci — function-call overhead and simple arithmetic |
+| **ackermann** | Deep recursion — call overhead and stack handling |
+| **spectralnorm** | Dense math with arrays — numeric type inference |
+| **nbody** | Planetary gravity simulation — float math and struct-like tables |
+| **mandelbrot** | Mandelbrot set — tight math loop with early exits |
+| **fannkuchredux** | Permutation counting — heavy table access and integer math |
+| **binarytrees** | Millions of tree nodes — garbage-collection speed |
+| **knucleotide** | DNA sequence counting — string hashing and table inserts |
+| **fasta** | DNA sequence generation — math, string building, and I/O |
+| **bubble** | Bubble sort — array read/write throughput |
+| **arraysum** | Summing a large numeric array — loop and array-read speed |
+| **hashtable** | String-keyed insert/read — string interning and hashing |
+| **pi** | Monte Carlo π — tight integer/float arithmetic |
+| **3ddist** | Distance math — `math` library dispatch and float math |
+| **life** | Conway's Game of Life — 2D array traversal |
+| **sieve** | Prime sieve — array writes and branching |
+| **json** | JSON encoder (dkjson) — strings, recursion, mixed data |
+| **coro** | Coroutine yield cycles — coroutine overhead |
+| **canada** | Parsing a real 2.2 MB GeoJSON file — the most realistic workload |
+| **warmup** | A trivial script — startup latency only |
 
-### `fib.lua` — recursive Fibonacci
-Classic tree-recursive `fib(n)` with no memoisation (O(2^n) complexity).
-`fib(34)` computes 5702887.  Stresses function-call overhead and arithmetic performance.  clx eliminates boxing for the integer return value and emits direct native arithmetic.
+### About `canada.lua`
 
-### `ackermann.lua` — Ackermann function
-Deeply recursive function with no numeric regularity that prevents loop
-optimisation.  Primarily a measure of call overhead and stack performance.
+This parses the canonical `canada.json` GeoJSON dataset with
+[dkjson](http://dkolf.de/src/dkjson-lua.fsl/home) and walks every coordinate to
+find the bounding box. It's the most representative real-world test: real file
+I/O, big strings, a third-party library, and deep table traversal.
 
-### `spectralnorm.lua` — spectral norm  *(Computer Language Benchmarks Game)*
-Computes the spectral norm of an infinite matrix using the power method.
-Dense floating-point inner loops with repeated array accesses; a good measure
-of how well the compiler can infer numeric types and eliminate value boxing.
-
-### `nbody.lua` — N-body simulation  *(Computer Language Benchmarks Game)*
-Simulates a small planetary system using Newtonian gravity. Heavy
-floating-point arithmetic on a fixed set of named fields; exercises struct-like
-table access and numeric type propagation across function boundaries.
-
-### `mandelbrot.lua` — Mandelbrot set  *(Computer Language Benchmarks Game)*
-Iterates the Mandelbrot recurrence over a 2D grid and writes a PBM bitmap to
-stdout.  Inner loop mixes complex-number arithmetic with early-exit logic;
-stresses loop optimisation and float-to-int conversion.
-
-### `fannkuchredux.lua` — Fannkuch-Redux  *(Computer Language Benchmarks Game)*
-Counts permutation flips according to the Pancake sorting problem.  Array-heavy
-with tight indexed loops; measures raw table-access and integer arithmetic
-performance.
-
-### `binarytrees.lua` — binary trees  *(Computer Language Benchmarks Game)*
-Allocates, traverses, and deallocates millions of two-field tree nodes.
-Primarily a GC stress test; the workload is dominated by allocation rate and
-collection pause time rather than arithmetic.
-
-### `knucleotide.lua` — k-nucleotide  *(Computer Language Benchmarks Game)*
-Counts k-mer frequencies in a DNA strand using Lua tables as hash maps.
-Stresses string hashing, table insertion, and iteration.
-
-### `fasta.lua` — Fasta  *(Computer Language Benchmarks Game)*
-Generates pseudo-random DNA sequences according to weighted probability tables
-and writes them in FASTA format.  Mixes integer arithmetic, string building,
-and I/O.
-
-### `bubble.lua` — bubble sort
-Sorts a worst-case (descending) integer array of 8 000 elements using plain
-bubble sort.  The O(n²) loop body is minimal — almost all time is in indexed
-table reads/writes and integer comparisons, making it a direct measure of array
-throughput.
-
-### `arraysum.lua` — array sum
-Iterates over a five-million-element numeric array and sums its values.
-Minimal logic; measures loop overhead and numeric array read performance.
-
-### `hashtable.lua` — hash table
-Inserts 100 000 string-keyed entries into a Lua table, then reads them all
-back.  Measures string interning, table hashing, and the cost of mixed
-key/value boxing.
-
-### `pi.lua` — Monte Carlo π
-Estimates π by testing whether random points fall inside the unit circle, using
-a deterministic LCG rather than `math.random` so results are reproducible.
-Pure integer and float arithmetic in a tight loop.
-
-### `3ddist.lua` — 3D Euclidean distance
-Computes two million `math.sqrt` calls on deterministically generated 3D
-coordinates.  Measures the cost of the `math` library dispatch and float
-arithmetic; a good proxy for scientific or simulation inner loops.
-
-### `life.lua` — Conway's Game of Life
-Simulates 300 generations of Life on a 40×20 grid using nested table access.
-Exercises two-dimensional array traversal and integer conditionals in a
-moderately complex, non-trivial control flow pattern.
-
-### `sieve.lua` — Sieve of Eratosthenes
-Finds all primes up to 1 000 000 using a boolean array sieve.  Dense
-indexed-write loop; measures integer array write throughput and branch
-prediction behaviour.
-
-### `json.lua` — JSON encoder
-Encodes 8 000 heterogeneous Lua tables to a JSON-like string using a recursive
-encoder.  Stresses string concatenation, `type()` dispatch, and recursive
-function calls on mixed-type data.
-
-### `coro.lua` — coroutine yield
-Runs 5 million resume/yield cycles between a producer and consumer, summing the yielded values (expected result: 12500002500000).  Measures raw coroutine creation and resume/yield overhead at scale.
-
-### `canada.lua` — GeoJSON parsing  *(real-world workload)*
-Parses the canonical 2.2 MB `canada.json` file (the Canada GeoJSON polygon
-dataset) using [dkjson](http://dkolf.de/src/dkjson-lua.fsl/home), then walks
-every coordinate pair across all features to compute the dataset's geographic
-bounding box.
-
-This is the most representative real-world benchmark in the suite.  Unlike the
-synthetic benchmarks it exercises the full pipeline end-to-end: file I/O,
-large string handling, a non-trivial third-party Lua library, deep table
-traversal, and mixed string/number/table workloads — the kind of program a Lua
-developer would actually write.
-
-**Required files** — both must be present in the working directory:
+**Required files** (both must be in the working directory):
 
 | File | Source |
 |---|---|
@@ -207,12 +129,8 @@ bbox x:       [-141.002991, -52.614449]
 bbox y:       [41.675552, 83.113876]
 ```
 
-### `warmup.lua` — startup latency
-Minimal script that performs a simple allocation and exits.  Designed to
-measure the fixed overhead between runtime initialisation and effective
-program execution — the time a clx-compiled binary takes to load the runtime,
-initialise the Lua state, and reach the first application statement.  Because
-the benchmark body itself is negligible, any difference between engines is
-entirely attributable to startup cost rather than execution speed.
+### About `warmup.lua`
 
----
+A minimal script that just allocates a tiny bit and exits. It measures how long
+the runtime takes to start up and reach the first statement, rather than
+execution speed.

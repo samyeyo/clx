@@ -1,173 +1,146 @@
 # clx Command-Line Interface
 
+The `clx` command turns Lua files into native programs.
+
 ## Usage
 
 ```bash
 clx [options] <file.lua> [<compiler-options>]
 ```
 
-Options starting with `-` that are not recognized by clx are automatically passed through to the C++ compiler.
+Any option that clx doesn't recognize is passed straight through to the C++
+compiler underneath (see [Pass-through options](#pass-through-options)).
 
-## Options
+## The essentials
 
-### Build Mode
+### Choose what to build
 
-| Option | Description |
-|--------|-------------|
-| `--executable` | Compile to executable (default) |
-| `--object` | Compile to object file (.o/.obj) |
-| `--static` | Compile to static library (.a/.lib) |
+| Option | What it does |
+|--------|--------------|
+| `--executable` | Build a runnable program (the default) |
+| `--object` | Build an object file (`.o`/`.obj`) you can link yourself |
+| `--static` | Build a static library (`.a`/`.lib`) |
 
-### Output Options
+### Name your output
 
-| Option | Description |
-|--------|-------------|
-| `--output <name>` | Specify output file name |
+| Option | What it does |
+|--------|--------------|
+| `--output <name>` | Set the output file's name |
 
-### Compilation Options
+### Control the build
 
-| Option | Description |
-|--------|-------------|
-| `--debug` | Enable debug symbols, disable optimizations; `#line` directives map debugger views to Lua source lines and filenames |
-| `--size` | Optimize for size (default: `-Os` or `/O1` with MSVC) |
-| `--fast` | Optimize for speed (`-O3` or `/O2 /Ot` with MSVC) |
-| `--cpp` | Generate C++ source files, don't compile |
-| `--minimal` | Exclude non-essential modules (string, table, io, os, math, utf8, coroutine); keeps base + package |
-| `--dynamic` | Link the embedded Lua 5.5 VM and enable `load`, `loadfile`, and `dofile` |
-| `--modules <list>` | Precompiled modules to link (comma-separated list) |
+| Option | What it does |
+|--------|--------------|
+| `--debug` | Keep debugging information so you can set breakpoints in the Lua source |
+| `--size` | Optimize for a small binary (default) |
+| `--fast` | Optimize for speed instead of size |
+| `--cpp` | Write out the generated C++ files without compiling (for debugging) |
+| `--minimal` | Leave out the non-essential libraries (string, table, io, os, math, utf8, coroutine) |
+| `--dynamic` | Enable `load`, `loadfile`, and `dofile` so code can run at runtime |
+| `--modules <list>` | Link prebuilt native modules (comma-separated) |
 
-### Other
+### Help
 
-| Option | Description |
-|--------|-------------|
-| `--help` | Display help message |
-| `--version` | Print version and copyright |
+| Option | What it does |
+|--------|--------------|
+| `--help` | Show the help message |
+| `--version` | Print the version and copyright |
 
-### Pass-Through Options
+## Pass-through options
 
-Any option starting with `-` that is not recognized by clx is passed directly to the underlying C++ compiler. This allows you to:
+Anything starting with `-` that clx doesn't recognize is handed to the C++
+compiler. This is useful for targeting a specific CPU or tuning things yourself.
+Note that using any of these turns off clx's default optimization flags.
 
 ```bash
-# Optimize for speed (disables default flags)
+# Optimize for speed (replaces the default flags)
 clx file.lua -O2
 
-# Target specific CPU (disables default flags)
+# Target a specific CPU (replaces the default flags)
 clx file.lua -march=native
 
-# Combine multiple options (disables default flags)
+# Combine several options (replaces the default flags)
 clx file.lua -O2 -march=native
 ```
 
-## Examples
+## Common examples
 
-### Basic Compilation
+### Compile and run
 
 ```bash
-# Compile to executable named "myapp"
 clx script.lua
-
-# Run the executable
-./myapp
+./myapp            # the output is named after script.lua by default
 ```
 
-### Specify Output Name
+### Give the output a different name
 
 ```bash
 clx script.lua --output myprogram
 ./myprogram
 ```
 
-### Debug Build
+### Build a debuggable program
 
 ```bash
 clx script.lua --debug
 ```
 
-Produces a debuggable executable. The generated C++ contains `#line` directives mapping each statement back to the original Lua file and line number, so GDB, LLDB, or MSVC debugger can step through the `.lua` source and show Lua stack traces.
+With `--debug` you can step through your Lua source line by line in a debugger.
 
-### Keep Generated C++
+### Write out the generated C++ (no compile)
 
 ```bash
 clx script.lua --cpp
-# Generates script.cpp without compiling
+# Creates script.cpp in the current directory. Useful when debugging clx itself.
 ```
 
-### Object File
+### Build an object file
 
 ```bash
 clx script.lua --object
 # Produces script.o (or script.obj on Windows)
 ```
 
-### Static Library
+### Build a static library
 
 ```bash
 clx script.lua --static
 # Produces script.a (or script.lib on Windows)
 ```
 
-## Optimization Flags
+## Choosing speed vs. size
 
-Default optimization flags are only applied when no compiler options are provided by the user.
+| Goal | Use | Notes |
+|------|-----|-------|
+| Smallest possible binary | `--size` (default) | Best for scripts and installers |
+| Fastest execution | `--fast` | Best for heavy compute |
 
-### Size Mode (`--size`, default)
-Optimizes for binary size:
-- **gcc/clang**: `-Os -flto=auto -fno-rtti -fvisibility=hidden -ffunction-sections -fdata-sections -Wl,--gc-sections -s`
-- **MSVC**: `/O1 /GL /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy /link /OPT:REF /OPT:ICF`
+In practice, most ordinary programs won't notice a big difference between the
+two. Choose `--fast` when your program is dominated by math or other
+computations, and `--size` when binary size matters more.
 
-`--size` links against `libclx_size.a` (runtime compiled with `-Os`) and reduces binary size by **36–40%** across typical scripts compared to `--fast`.
+## Environment variables
 
-**Performance tradeoff vs `--fast`:**
-- Compute-bound code (fib, ackermann, bubble, pi): 80–320% slower
-- Table/memory-bound code (nbody, hashtable, arraysum): negligible difference
+| Variable | What it means |
+|----------|---------------|
+| `CXX` | Not used — the C++ compiler is chosen when clx is built, not at runtime. |
 
-Use `--fast` for compute-heavy Lua code where throughput matters more than binary size.
+## Exit codes
 
-### Fast Mode (`--fast`)
-Optimizes for execution speed:
-- **gcc/clang**: `-O3 -flto=auto -fno-rtti -fvisibility=hidden -ffunction-sections -fdata-sections -Wl,--gc-sections -s`
-- **MSVC**: `/O2 /Ot /GL /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy /link /OPT:REF /OPT:ICF`
-
-### Debug Mode (`--debug`)
-- **gcc/clang**: `-O0 -g`
-- **MSVC**: `/Od /Zi /MDd /EHsc`
-- Emitted `#line` directives preserve Lua source mapping in debug symbols — debuggers show `.lua` filenames and line numbers
-
-### User-Provided Flags
-If you provide any compiler options (e.g., `-O2`, `/O2`, `-march=native`), no default optimization flags are added. This gives you full control over the compilation.
-
-## Environment Variables
-
-clx respects these environment variables:
-
-| Variable | Description |
-|----------|-------------|
-| `CXX` | (Not read — compiler fixed at build time) |
-
-## Exit Codes
-
-| Code | Description |
-|------|-------------|
+| Code | Meaning |
+|------|---------|
 | 0 | Success |
 | 1 | Usage or compilation error |
 
-## Platform-Specific
+## Platform notes
 
-### Linux/macOS
+- **Compiler**: the C++ compiler is fixed when clx is built (CMake uses the same
+  compiler that built clx to compile your Lua scripts). This keeps toolchains
+  consistent.
+- **Windows** outputs `.exe` / `.obj` / `.lib`; **Linux/macOS** outputs files
+  with no extension / `.o` / `.a`.
 
-- Compiler is fixed at build time via CMake (the same compiler that built `clx` is used for Lua script compilation).
-- Both GCC and Clang support tail-call optimization (TCO) via `CLX_MUSTTAIL`. On Clang this uses `[[clang::musttail]]`, on GCC it uses `[[gnu::musttail]]`.
-
-### Windows
-
-- Compiler is fixed at build time via CMake (the same compiler that built `clx` is used for Lua script compilation).
-- Output executable: `<name>.exe`
-- Object file: `<name>.obj`
-- Static library: `<name>.lib`
-
-## Build with CMake
-
-If building from source:
+## Building clx from source
 
 ```bash
 mkdir build
@@ -176,3 +149,8 @@ cmake ..
 make
 ./clx --help
 ```
+
+## About the optimization flags
+
+If you're curious about exactly which compiler flags clx sets for each mode,
+that detail is described in the [internals documentation](./internals/index.md).

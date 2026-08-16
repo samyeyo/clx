@@ -101,15 +101,17 @@ clx/
 │   └── sokol/                   # Sokol graphics module for clx
 ├── benchmarks/                  # Performance benchmarks with comparisons (lua / luajit / clx)
 └── doc/                         # Comprehensive documentation
-    ├── architecture.md
+    ├── index.md
     ├── api.md
     ├── cli.md
-    ├── optimizations.md
-    ├── runtime.md
     ├── modules.md
     ├── benchmarks.md
     ├── getting-started.md
     └── migration-guide.md
+    └── internals/               # Internal design docs
+        ├── architecture.md
+        ├── optimizations.md
+        └── runtime.md
 ```
 
 ## Components
