@@ -341,13 +341,13 @@ int main(int argc, char* argv[])
 
     if (debug_mode) {
         opt_flags = "-O0 -g";
-        msvc_opt_flags = "/Od /Zi /MDd /EHsc";
+        msvc_opt_flags = "/Od /Zi /MDd /EHsc /utf-8";
     } else if (size_mode) {
         opt_flags = "-Os -flto=auto -fvisibility=hidden";
-        msvc_opt_flags = "/O1 /GL /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy";
+        msvc_opt_flags = "/O1 /GL /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy /utf-8";
     } else {
         opt_flags = "-O3 -flto=auto -fvisibility=hidden";
-        msvc_opt_flags = "/O2 /Ot /GL /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy";
+        msvc_opt_flags = "/O2 /Ot /GL /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy /utf-8";
     }
 
     std::string output_name
@@ -366,6 +366,12 @@ int main(int argc, char* argv[])
             return 1;
         }
         std::string source((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
+
+        if (source.size() >= 3
+            && (unsigned char)source[0] == 0xEF && (unsigned char)source[1] == 0xBB
+            && (unsigned char)source[2] == 0xBF) {
+            source.erase(0, 3);
+        }
 
         fs::path p_input(input_file);
         std::string generic_input_path = p_input.generic_string();
