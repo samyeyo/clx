@@ -55,15 +55,16 @@ static FileUd* as_file(LState* L, const LValue& v)
     return f;
 }
 
-//------------------ read_line — read one line from fp, strip \n, intern result
-static LValue read_line(LState* L, FILE* fp)
+//------------------ read_line — read one line from fp, strip \n (keep_eol=false) or keep it, intern result
+static LValue read_line(LState* L, FILE* fp, bool keep_eol = false)
 {
     char buf[4096];
     if (!std::fgets(buf, sizeof(buf), fp))
         return LValue();
     size_t n = std::strlen(buf);
-    if (n < sizeof(buf) - 1 || buf[n - 1] == '\n') {
-        if (n > 0 && buf[n - 1] == '\n')
+    bool has_eol = (n > 0 && buf[n - 1] == '\n');
+    if (n < sizeof(buf) - 1 || has_eol) {
+        if (has_eol && !keep_eol)
             n--;
         return LValue(L->intern_string(buf, n));
     }
@@ -71,10 +72,9 @@ static LValue read_line(LState* L, FILE* fp)
     sb.append(L->intern_string(buf, n), static_cast<uint32_t>(n));
     while (std::fgets(buf, sizeof(buf), fp)) {
         n = std::strlen(buf);
-        bool done = (n < sizeof(buf) - 1 || buf[n - 1] == '\n');
-        if (done && n > 0 && buf[n - 1] == '\n')
-            n--;
-        sb.append(L->intern_string(buf, n), static_cast<uint32_t>(n));
+        bool eol = (n > 0 && buf[n - 1] == '\n');
+        bool done = (n < sizeof(buf) - 1 || eol);
+        sb.append(L->intern_string(buf, keep_eol ? n : (eol ? n - 1 : n)), static_cast<uint32_t>(keep_eol ? n : (eol ? n - 1 : n)));
         if (done)
             break;
     }
@@ -122,6 +122,48 @@ static LValue read_all(LState* L, FILE* fp)
     return LValue(L->intern_string(content.data(), content.size()));
 }
 
+//------------------ read format matching (Lua 5.3+ convention)
+// Option names dropped the leading '*' in 5.3; for compatibility Lua still
+// accepts (and ignores) it. 5.4+ also adds 'L' (line keeping EOL) and
+// '#N' (read at most N bytes).
+enum class ReadFmt { Line, LineKeepEol, All, Number, Bytes, Invalid };
+
+static ReadFmt match_read_fmt(const char* fmt, int64_t* count)
+{
+    const char* p = fmt;
+    if (*p == '*')
+        p++;
+    switch (*p) {
+    case 'a':
+        return ReadFmt::All;
+    case 'l':
+        return ReadFmt::Line;
+    case 'L':
+        return ReadFmt::LineKeepEol;
+    case 'n':
+        return ReadFmt::Number;
+    case '#': {
+        char* end = nullptr;
+        long long v = std::strtoll(p + 1, &end, 10);
+        if (end == p + 1 || *end != '\0')
+            return ReadFmt::Invalid;
+        if (count)
+            *count = v;
+        return ReadFmt::Bytes;
+    }
+    default: {
+        char* end = nullptr;
+        long long v = std::strtoll(p, &end, 10);
+        if (end != p && *end == '\0') {
+            if (count)
+                *count = v;
+            return ReadFmt::Bytes;
+        }
+        return ReadFmt::Invalid;
+    }
+    }
+}
+
 //------------------ Shared file method helpers
 static MultiValue make_lines_iter(LState* L, FileUd* f)
 {
@@ -166,21 +208,48 @@ static MultiValue file_read_args(LState* L, FileUd* f, const LValue* a, size_t c
             results.push_back(make_string_pooled(L, dst, r));
             delete[] dst;
         } else if (a[i].type == String) {
-            const char* fmt = a[i].as_string();
-            if (std::strcmp(fmt, "*a") == 0 || std::strcmp(fmt, "*all") == 0) {
+            int64_t count = 0;
+            ReadFmt rf = match_read_fmt(a[i].as_string(), &count);
+            switch (rf) {
+            case ReadFmt::All:
                 results.push_back(read_all(L, f->fp));
-            } else if (std::strcmp(fmt, "*l") == 0 || std::strcmp(fmt, "*line") == 0) {
+                break;
+            case ReadFmt::Line:
                 results.push_back(read_line(L, f->fp));
-            } else if (std::strcmp(fmt, "*n") == 0 || std::strcmp(fmt, "*number") == 0) {
+                break;
+            case ReadFmt::LineKeepEol:
+                results.push_back(read_line(L, f->fp, true));
+                break;
+            case ReadFmt::Number: {
                 double d;
                 if (std::fscanf(f->fp, "%lf", &d) == 1)
                     results.push_back(number(d));
                 else
                     results.push_back(LValue());
-            } else if (!lenient) {
-                char buf[128];
-                std::snprintf(buf, sizeof(buf), "bad argument #%zu to 'read' (invalid format)", i + 1);
-                throw_runtime_error(buf);
+                break;
+            }
+            case ReadFmt::Bytes: {
+                int64_t n = std::max<int64_t>(count, 0);
+                if (n == 0) {
+                    results.push_back(LValue(L->intern_string("", 0)));
+                    break;
+                }
+                size_t sz = static_cast<size_t>(n);
+                char* dst = new char[sz + 1];
+                size_t r = std::fread(dst, 1, sz, f->fp);
+                dst[r] = '\0';
+                results.push_back(make_string_pooled(L, dst, r));
+                delete[] dst;
+                break;
+            }
+            case ReadFmt::Invalid:
+            default:
+                if (!lenient) {
+                    char buf[128];
+                    std::snprintf(buf, sizeof(buf), "bad argument #%zu to 'read' (invalid format)", i + 1);
+                    throw_runtime_error(buf);
+                }
+                break;
             }
         }
     }
@@ -588,17 +657,46 @@ static MultiValue io_read(LState* L, const LValue* args, size_t count)
             clx_memcpy(mem, &h, 8);
             results.push_back(LValue(L->string_pool.intern_preallocated(mem + 16, h, r)));
         } else if (args[i].type == String) {
-            const char* fmt = args[i].as_string();
-            if (std::strcmp(fmt, "*a") == 0 || std::strcmp(fmt, "*all") == 0) {
+            int64_t count_opt = 0;
+            ReadFmt rf = match_read_fmt(args[i].as_string(), &count_opt);
+            switch (rf) {
+            case ReadFmt::All:
                 results.push_back(read_all(L, f->fp));
-            } else if (std::strcmp(fmt, "*l") == 0 || std::strcmp(fmt, "*line") == 0) {
+                break;
+            case ReadFmt::Line:
                 results.push_back(read_line(L, f->fp));
-            } else if (std::strcmp(fmt, "*n") == 0 || std::strcmp(fmt, "*number") == 0) {
+                break;
+            case ReadFmt::LineKeepEol:
+                results.push_back(read_line(L, f->fp, true));
+                break;
+            case ReadFmt::Number: {
                 double d;
                 if (std::fscanf(f->fp, "%lf", &d) == 1)
                     results.push_back(number(d));
                 else
                     results.push_back(LValue());
+                break;
+            }
+            case ReadFmt::Bytes: {
+                int64_t n = std::max<int64_t>(count_opt, 0);
+                if (n == 0) {
+                    results.push_back(LValue(L->intern_string("", 0)));
+                    break;
+                }
+                size_t sz = static_cast<size_t>(n);
+                uint32_t len32 = static_cast<uint32_t>(sz);
+                char* mem = new char[16 + sz + 1]();
+                clx_memcpy(mem + 8, &len32, 4);
+                size_t r = std::fread(mem + 16, 1, sz, f->fp);
+                mem[16 + r] = '\0';
+                uint64_t h = r <= 8 ? swar_hash_8(mem + 16, r) : wyhash_str(mem + 16, r);
+                clx_memcpy(mem, &h, 8);
+                results.push_back(LValue(L->string_pool.intern_preallocated(mem + 16, h, r)));
+                break;
+            }
+            case ReadFmt::Invalid:
+            default:
+                break;
             }
         }
     }
