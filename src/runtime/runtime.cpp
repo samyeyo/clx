@@ -60,28 +60,41 @@ LThread::~LThread()
 static void fiber_entry_impl(LThread* t)
 {
     LState* L = t->state;
-    try {
-        clx::LValue args[8];
-        size_t argc = t->resume_args.count < 8 ? t->resume_args.count : 8;
-        for (size_t i = 0; i < argc; ++i)
-            args[i] = t->resume_args[i];
-        t->resume_args = MultiValue();
+    for (;;) {
+        try {
+            clx::LValue args[8];
+            size_t argc = t->resume_args.count < 8 ? t->resume_args.count : 8;
+            for (size_t i = 0; i < argc; ++i)
+                args[i] = t->resume_args[i];
+            t->resume_args = MultiValue();
 
-        size_t prev_top = L->shadow_top;
-        for (size_t i = 0; i < argc; ++i)
-            L->shadow_stack[L->shadow_top++] = TypedSlot(&args[i].val, &args[i].type);
-        t->yield_args = call_function(L, t->function, args, argc, "coroutine", 0);
-        L->shadow_top = prev_top;
-        t->status = THREAD_DEAD;
-    } catch (const LRuntimeException& e) {
+            size_t prev_top = L->shadow_top;
+            for (size_t i = 0; i < argc; ++i)
+                L->shadow_stack[L->shadow_top++] = TypedSlot(&args[i].val, &args[i].type);
+            t->yield_args = call_function(L, t->function, args, argc, "coroutine", 0);
+            L->shadow_top = prev_top;
+            t->status = THREAD_DEAD;
+        } catch (const LRuntimeException& e) {
 
-        t->yield_args = MultiValue(clx::LValue(L->intern_string(e.what())));
-        t->status = THREAD_DEAD;
-        t->has_error = true;
-    } catch (...) {
-        t->yield_args = MultiValue(clx::LValue("unknown error"));
-        t->status = THREAD_DEAD;
-        t->has_error = true;
+            t->yield_args = MultiValue(clx::LValue(L->intern_string(e.what())));
+            t->status = THREAD_DEAD;
+            t->has_error = true;
+        } catch (...) {
+            t->yield_args = MultiValue(clx::LValue("unknown error"));
+            t->status = THREAD_DEAD;
+            t->has_error = true;
+        }
+
+        if (t->pre_unwind) {
+            // This fiber was suspended mid-yield when recycled (e.g. skynet's
+            // `return yield(...)` pattern). Resume it first: the old function's
+            // tail runs to completion above; discard its result and run the new
+            // coroutine's function on this iteration.
+            t->pre_unwind = false;
+            t->has_error = false;
+            continue;
+        }
+        break;
     }
 
     LThread* caller = t->caller;
@@ -101,9 +114,24 @@ static void fiber_entry_impl(LThread* t)
 
 #if defined(_WIN32)
 
+// How many completed coroutine fibers to keep alive in the thread pool for reuse.
+// This must exceed the largest GC sweep batch so sweeps never fall back to
+// DeleteFiber: headroom is clamped to 256 MB and each coroutine accounts for
+// ~256 KB, so a batch is at most ~1024 threads. Each preserved fiber holds a
+// 256 KB reserved stack, bounding reserved virtual memory to 2048 * 256 KB.
+static constexpr size_t kMaxPooledFibers = 2048;
+
 static void WINAPI fiber_trampoline(LPVOID param)
 {
-    fiber_entry_impl(static_cast<LThread*>(param));
+    LThread* t = static_cast<LThread*>(param);
+    t->fiber_started = true;
+    for (;;) {
+        fiber_entry_impl(t);
+        // fiber_entry_impl suspends inside its final SwitchToFiber(caller) when the
+        // coroutine completes, and only returns once this fiber is resumed again.
+        // That happens when the recycled LThread is reused for a new coroutine, so
+        // loop to run the new coroutine's function on the same fiber.
+    }
 }
 #else
 static thread_local LThread* g_starting_thread = nullptr;
@@ -126,6 +154,9 @@ LValue create_thread(LState* L, const LValue& func, double stack_size)
 
     LThread* t = L->free_threads;
     bool recycled = (t != nullptr);
+#if defined(_WIN32)
+    bool pooled_suspended = recycled && t->status == THREAD_SUSPENDED && t->fiber_started;
+#endif
     if (t) {
         L->free_threads = static_cast<LThread*>(t->next);
     } else {
@@ -142,9 +173,20 @@ LValue create_thread(LState* L, const LValue& func, double stack_size)
     t->status = THREAD_SUSPENDED;
 
 #if defined(_WIN32)
-    if (recycled)
-        DeleteFiber(t->fiber);
-    t->fiber = CreateFiber(static_cast<SIZE_T>(stack_size), fiber_trampoline, t);
+    if (recycled) {
+        if (t->fiber) {
+            // Sweep preserved this fiber for reuse. If it was suspended mid-yield
+            // (e.g. skynet's `return yield(...)`), it must finish the old function
+            // before the new one can run; fiber_entry_impl unwinds via pre_unwind.
+            L->free_fiber_threads--;
+            t->pre_unwind = pooled_suspended;
+        } else {
+            // Pooled without a live fiber (pool cap exceeded): create a fresh one.
+            t->fiber = CreateFiber(static_cast<SIZE_T>(stack_size), fiber_trampoline, t);
+        }
+    } else {
+        t->fiber = CreateFiber(static_cast<SIZE_T>(stack_size), fiber_trampoline, t);
+    }
 #elif (defined(__APPLE__) || defined(__linux__)) && defined(__aarch64__)
     if (!t->stack_memory)
         t->stack_memory = new char[t->stack_bytes];
@@ -1200,8 +1242,18 @@ bool LState::gc_step()
                 LThread* th = static_cast<LThread*>(curr);
                 allocated_bytes -= sizeof(LThread) + th->stack_bytes;
 #if defined(_WIN32)
-                DeleteFiber(th->fiber);
-                th->fiber = nullptr;
+                // Preserve the fiber for reuse. Completed fibers resume fresh via
+                // the trampoline loop; suspended (mid-yield) fibers are unwound via
+                // pre_unwind when reused; never-started fibers resume fresh too.
+                // The coroutine is unreachable, so it can never be resumed by user
+                // code again — only pool reuse will resume it.
+                if (th->fiber && free_fiber_threads < kMaxPooledFibers) {
+                    free_fiber_threads++;
+                } else {
+                    if (th->fiber)
+                        DeleteFiber(th->fiber);
+                    th->fiber = nullptr;
+                }
 #endif
                 th->next = free_threads;
                 free_threads = th;
