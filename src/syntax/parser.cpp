@@ -204,8 +204,12 @@ uint32_t Parser::parse_primary()
         } else {
             node.type = NodeType::Integer;
             int64_t ival = 0;
-            auto [p, ec] = std::from_chars(
-                current_token.text.data(), current_token.text.data() + current_token.text.size(), ival);
+            const char* nstart = current_token.text.data();
+            const char* nstop = nstart + current_token.text.size();
+            bool is_hex = (current_token.text.size() > 2 && nstart[0] == '0'
+                && (nstart[1] == 'x' || nstart[1] == 'X'));
+            const char* digits = is_hex ? nstart + 2 : nstart;
+            auto [p, ec] = std::from_chars(digits, nstop, ival, is_hex ? 16 : 10);
             node.as.integer.val = ival;
         }
         advance();
