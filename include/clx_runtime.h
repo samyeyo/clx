@@ -8,7 +8,7 @@
 #ifndef CLX_RUNTIME_H
 #define CLX_RUNTIME_H
 
-#include <bit>
+
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -771,7 +771,9 @@ static CLX_INLINE_HOT uint64_t lvalue_hash(const LValue& key)
         return h;
     }
     if (key.type == ValueType::Int64) {
-        uint64_t v = std::bit_cast<uint64_t>(static_cast<double>(key.val.payload.i64));
+        double vd = static_cast<double>(key.val.payload.i64);
+        uint64_t v;
+        clx_memcpy(&v, &vd, sizeof(uint64_t));
         v ^= WY_SECRET0;
         uint64_t lo, hi;
         lo = clx_umul128(v, v ^ WY_SECRET1, &hi);
@@ -1041,6 +1043,7 @@ struct LThread : public LHeader {
     bool is_main;
     bool has_error;
     bool close_requested;
+    size_t stack_bytes = 0;
 #if defined(_WIN32)
     LPVOID fiber;
 #elif (defined(__APPLE__) || defined(__linux__)) && (defined(__aarch64__) || defined(__x86_64__))
@@ -1055,6 +1058,39 @@ struct LThread : public LHeader {
     ~LThread();
 };
 
+//------------------ Shadow stack (growable, replaced fixed MAX_SHADOW_STACK array)
+struct ShadowStack {
+    TypedSlot* data = nullptr;
+    size_t cap = 0;
+
+    CLX_INLINE_HOT TypedSlot& operator[](size_t i)
+    {
+        if (i >= cap)
+            grow(i + 1);
+        return data[i];
+    }
+
+    void grow(size_t need)
+    {
+        size_t nc = cap ? cap * 2 : 256;
+        while (nc < need)
+            nc *= 2;
+        data = static_cast<TypedSlot*>(std::realloc(data, nc * sizeof(TypedSlot)));
+        cap = nc;
+    }
+
+    void reset()
+    {
+        if (data) {
+            std::free(data);
+            data = nullptr;
+            cap = 0;
+        }
+    }
+
+    ~ShadowStack() { reset(); }
+};
+
 //------------------ VM state
 struct LState {
     LTable* _G;
@@ -1062,13 +1098,14 @@ struct LState {
     LHeader* allocated_objects;
     LTable* free_tables;
     LCFunction* free_functions;
+    LThread* free_threads = nullptr;
     LTable* metatabled_tables = nullptr;
 
     LThread* main_thread;
     LThread* running_thread;
 
     static constexpr size_t MAX_SHADOW_STACK = 262144;
-    TypedSlot shadow_stack[MAX_SHADOW_STACK];
+    ShadowStack shadow_stack;
     size_t shadow_top;
 
     const char* current_file;
@@ -1632,16 +1669,76 @@ CLX_INLINE_HOT void set_env_var(LState* L, const LValue& env, const char* name, 
     t->settable(key, val);
 }
 
+//------------------ Int64 fast-path arithmetic. These mirror clx::add/sub/mul/mod. The scalar
+// int_add/int_sub/int_mul stay exact int64 and never perform signed overflow (computed via
+// unsigned, i.e. defined even without -fwrapv): on a true >2^63 overflow they wrap, since an
+// int64 fast local cannot hold the promoted double. The _lv variants below promote to the Double
+// subtype on overflow for the boxed LValue path.
+CLX_INLINE_HOT int64_t int_add(int64_t a, int64_t b)
+{
+    return static_cast<int64_t>(static_cast<uint64_t>(a) + static_cast<uint64_t>(b));
+}
+
+CLX_INLINE_HOT int64_t int_sub(int64_t a, int64_t b)
+{
+    return static_cast<int64_t>(static_cast<uint64_t>(a) - static_cast<uint64_t>(b));
+}
+
+CLX_INLINE_HOT int64_t int_mul(int64_t a, int64_t b)
+{
+    return static_cast<int64_t>(static_cast<uint64_t>(a) * static_cast<uint64_t>(b));
+}
+
+//------------------ Lua floor modulo (%): result takes the sign of the divisor.
+CLX_INLINE_HOT int64_t int_floor_mod(int64_t a, int64_t b)
+{
+    if (b == 0 || b == -1)
+        return 0;
+    int64_t r = a % b;
+    if (r && (r < 0) != (b < 0))
+        r += b;
+    return r;
+}
+
+//------------------ Lua floor modulo for the floating fast path (%): result takes the sign of the divisor.
+CLX_INLINE_HOT double fmod_floor(double a, double b)
+{
+    return a - std::floor(a / b) * b;
+}
+
+// LValue-returning variants: preserve the Int64 subtype, promote to the Double subtype on overflow.
+CLX_INLINE_HOT LValue int_add_lv(int64_t a, int64_t b)
+{
+    if ((b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b))
+        return LValue(static_cast<double>(a) + static_cast<double>(b));
+    return LValue(a + b);
+}
+
+CLX_INLINE_HOT LValue int_sub_lv(int64_t a, int64_t b)
+{
+    if ((b > 0 && a < INT64_MIN + b) || (b < 0 && a > INT64_MAX + b))
+        return LValue(static_cast<double>(a) - static_cast<double>(b));
+    return LValue(a - b);
+}
+
+CLX_INLINE_HOT LValue int_mul_lv(int64_t a, int64_t b)
+{
+    if (a == 0 || b == 0)
+        return LValue(int64_t(0));
+    if ((a == INT64_MIN && b == -1) || (b == INT64_MIN && a == -1))
+        return LValue(static_cast<double>(a) * static_cast<double>(b));
+    uint64_t aa = (a < 0) ? (uint64_t)(-(a + 1)) + 1u : (uint64_t)a;
+    uint64_t bb = (b < 0) ? (uint64_t)(-(b + 1)) + 1u : (uint64_t)b;
+    if (bb != 0 && aa > (uint64_t)INT64_MAX / bb)
+        return LValue(static_cast<double>(a) * static_cast<double>(b));
+    return LValue(a * b);
+}
+
 //------------------ Addition with metamethod fallback
 CLX_INLINE_HOT LValue add(LState* L, const LValue& a, const LValue& b)
 {
-    if (a.type == ValueType::Int64 && b.type == ValueType::Int64) [[likely]] {
-        int64_t ai = a.val.payload.i64, bi = b.val.payload.i64;
-        int64_t r = ai + bi;
-        if (((ai ^ bi) >= 0) && ((ai ^ r) < 0))
-            return LValue(static_cast<double>(ai) + static_cast<double>(bi));
-        return LValue(r);
-    }
+    if (a.type == ValueType::Int64 && b.type == ValueType::Int64) [[likely]]
+        return int_add_lv(a.val.payload.i64, b.val.payload.i64);
     if ((a.type == ValueType::Double || a.type == ValueType::Int64)
         && (b.type == ValueType::Double || b.type == ValueType::Int64)) [[likely]] {
         double l = (a.type == ValueType::Int64) ? static_cast<double>(a.val.payload.i64) : a.val.payload.f64;
@@ -1656,13 +1753,8 @@ CLX_INLINE_HOT LValue add(LState* L, const LValue& a, const LValue& b)
 
 CLX_INLINE_HOT LValue sub(LState* L, const LValue& a, const LValue& b)
 {
-    if (a.type == ValueType::Int64 && b.type == ValueType::Int64) [[likely]] {
-        int64_t ai = a.val.payload.i64, bi = b.val.payload.i64;
-        int64_t r = ai - bi;
-        if (((ai ^ bi) < 0) && ((bi ^ r) < 0))
-            return LValue(static_cast<double>(ai) - static_cast<double>(bi));
-        return LValue(r);
-    }
+    if (a.type == ValueType::Int64 && b.type == ValueType::Int64) [[likely]]
+        return int_sub_lv(a.val.payload.i64, b.val.payload.i64);
     if ((a.type == ValueType::Double || a.type == ValueType::Int64)
         && (b.type == ValueType::Double || b.type == ValueType::Int64)) [[likely]] {
         double l = (a.type == ValueType::Int64) ? static_cast<double>(a.val.payload.i64) : a.val.payload.f64;
@@ -1677,17 +1769,8 @@ CLX_INLINE_HOT LValue sub(LState* L, const LValue& a, const LValue& b)
 
 CLX_INLINE_HOT LValue mul(LState* L, const LValue& a, const LValue& b)
 {
-    if (a.type == ValueType::Int64 && b.type == ValueType::Int64) [[likely]] {
-        int64_t ai = a.val.payload.i64, bi = b.val.payload.i64;
-        if (ai == 0 || bi == 0)
-            return LValue(int64_t(0));
-        if (ai == INT64_MIN && bi == -1)
-            return LValue(static_cast<double>(ai) * static_cast<double>(bi));
-        int64_t r = ai * bi;
-        if (r / bi != ai)
-            return LValue(static_cast<double>(ai) * static_cast<double>(bi));
-        return LValue(r);
-    }
+    if (a.type == ValueType::Int64 && b.type == ValueType::Int64) [[likely]]
+        return int_mul_lv(a.val.payload.i64, b.val.payload.i64);
     if ((a.type == ValueType::Double || a.type == ValueType::Int64)
         && (b.type == ValueType::Double || b.type == ValueType::Int64)) [[likely]] {
         double l = (a.type == ValueType::Int64) ? static_cast<double>(a.val.payload.i64) : a.val.payload.f64;
@@ -2368,7 +2451,7 @@ LValue get_global(LState* L, const char* name);
 void set_global(LState* L, const char* name, const LValue& val);
 
 //------------------ Creates a new coroutine thread
-LValue create_thread(LState* L, const LValue& func, double stack_size = 1048576.0);
+LValue create_thread(LState* L, const LValue& func, double stack_size = 262144.0);
 //------------------ Allocates a new userdata
 LValue newuserdata(LState* L, size_t size);
 //------------------ Resumes a coroutine
