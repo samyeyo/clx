@@ -662,18 +662,12 @@ void CodeEmitter::emit_native(uint32_t n_idx)
             if (op >= static_cast<int>(BinaryOp::Add) && op <= static_cast<int>(BinaryOp::Mul)
                 && clx::is_purely_integer_expr(ctx, state, n.as.bin_op.left)
                 && clx::is_purely_integer_expr(ctx, state, n.as.bin_op.right)) {
+                out << (op == 1 ? "clx::int_add(" : op == 2 ? "clx::int_sub(" : "clx::int_mul(");
                 out << "static_cast<int64_t>(";
                 emit_native(n.as.bin_op.left);
-                out << ")";
-                if (op == 1)
-                    out << " + ";
-                if (op == 2)
-                    out << " - ";
-                if (op == 3)
-                    out << " * ";
-                out << "static_cast<int64_t>(";
+                out << "), static_cast<int64_t>(";
                 emit_native(n.as.bin_op.right);
-                out << ")";
+                out << "))";
                 return;
             }
             if (op >= static_cast<int>(BinaryOp::Add) && op <= static_cast<int>(BinaryOp::Div)) {
@@ -714,13 +708,13 @@ void CodeEmitter::emit_native(uint32_t n_idx)
             if (op == static_cast<int>(BinaryOp::Mod)) {
                 if (clx::is_purely_integer_expr(ctx, state, n.as.bin_op.left)
                     && clx::is_purely_integer_expr(ctx, state, n.as.bin_op.right)) {
-                    out << "static_cast<int64_t>(static_cast<int64_t>(";
+                    out << "clx::int_floor_mod(static_cast<int64_t>(";
                     emit_native(n.as.bin_op.left);
-                    out << ") % static_cast<int64_t>(";
+                    out << "), static_cast<int64_t>(";
                     emit_native(n.as.bin_op.right);
                     out << "))";
                 } else {
-                    out << "std::fmod(";
+                    out << "clx::fmod_floor(";
                     emit_native(n.as.bin_op.left);
                     out << ", ";
                     emit_native(n.as.bin_op.right);
@@ -3151,28 +3145,23 @@ void CodeEmitter::emitBinaryOp(const ASTNode& node, uint32_t node_idx)
     if (left_native && right_native) {
         bool both_int = clx::is_purely_integer_expr(ctx, state, node.as.bin_op.left)
             && clx::is_purely_integer_expr(ctx, state, node.as.bin_op.right);
-        if (op == static_cast<int>(BinaryOp::Add)) {
-            out << (both_int ? "clx::LValue(static_cast<int64_t>(" : "clx::LValue(static_cast<double>(");
-            emit_native(node.as.bin_op.left);
-            out << " + ";
-            emit_native(node.as.bin_op.right);
-            out << "))";
-            return;
-        }
-        if (op == static_cast<int>(BinaryOp::Sub)) {
-            out << (both_int ? "clx::LValue(static_cast<int64_t>(" : "clx::LValue(static_cast<double>(");
-            emit_native(node.as.bin_op.left);
-            out << " - ";
-            emit_native(node.as.bin_op.right);
-            out << "))";
-            return;
-        }
-        if (op == static_cast<int>(BinaryOp::Mul)) {
-            out << (both_int ? "clx::LValue(static_cast<int64_t>(" : "clx::LValue(static_cast<double>(");
-            emit_native(node.as.bin_op.left);
-            out << " * ";
-            emit_native(node.as.bin_op.right);
-            out << "))";
+        if (op == static_cast<int>(BinaryOp::Add) || op == static_cast<int>(BinaryOp::Sub)
+                || op == static_cast<int>(BinaryOp::Mul)) {
+            if (both_int) {
+                out << (op == 1 ? "clx::int_add_lv(static_cast<int64_t>("
+                                : op == 2 ? "clx::int_sub_lv(static_cast<int64_t>("
+                                          : "clx::int_mul_lv(static_cast<int64_t>(");
+                emit_native(node.as.bin_op.left);
+                out << "), static_cast<int64_t>(";
+                emit_native(node.as.bin_op.right);
+                out << "))";
+            } else {
+                out << "clx::LValue(static_cast<double>(";
+                emit_native(node.as.bin_op.left);
+                out << (op == 1 ? " + " : op == 2 ? " - " : " * ");
+                emit_native(node.as.bin_op.right);
+                out << "))";
+            }
             return;
         }
         if (op == static_cast<int>(BinaryOp::Div)) {
@@ -3191,18 +3180,18 @@ void CodeEmitter::emitBinaryOp(const ASTNode& node, uint32_t node_idx)
         }
         if (op == static_cast<int>(BinaryOp::Mod)) {
             if (both_int) {
-                out << "clx::LValue(static_cast<int64_t>(static_cast<int64_t>(";
+                out << "clx::LValue(clx::int_floor_mod(static_cast<int64_t>(";
                 emit_native(node.as.bin_op.left);
-                out << ") % static_cast<int64_t>(";
+                out << "), static_cast<int64_t>(";
                 emit_native(node.as.bin_op.right);
                 out << ")))";
                 return;
             }
-            out << "clx::LValue(static_cast<double>(std::fmod(";
+            out << "clx::LValue(clx::fmod_floor(";
             emit_native(node.as.bin_op.left);
             out << ", ";
             emit_native(node.as.bin_op.right);
-            out << ")))";
+            out << "))";
             return;
         }
         if (op == static_cast<int>(BinaryOp::FloorDiv)) {
