@@ -8,6 +8,8 @@
 #include "clx.h"
 #include "../include/clx_simd.h"
 #include <algorithm>
+#include <cctype>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
@@ -257,7 +259,23 @@ static MultiValue tonumber(LState* L, const LValue* args, size_t count)
     if (count == 0)
         return MultiValue();
     const LValue& v = args[0];
-    if (v.type == Double)
+    if (count >= 2 && args[1].type != Nil) {
+        int64_t base = clx::check_integer(L, args[1]);
+        if (base < 2 || base > 36)
+            clx::error(L, "bad argument #2 to 'tonumber' (base out of range)");
+        const char* s = clx::check_string(L, v);
+        char* end;
+        errno = 0;
+        long long n = std::strtoll(s, &end, static_cast<int>(base));
+        if (end == s || errno == ERANGE)
+            return MultiValue();
+        while (std::isspace(static_cast<unsigned char>(*end)))
+            end++;
+        if (*end != '\0')
+            return MultiValue();
+        return MultiValue(clx::integer(static_cast<int64_t>(n)));
+    }
+    if (v.type == Double || v.type == Int64)
         return MultiValue(v);
     if (clx::is_string(v)) {
         double d;
