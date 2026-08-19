@@ -354,7 +354,7 @@ int main(int argc, char* argv[])
         = custom_output_name.empty() ? fs::path(input_files[0]).stem().string() : custom_output_name;
 
     if (fs::path(output_name).extension() == ".exe") {
-        output_name = fs::path(output_name).stem().string();
+        output_name = fs::path(output_name).replace_extension().string();
     }
 
     std::vector<std::string> cpp_files;
