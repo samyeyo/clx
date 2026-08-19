@@ -500,6 +500,8 @@ CLX_INLINE MultiValue next(LState* L, const LValue& table, const LValue& key)
     }
     LTable* t = static_cast<LTable*>(table.as_pointer());
 
+    bool found_key = (key.type == ValueType::Nil);
+
     if (key.type == ValueType::Nil) {
         size_t idx = clx_find_first_nonnil(reinterpret_cast<const uint8_t*>(t->array_types), t->array_size, 0);
         if (idx < t->array_size) {
@@ -514,6 +516,9 @@ CLX_INLINE MultiValue next(LState* L, const LValue& table, const LValue& key)
                 return MultiValue(
                     { LValue(static_cast<int64_t>(found + 1)), LValue(t->array[found], t->array_types[found]) });
             }
+            // Array part exhausted from this key onward. All hash entries come after
+            // every array slot, so the next hash entry is the successor of this key.
+            found_key = true;
         }
     }
 
@@ -521,7 +526,6 @@ CLX_INLINE MultiValue next(LState* L, const LValue& table, const LValue& key)
     if (!ex || ex->hash_size == 0)
         return MultiValue();
 
-    bool found_key = (key.type == ValueType::Nil);
     if (ex->hash_bitmap) {
         size_t bm_words = (ex->hash_size + 63) / 64;
         for (size_t word = 0; word < bm_words; ++word) {
