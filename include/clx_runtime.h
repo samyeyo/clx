@@ -1046,6 +1046,8 @@ struct LThread : public LHeader {
     size_t stack_bytes = 0;
 #if defined(_WIN32)
     LPVOID fiber;
+    bool fiber_started = false;
+    bool pre_unwind = false;
 #elif (defined(__APPLE__) || defined(__linux__)) && (defined(__aarch64__) || defined(__x86_64__))
     CoroutineContext ctx;
     char* stack_memory;
@@ -1099,6 +1101,7 @@ struct LState {
     LTable* free_tables;
     LCFunction* free_functions;
     LThread* free_threads = nullptr;
+    size_t free_fiber_threads = 0;
     LTable* metatabled_tables = nullptr;
 
     LThread* main_thread;
