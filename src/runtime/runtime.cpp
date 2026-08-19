@@ -117,23 +117,48 @@ static void fiber_trampoline()
 //------------------ create_thread: creates a new coroutine thread (public API)
 LValue create_thread(LState* L, const LValue& func, double stack_size)
 {
-    LThread* t = new LThread();
+    if (L->gc_running) {
+        if (L->gc_phase == LState::GCPhase::Sweeping)
+            L->gc_step();
+        else if (L->allocated_bytes >= L->gc_bytes_threshold)
+            L->collect_garbage();
+    }
+
+    LThread* t = L->free_threads;
+    bool recycled = (t != nullptr);
+    if (t) {
+        L->free_threads = static_cast<LThread*>(t->next);
+    } else {
+        t = new LThread();
+    }
     t->state = L;
     t->function = func;
+    t->stack_bytes = static_cast<size_t>(stack_size);
+    t->resume_args = MultiValue();
+    t->yield_args = MultiValue();
+    t->has_error = false;
+    t->close_requested = false;
+    t->caller = nullptr;
+    t->status = THREAD_SUSPENDED;
 
 #if defined(_WIN32)
+    if (recycled)
+        DeleteFiber(t->fiber);
     t->fiber = CreateFiber(static_cast<SIZE_T>(stack_size), fiber_trampoline, t);
 #elif (defined(__APPLE__) || defined(__linux__)) && defined(__aarch64__)
-    t->stack_memory = new char[static_cast<size_t>(stack_size)];
-    clx_coro_init(&t->ctx, t->stack_memory + static_cast<size_t>(stack_size), (void*)fiber_trampoline);
+    if (!t->stack_memory)
+        t->stack_memory = new char[t->stack_bytes];
+    clx_coro_init(&t->ctx, t->stack_memory + t->stack_bytes, (void*)fiber_trampoline);
     g_starting_thread = t;
 #elif defined(__linux__) && defined(__x86_64__)
-    t->stack_memory = new char[static_cast<size_t>(stack_size)];
-    clx_coro_init(&t->ctx, t->stack_memory + static_cast<size_t>(stack_size), (void*)fiber_trampoline);
+    if (!t->stack_memory)
+        t->stack_memory = new char[t->stack_bytes];
+    clx_coro_init(&t->ctx, t->stack_memory + t->stack_bytes, (void*)fiber_trampoline);
     g_starting_thread = t;
 #else
     getcontext(&t->ctx);
-    t->stack_memory = new char[static_cast<size_t>(stack_size)];
+    if (!t->stack_memory)
+        t->stack_memory = new char[static_cast<size_t>(stack_size)];
     t->ctx.uc_stack.ss_sp = t->stack_memory;
     t->ctx.uc_stack.ss_size = static_cast<size_t>(stack_size);
     t->ctx.uc_link = nullptr;
@@ -143,7 +168,9 @@ LValue create_thread(LState* L, const LValue& func, double stack_size)
 
     t->next = L->allocated_objects;
     L->allocated_objects = t;
-    L->object_count++;
+    if (!recycled)
+        L->object_count++;
+    L->allocated_bytes += sizeof(LThread) + t->stack_bytes;
     return LValue(Thread, t);
 }
 
@@ -985,6 +1012,7 @@ void LState::invoke_gc_finalizer(LUserdata* ud, const char* tag)
 //------------------ LState::~LState — state destructor
 LState::~LState()
 {
+    shadow_stack.reset();
     if (gc_phase == GCPhase::Sweeping) {
         while (gc_phase == GCPhase::Sweeping)
             gc_step();
@@ -1051,6 +1079,14 @@ LState::~LState()
         ff = next;
     }
     free_functions = nullptr;
+
+    LThread* fth = free_threads;
+    while (fth) {
+        LThread* nxt0 = static_cast<LThread*>(fth->next);
+        delete fth;
+        fth = nxt0;
+    }
+    free_threads = nullptr;
     std::free(overflow_heap);
 }
 
@@ -1161,8 +1197,14 @@ bool LState::gc_step()
                 f->next = free_functions;
                 free_functions = f;
             } else if (curr->type == static_cast<uint8_t>(Thread)) {
-                allocated_bytes -= sizeof(LThread);
-                delete static_cast<LThread*>(curr);
+                LThread* th = static_cast<LThread*>(curr);
+                allocated_bytes -= sizeof(LThread) + th->stack_bytes;
+#if defined(_WIN32)
+                DeleteFiber(th->fiber);
+                th->fiber = nullptr;
+#endif
+                th->next = free_threads;
+                free_threads = th;
             } else if (curr->type == static_cast<uint8_t>(UserData)) {
                 LUserdata* ud = static_cast<LUserdata*>(curr);
                 if (ud->metatable) {
@@ -1395,6 +1437,8 @@ void LState::collect_garbage()
         } else if (curr->type == static_cast<uint8_t>(Thread)) {
             LThread* th = static_cast<LThread*>(curr);
             push_if_needed(th->function);
+            if (th->caller)
+                push_if_needed(LValue(Thread, th->caller));
             for (size_t i = 0; i < th->yield_args.count; ++i)
                 push_if_needed(th->yield_args[i]);
             for (size_t i = 0; i < th->resume_args.count; ++i)
