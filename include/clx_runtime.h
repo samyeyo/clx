@@ -1044,10 +1044,10 @@ struct LThread : public LHeader {
     bool has_error;
     bool close_requested;
     size_t stack_bytes = 0;
-#if defined(_WIN32)
-    LPVOID fiber;
     bool fiber_started = false;
     bool pre_unwind = false;
+#if defined(_WIN32)
+    LPVOID fiber;
 #elif (defined(__APPLE__) || defined(__linux__)) && (defined(__aarch64__) || defined(__x86_64__))
     CoroutineContext ctx;
     char* stack_memory;
