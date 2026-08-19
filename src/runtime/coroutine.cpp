@@ -13,7 +13,7 @@ namespace clx {
 clx::MultiValue coroutine_create(clx::LState* L, const clx::LValue* args, size_t count)
 {
     clx::LValue func = count > 0 ? args[0] : clx::LValue();
-    double stack_size = count > 1 ? clx::to_number(args[1], 1048576.0) : 1048576.0;
+    double stack_size = count > 1 ? clx::to_number(args[1], 262144.0) : 262144.0;
     return clx::MultiValue(clx::create_thread(L, func, stack_size));
 }
 
