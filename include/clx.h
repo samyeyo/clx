@@ -523,8 +523,11 @@ CLX_INLINE MultiValue next(LState* L, const LValue& table, const LValue& key)
     }
 
     LTableExt* ex = t->ext;
-    if (!ex || ex->hash_size == 0)
-        return MultiValue();
+    if (!ex || ex->hash_size == 0) {
+        if (key.type != ValueType::Nil && !found_key)
+            throw_runtime_error("invalid key to 'next'");
+        return MultiValue(LValue());
+    }
 
     if (ex->hash_bitmap) {
         size_t bm_words = (ex->hash_size + 63) / 64;
@@ -557,7 +560,9 @@ CLX_INLINE MultiValue next(LState* L, const LValue& table, const LValue& key)
             }
         }
     }
-    return MultiValue();
+    if (key.type != ValueType::Nil && !found_key)
+        throw_runtime_error("invalid key to 'next'");
+    return MultiValue(LValue());
 }
 
 //------------------ Raw length (no metamethods)
