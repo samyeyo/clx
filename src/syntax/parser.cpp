@@ -306,9 +306,8 @@ uint32_t Parser::parse_postfix_expression()
                     std::string_view kname(ctx.nodes[k_idx].as.string.text, ctx.nodes[k_idx].as.string.length);
                     if (tname == "math") {
                         static const std::unordered_map<std::string_view, const char*> _m
-                            = { { "sin", "std::sin" }, { "cos", "std::cos" }, { "floor", "std::floor" },
-                                  { "ceil", "std::ceil" }, { "abs", "std::abs" }, { "sqrt", "std::sqrt" },
-                                  { "fmod", "std::fmod" }, { "log", "std::log" }, { "exp", "std::exp" },
+                            = { { "sin", "std::sin" }, { "cos", "std::cos" },
+                                  { "sqrt", "std::sqrt" }, { "exp", "std::exp" },
                                   { "tan", "std::tan" }, { "atan", "std::atan" }, { "asin", "std::asin" },
                                   { "acos", "std::acos" }, { "sinh", "std::sinh" }, { "cosh", "std::cosh" },
                                   { "tanh", "std::tanh" }, { "atan2", "std::atan2" }, { "pow", "std::pow" },
