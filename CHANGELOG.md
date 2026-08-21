@@ -6,7 +6,7 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 
 ---
 
-## [Work in progresss]
+## [0.3.0] - 2026-08-21
 
 ### Changed
 
@@ -49,6 +49,24 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 * Optimized string interning at startup: strings ≤6 bytes now use inline `LValue::istr()` instead of going through the StringPool, eliminating ~60-80% of pool operations (e155f2c)
 * Long strings (>6 bytes) now use pre-computed slot positions — codegen simulates the hash table insertion at transpile time and emits a `PrecomputedEntry` array, allowing `bulk_fill_precomputed()` to write all slots in a single pass with zero linear probing (9b7e6eb)
 * Fixed hash function mismatch for 7-byte strings: codegen now uses `swar_hash_8` for strings ≤8 bytes to match the runtime `intern_string()` threshold (e155f2c)
+* Updated the base module for better Lua 5.5 compatibility (d4b52d3)
+* Enhanced `io.read_line()` to optionally keep end-of-line characters and improved Lua 5.5 format matching for `read` operations (d72c6b7)
+* Shrunk the default coroutine stack from 1MB to 256KB (1b80c38)
+* Recycled dead coroutine threads+stacks — GC sweep keeps the thread pool (56feaf3)
+* Reused pooled fibers on Windows via a trampoline loop and a pre_unwind hook (960890a)
+* Optimized intrinsic math function mappings in the parser for ceil, floor, abs, fmod, and log (b4ca81d)
+* Used Lua-compatible `clx_format_double()` in `LValue::to_string`, `tostring`, and concat paths (55ed64d, 7387b88, 526775f)
+* Enhanced `LValue::to_string()` to support UserData values (bde87cb)
+* Enhanced math functions for better integer handling and precision (737e69a)
+* Emitted `%lld` for integer concat operands and `%.17g`+`.0` for float literals (4e62924)
+* Stopped treating whole-valued floats as integers via the new `is_integer_typed_expr()` helper (bf311f1)
+* Extended table arithmetic codegen detection to `t[k]=t[k]-N` and `t[k]=t[k]/N` patterns (2c5b4ed)
+* Detected `t[k]=t[k]+N` patterns in codegen, emitted native `#`, and skipped LValue for known-numeric for-loop bounds (61a1b4d)
+* Added table_increment/table_multiply and table_decrement/table_divide helpers for `t[k]=t[k]±N` and `t[k]=t[k]*/N` (762db3b, c220d1a)
+* Used correct runtime type sizes for arena optimization instead of bulk sizes (9dd1883)
+* Replaced get_binary_string with get_string and switched to the StringBuilder arena (7867dda)
+* Added standalone inline fallbacks for the CLX_INLINE macros so builds work without forced inlining (80314d6)
+* Stripped ".exe" from output names via replace_extension on Windows (a55c485)
 
 ### Added
 
@@ -91,9 +109,13 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 * Added 3 new table optimizations in codegen (76a86d2)
 * Added `StringPool::PrecomputedEntry` struct and `bulk_fill_precomputed()` for zero-probing startup interning (9b7e6eb)
 * Added sets for integer-returning functions and typed locals in optimizer (40a966b)
-* Added empty-table-in-loop promotion: detects `local t = {}; for i=1,N do t[i]=v end` patterns and promotes `t` to `pure_numeric_arrays` for fast vector-indexed reads (abb3187)
 * Added real-world compatibility tests (422a86d)
 * Added tests for custom `_ENV` in child functions and in `require()` (c5f4def, 563f92a)
+* Added `table.create()` to initialize tables with specified array and hash sizes (590e459)
+* Added `coroutine.isyieldable()` and improved error handling in `coroutine_wrap` (dbc5d7a)
+* Added float-to-integer conversion and numeric string parsing helpers; increased MultiValue INLINE_CAPS for `pairs()` (0a00883)
+* Added a free_threads pool and growable ShadowStack to LState for coroutine recycling (3bb196d)
+* Added fiber_started/pre_unwind flags and a fiber pool counter to LThread/LState (9e210de)
 
 ### Fixed
 
@@ -116,6 +138,16 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 * Fixed annoying MSVC warning message D9025 when compiling clx_size.lib (d716fa1)
 * Fixed GC quadratic hash scan, CacheSlot stability, sub-alloc tracking, double-free (5a1f442)
 * Fixed CacheSlot reads for numeric fields and int64 inner loops for `j=i+1` (e89a8e9)
+* Fixed `tonumber` returning nil for integer values (#28) (ca309e2)
+* Improved error handling in `next()` for invalid keys (f0c20a1)
+* Fixed `next()` transitions to the hash part after the array pivot key (2a1ccbf)
+* Fixed hex integer literal parsing at base 16 (6dddb1d)
+* Fixed floor-modulo and UB-unsafe int64 arithmetic in the fast path (4cfa559)
+* Fixed a function recursion crash in emitted code (244d540)
+* Improved LValue::eq() equality checks to handle non-Double types (7c1e103)
+* Avoided zero divisor by substituting infinity on MSVC (8a2a822)
+* Added UTF-8 support in MSVC optimization flags and BOM handling in source files (af03628)
+* Moved the fiber declaration under a conditional so POSIX builds compile (c247aa8)
 
 ### Tests
 
@@ -125,6 +157,8 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 * Excluded load.lua from Lua file processing in run.bat (cdd7d6a)
 * Added VM boundaries tests — coroutine boundary, load()-aware assertions, and VM/clx incompatibility checks (8a4829f)
 * Added a test suite runner for dynamic loading of Lua code (a0ba7c9)
+* Added real-world compatibility tests for Lua scripts (c76153b)
+* Corrected the case of the Lua version string in an assertion (6a63d0e)
 
 ### Refactored
 
@@ -148,6 +182,9 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 * Reverted fib.lua to tree-recursive (O(2^n)) for benchmarking — tail-recursive version is O(n) and too trivial to show CLX speedup
 * Rewrote coro.lua benchmark to 5M resume/yield cycles for meaningful comparison
 * Cleaned up helper comments in runtime code (08d8000)
+* Simplified error handling by using `clx::check_table()` (d89a7e8)
+* Switched string functions, `read_all()`, and `make_file()` to `make_string_pooled()` for pooled memory management (c523b46, a18b04f)
+* Replaced direct table field setting with `clx::set_field()` for consistency (881dbf2)
 
 ### Documentation
 
@@ -163,6 +200,9 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 * Documented the `--dynamic` compiler option and the dynamic Lua feature (c99009b, 6d324dd, b7dc422, 6313cdd)
 * Fixed a typo in LICENSE (ba841cf)
 * Updated the website and documentation for API, architecture, benchmarks, CLI, and optimizations (f10535e, 0388524, 5d0ada9)
+* Refactored the documentation for better readability for end users (139b121)
+* Removed example projects from the README (221deaf)
+* Fixed the repository URL and updated feature descriptions in the README (383fb7c)
 
 ### Build
 
@@ -179,9 +219,13 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 * Skip run_load_shim.lua in the benchmark scripts and the load() benchmark loop (5b7c756, 18b75b4)
 * Increased benchmark parameters for more meaningful times (934efc4)
 * Enhanced output formatting and added load()-specific benchmarking scripts, including on Windows (cfcbf70, c3b1920, ccff011)
+* Added a skynet coroutine benchmark (44c00d5)
+* Updated benchmark results (da0f7f0, c7d34e3)
+* Removed a leftover debug script (61577de)
 
 ### Examples
 
+* Added the clx examples directory (1c77cad)
 * Improved Mandelbrot rendering and zoom functionality (2433588)
 
 ---
