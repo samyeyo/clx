@@ -60,7 +60,7 @@ local function print_summary(domain)
 end
 
 print("----------------- _VERSION")
-assert_str_eq(_VERSION, "lua 5.5", "_VERSION global")
+assert_str_eq(_VERSION, "Lua 5.5", "_VERSION global")
 
 print("\n----------------- rawequal")
 assert_true(rawequal(10, 10), "rawequal same ints")
