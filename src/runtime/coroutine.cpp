@@ -57,51 +57,40 @@ clx::MultiValue coroutine_status(clx::LState* L, const clx::LValue* args, size_t
     return clx::MultiValue(clx::string(L, "normal"));
 }
 
+static clx::MultiValue coroutine_isyieldable(LState* L, const LValue* args, size_t count)
+{
+    if (count >= 1 && is_thread(args[0])) {
+        LThread* t = static_cast<LThread*>(args[0].as_pointer());
+        return MultiValue(boolean(!t->is_main));
+    }
+    return MultiValue(boolean(!L->running_thread->is_main));
+}
+
 //------------------ coroutine_wrap: wraps a coroutine in a callable table
 static clx::MultiValue coroutine_wrap(clx::LState* L, const clx::LValue* args, size_t count)
 {
     if (count == 0 || !clx::is_function(args[0])) {
-        return clx::MultiValue();
+        clx::error(L, "bad argument #1 to 'wrap' (function expected)");
     }
-
     clx::LValue thread = clx::create_thread(L, args[0]);
-
-    clx::LValue wrapper = clx::table(L);
-    clx::set_field(L, wrapper, "_co", thread);
-
-    clx::LValue meta = clx::table(L);
-
-    clx::LValue call_closure
-        = clx::cfunction(L, [thread](LState* L2, const LValue* call_args, size_t call_arg_count) -> clx::MultiValue {
-              if (call_arg_count == 0)
-                  return clx::MultiValue();
-              const clx::LValue& self = call_args[0];
-              if (!clx::is_table(self))
-                  return clx::MultiValue();
-
-              LThread* t = static_cast<LThread*>(thread.as_pointer());
-              if (t->status == THREAD_DEAD) {
-                  return clx::MultiValue();
-              }
-
-              size_t resume_arg_count = (call_arg_count > 1) ? (call_arg_count - 1) : 0;
-              clx::MultiValue result
-                  = clx::resume(L2, thread, call_arg_count > 1 ? call_args + 1 : nullptr, resume_arg_count);
-
-              if (result.count <= 1)
-                  return clx::MultiValue();
-              std::vector<clx::LValue> ret;
-              for (size_t i = 1; i < result.count; ++i)
-                  ret.push_back(result[i]);
-              return clx::MultiValue(ret);
-          });
-
-    clx::set_field(L, meta, "__call", call_closure);
-    LTable* wrapper_t = static_cast<clx::LTable*>(wrapper.as_pointer());
-    tbl_set_metatable(wrapper_t, static_cast<clx::LTable*>(meta.as_pointer()));
-    clx::meta_list_add(L, wrapper_t);
-
-    return clx::MultiValue(wrapper);
+    return clx::MultiValue(clx::cfunction(L, [thread](LState* L2, const LValue* call_args, size_t call_arg_count) -> clx::MultiValue {
+        LThread* t = static_cast<LThread*>(thread.as_pointer());
+        if (t->status == THREAD_DEAD)
+            clx::error(L2, "cannot resume dead coroutine");
+        clx::MultiValue result = clx::resume(L2, thread, call_args, call_arg_count);
+        if (result.count == 0)
+            clx::error(L2, "cannot resume dead coroutine");
+        if (!result[0].as_bool()) {
+            throw LRuntimeException(result.count > 1 ? result[1] : LValue());
+        }
+        if (result.count <= 1)
+            return MultiValue();
+        std::vector<LValue> ret;
+        ret.reserve(result.count - 1);
+        for (size_t i = 1; i < result.count; ++i)
+            ret.push_back(result[i]);
+        return MultiValue(ret);
+    }));
 }
 
 //------------------ coroutine_running: returns the running thread
@@ -134,6 +123,7 @@ void luastd_coroutine(LState* L)
         { "status", coroutine_status },
         { "wrap", coroutine_wrap },
         { "close", coroutine_close },
+        { "isyieldable", coroutine_isyieldable },
     };
     set_lazy_funcs(L, co, coro_funcs, std::size(coro_funcs));
     clx::set_global(L, "coroutine", co);
