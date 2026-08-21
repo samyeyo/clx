@@ -326,14 +326,24 @@ MultiValue table_move(LState* L, const LValue* args, size_t count)
     return MultiValue(LValue(dst));
 }
 
+static MultiValue table_create(LState* L, const LValue* args, size_t count)
+{
+    int64_t narray = count >= 1 ? check_integer(L, args[0]) : 0;
+    int64_t nhash = count >= 2 ? check_integer(L, args[1]) : 0;
+    if (narray < 0 || nhash < 0)
+        throw_runtime_error("bad argument to 'create' (elements cannot be negative)");
+    LValue t = L->create_table(static_cast<size_t>(narray), static_cast<size_t>(nhash));
+    return MultiValue(t);
+}
+
 //------------------ luastd_table: registers the table library into the global state
 void luastd_table(LState* L)
 {
     LValue t = L->create_table();
     LTable* tbl = static_cast<LTable*>(t.as_pointer());
-    static constexpr clx::LazyReg table_funcs[]
-        = { { "concat", table_concat }, { "insert", table_insert }, { "remove", table_remove }, { "sort", table_sort },
-              { "pack", table_pack }, { "unpack", table_unpack }, { "move", table_move } };
+    static constexpr clx::LazyReg table_funcs[] = { { "concat", table_concat }, { "insert", table_insert },
+        { "remove", table_remove }, { "sort", table_sort }, { "pack", table_pack }, { "unpack", table_unpack },
+        { "move", table_move }, { "create", table_create } };
     clx::set_lazy_funcs(L, t, table_funcs, std::size(table_funcs));
     set_global(L, "table", t);
 }
