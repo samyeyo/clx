@@ -11,10 +11,10 @@
 
 namespace clx {
 
-//------------------ rng: returns thread-local Mersenne Twister RNG
-static std::mt19937& rng()
+//------------------ rng: returns thread-local 64-bit Mersenne Twister RNG
+static std::mt19937_64& rng()
 {
-    static std::mt19937 gen(std::random_device {}());
+    static std::mt19937_64 gen(std::random_device {}());
     return gen;
 }
 
@@ -23,7 +23,14 @@ static MultiValue math_abs(LState* L, const LValue* args, size_t count)
 {
     if (count == 0)
         clx::error(L, "bad argument #1 to 'abs' (number expected, got no value)");
-    return MultiValue(clx::number(std::abs(clx::check_number(L, args[0]))));
+    if (clx::is_integer(args[0])) {
+        int64_t n;
+        clx::to_integer(args[0], n);
+        if (n < 0)
+            n = static_cast<int64_t>(0u - static_cast<uint64_t>(n));
+        return MultiValue(clx::integer(n));
+    }
+    return MultiValue(clx::number(std::fabs(clx::check_number(L, args[0]))));
 }
 
 //------------------ math_acos: returns arc cosine of a number
@@ -62,7 +69,11 @@ static MultiValue math_ceil(LState* L, const LValue* args, size_t count)
         clx::error(L, "bad argument #1 to 'ceil' (number expected, got no value)");
     if (clx::is_integer(args[0]))
         return MultiValue(args[0]);
-    return MultiValue(clx::integer(static_cast<int64_t>(std::ceil(clx::check_number(L, args[0])))));
+    double d = std::ceil(clx::check_number(L, args[0]));
+    int64_t n;
+    if (clx::flt_to_integer(d, n))
+        return MultiValue(clx::integer(n));
+    return MultiValue(clx::number(d));
 }
 
 //------------------ math_cos: returns cosine of a number
@@ -96,7 +107,11 @@ static MultiValue math_floor(LState* L, const LValue* args, size_t count)
         clx::error(L, "bad argument #1 to 'floor' (number expected, got no value)");
     if (clx::is_integer(args[0]))
         return MultiValue(args[0]);
-    return MultiValue(clx::integer(static_cast<int64_t>(std::floor(clx::check_number(L, args[0])))));
+    double d = std::floor(clx::check_number(L, args[0]));
+    int64_t n;
+    if (clx::flt_to_integer(d, n))
+        return MultiValue(clx::integer(n));
+    return MultiValue(clx::number(d));
 }
 
 //------------------ math_fmod: returns remainder of x/y
@@ -104,6 +119,18 @@ static MultiValue math_fmod(LState* L, const LValue* args, size_t count)
 {
     if (count < 2)
         clx::error(L, "bad argument #2 to 'fmod' (number expected, got no value)");
+    if (clx::is_integer(args[0]) && clx::is_integer(args[1])) {
+        int64_t d;
+        clx::to_integer(args[1], d);
+        if (static_cast<uint64_t>(d) + 1u <= 1u) { /* special cases: -1 or 0 */
+            if (d == 0)
+                clx::error(L, "bad argument #2 to 'fmod' (zero)");
+            return MultiValue(clx::integer(0)); /* avoid overflow with INT64_MIN % -1 */
+        }
+        int64_t a;
+        clx::to_integer(args[0], a);
+        return MultiValue(clx::integer(a % d));
+    }
     return MultiValue(clx::number(std::fmod(clx::check_number(L, args[0]), clx::check_number(L, args[1]))));
 }
 
@@ -163,17 +190,6 @@ static MultiValue math_tan(LState* L, const LValue* args, size_t count)
     return MultiValue(clx::number(std::tan(clx::check_number(L, args[0]))));
 }
 
-//------------------ math_tointeger: converts number to integer if possible
-static MultiValue math_tointeger(LState* L, const LValue* args, size_t count)
-{
-    if (count == 0)
-        return MultiValue();
-    int64_t i;
-    if (to_integer(args[0], i))
-        return MultiValue(clx::integer(i));
-    return MultiValue();
-}
-
 //------------------ math_frexp: breaks float into mantissa and exponent
 static MultiValue math_frexp(LState* L, const LValue* args, size_t count)
 {
@@ -199,7 +215,7 @@ static MultiValue math_log(LState* L, const LValue* args, size_t count)
     if (count == 0)
         clx::error(L, "bad argument #1 to 'log' (number expected, got no value)");
     double x = clx::check_number(L, args[0]);
-    if (count > 1) {
+    if (count > 1 && args[1].type != ValueType::Nil) {
         double base = clx::check_number(L, args[1]);
         return MultiValue(clx::number(std::log(x) / std::log(base)));
     }
@@ -211,10 +227,23 @@ static MultiValue math_modf(LState* L, const LValue* args, size_t count)
 {
     if (count == 0)
         clx::error(L, "bad argument #1 to 'modf' (number expected, got no value)");
+    if (clx::is_integer(args[0]))
+        return MultiValue({ args[0], clx::number(0.0) });
     double x = clx::check_number(L, args[0]);
     double intpart;
     double fracpart = std::modf(x, &intpart);
     return MultiValue({ clx::number(intpart), clx::number(fracpart) });
+}
+
+//------------------ math_tointeger: converts number to integer if possible
+static MultiValue math_tointeger(LState* L, const LValue* args, size_t count)
+{
+    if (count == 0)
+        clx::error(L, "bad argument #1 to 'tointeger' (value expected)");
+    int64_t i;
+    if (clx::to_integer(args[0], i))
+        return MultiValue(clx::integer(i));
+    return MultiValue();
 }
 
 //------------------ math_random: returns pseudo-random number
@@ -228,7 +257,8 @@ static MultiValue math_random(LState* L, const LValue* args, size_t count)
     int64_t m = clx::check_integer(L, args[0]);
     if (count == 1) {
         if (m == 0) {
-            std::uniform_int_distribution<int64_t> dist;
+            std::uniform_int_distribution<int64_t> dist(std::numeric_limits<int64_t>::min(),
+                std::numeric_limits<int64_t>::max());
             return MultiValue(clx::integer(dist(gen)));
         }
         if (m > 0) {
@@ -251,14 +281,14 @@ static MultiValue math_randomseed(LState* L, const LValue* args, size_t count)
     if (count == 0) {
         std::random_device rd;
         uint64_t seed = (static_cast<uint64_t>(rd()) << 32) ^ rd();
-        gen.seed(static_cast<std::mt19937::result_type>(seed));
+        gen.seed(seed);
         return MultiValue({ clx::integer(static_cast<int64_t>(seed >> 32)),
             clx::integer(static_cast<int64_t>(seed & 0xFFFFFFFFULL)) });
     }
     int64_t x = clx::check_integer(L, args[0]);
     int64_t y = (count > 1) ? clx::check_integer(L, args[1]) : 0;
     uint64_t seed = (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) | static_cast<uint32_t>(y);
-    gen.seed(static_cast<std::mt19937::result_type>(seed));
+    gen.seed(seed);
     return MultiValue({ clx::integer(x), clx::integer(y) });
 }
 
