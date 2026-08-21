@@ -9,6 +9,7 @@
 #define CLX_RUNTIME_H
 
 
+#include <cerrno>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -183,6 +184,10 @@ struct LValue;
 
 //------------------ Binary metamethod dispatcher
 LValue call_bin_metamethod(LState* L, const LValue& a, const LValue& b, const char* event);
+
+//------------------ Float/int string coercions (defined later in this header)
+bool flt_to_integer(double d, int64_t& out);
+bool parse_num_string(const char* s, double& out);
 
 //------------------ 8-byte value payload --- pure data, no type bits
 union alignas(8) TValuePayload {
@@ -363,11 +368,8 @@ struct LValue {
             out = static_cast<double>(val.payload.i64);
             return true;
         }
-        if (type == ValueType::String) {
-            char* end;
-            out = std::strtod(as_string(), &end);
-            return end != as_string();
-        }
+        if (type == ValueType::String)
+            return parse_num_string(as_string(), out);
         return false;
     }
 
@@ -435,7 +437,7 @@ static_assert(sizeof(LValue) == 16, "LValue must be 16 bytes");
 
 //------------------ Multi-value return container
 struct MultiValue {
-    static constexpr size_t INLINE_CAP = 3;
+    static constexpr size_t INLINE_CAP = 4;
     size_t count = 0;
     clx::LValue* overflow = nullptr;
     LState* alloc_L = nullptr;
@@ -1167,7 +1169,10 @@ struct LState {
 
     enum class GCPhase : uint8_t { Idle,
         Sweeping };
+    enum class GCMode : uint8_t { Incremental,
+        Generational };
     GCPhase gc_phase = GCPhase::Idle;
+    GCMode gc_mode = GCMode::Incremental;
     LHeader* gc_sweep_cursor = nullptr;
     LHeader* gc_prev = nullptr;
     LHeader* gc_finalizable = nullptr;
@@ -1177,6 +1182,9 @@ struct LState {
     int gc_pause = 200;
     int gc_stepmul = 200;
     int gc_stepsize = 13;
+    int gc_minormul = 20;
+    int gc_majorminor = 0;
+    int gc_minormajor = 0;
     void collect_garbage();
     bool gc_step();
     void invoke_gc_finalizer(LUserdata* ud, const char* tag);
@@ -1838,6 +1846,30 @@ CLX_INLINE_HOT LValue eq(LState* L, const LValue& a, const LValue& b)
     return call_bin_metamethod(L, a, b, "__eq");
 }
 
+//------------------ Float to integer conversion (integral + in int64 range)
+CLX_INLINE bool flt_to_integer(double d, int64_t& out)
+{
+    if (std::floor(d) == d && d >= -9.223372036854775808e18 && d < 9.223372036854775808e18) {
+        out = static_cast<int64_t>(d);
+        return true;
+    }
+    return false;
+}
+
+//------------------ Full-parse a numeric string (Lua tonumber/toint semantics).
+CLX_INLINE bool parse_num_string(const char* s, double& out)
+{
+    if (std::strpbrk(s, "nN") != nullptr)
+        return false;
+    char* end;
+    errno = 0;
+    double d = std::strtod(s, &end);
+    if (end == s || *end != '\0')
+        return false;
+    out = d;
+    return true;
+}
+
 //------------------ Safe integer conversion (no metamethods)
 CLX_INLINE bool to_integer(const LValue& v, int64_t& out)
 {
@@ -1845,12 +1877,12 @@ CLX_INLINE bool to_integer(const LValue& v, int64_t& out)
         out = v.val.payload.i64;
         return true;
     }
-    if (v.type == ValueType::Double) {
-        double d = v.val.payload.f64;
-        if (std::floor(d) == d) {
-            out = static_cast<int64_t>(d);
-            return true;
-        }
+    if (v.type == ValueType::Double)
+        return flt_to_integer(v.val.payload.f64, out);
+    if (v.type == ValueType::String) {
+        double d;
+        if (parse_num_string(v.as_string(), d))
+            return flt_to_integer(d, out);
     }
     return false;
 }
