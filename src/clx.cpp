@@ -10,7 +10,9 @@
 #endif
 
 #include <array>
+#include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -18,6 +20,7 @@
 #include <string>
 #include <vector>
 #ifndef _WIN32
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 #ifdef __APPLE__
@@ -180,12 +183,13 @@ std::string execute(const std::string& cmd, int& out_code)
     while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
         result += buffer.data();
     }
-    out_code = pclose(pipe);
+    int status = pclose(pipe);
+    out_code = WIFEXITED(status) ? WEXITSTATUS(status) : status;
 #endif
     return result;
 }
 
-//------------------ CLX: get_compiler - returns the compiler used to build clx (embedded at build time)
+//------------------ CLX: get_compiler - resolve the C++ compiler: CLX_CXX environment
 Compiler get_compiler()
 {
 #ifndef CLX_DEFAULT_CXX
@@ -194,6 +198,21 @@ Compiler get_compiler()
 #ifndef CLX_DEFAULT_CXX_NAME
 #error "CLX_DEFAULT_CXX_NAME not defined — rebuild with CMake"
 #endif
+    if (const char* env = std::getenv("CLX_CXX"); env && *env) {
+        std::string base = fs::path(env).filename().string();
+        for (auto& c : base)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        bool msvc_style = base.rfind("cl", 0) == 0;
+        return { msvc_style ? std::string("MSVC") : std::string("Clang"), std::string(env) };
+    }
+    fs::path embedded(CLX_DEFAULT_CXX);
+    if (embedded.is_absolute() && !fs::exists(embedded)) {
+#ifdef _WIN32
+        return { "MSVC", "cl" };
+#else
+        return { CLX_DEFAULT_CXX_NAME, "c++" };
+#endif
+    }
     return { CLX_DEFAULT_CXX_NAME, CLX_DEFAULT_CXX };
 }
 
@@ -539,7 +558,7 @@ int main(int argc, char* argv[])
     // --- Runtime library link line, from the same lib roots.
     {
 #ifdef _WIN32
-        std::string lib_file = "clx.lib";
+        std::string lib_file = size_mode ? "clx_size.lib" : "clx.lib";
         fs::path lib_path;
         bool found = false;
         for (const auto& root : lib_roots) {
@@ -803,7 +822,17 @@ int main(int argc, char* argv[])
     std::string output = execute(cmd, exit_code);
 
     if (exit_code != 0) {
-        std::cerr << output << std::endl;
+        if (output.empty()) {
+            std::cerr << "clx: could not run C++ compiler: \"" << cc.cmd << "\"\n";
+#ifdef _WIN32
+            std::cerr << "clx: install Visual Studio Build Tools and run from an \"x64 Native Tools Command"
+                         " Prompt\", or set CLX_CXX to a C++ compiler.\n";
+#else
+            std::cerr << "clx: install a C++ toolchain or set CLX_CXX to a C++ compiler.\n";
+#endif
+        } else {
+            std::cerr << output << std::endl;
+        }
         for (const auto& f : cpp_files) {
             fs::remove(f);
             fs::path base = fs::path(f).parent_path() / fs::path(f).stem();
