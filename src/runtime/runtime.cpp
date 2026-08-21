@@ -327,9 +327,10 @@ const char* LRuntimeException::what() const noexcept
 //------------------ LValue::to_string — convert value to string
 std::string LValue::to_string(LState* L) const
 {
-    if (L && type == Table) {
-        LTable* t = static_cast<LTable*>(as_pointer());
-        if (LTable* mt = tbl_metatable(t)) {
+    if (L && (type == Table || type == UserData)) {
+        LTable* mt = (type == Table) ? tbl_metatable(static_cast<LTable*>(as_pointer()))
+                                     : static_cast<LUserdata*>(as_pointer())->metatable;
+        if (mt) {
             LValue meta_key = L->str_tostring;
             LValue meta_func = mt->gettable(meta_key);
 
