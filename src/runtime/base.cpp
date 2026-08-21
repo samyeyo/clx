@@ -54,6 +54,9 @@ clx::MultiValue lua_xpcall(clx::LState* L, const clx::LValue* args, size_t count
     clx::LValue func = args[0];
     clx::LValue msgh = args[1];
 
+    if (args[1].type != clx::ValueType::Function)
+        clx::error(L, "bad argument #2 to 'xpcall' (function expected, got no value)");
+
     size_t arg_count = count - 2;
     const clx::LValue* func_args = (arg_count > 0) ? (args + 2) : nullptr;
 
@@ -168,34 +171,38 @@ MultiValue collectgarbage(LState* L, const LValue* args, size_t arg_count)
         return MultiValue(clx::boolean(finished));
     }
     if (opt == "incremental") {
+        L->gc_mode = LState::GCMode::Incremental;
         return MultiValue(clx::string(L, "incremental"));
     }
     if (opt == "generational") {
-
-        return MultiValue(clx::string(L, "incremental"));
+        L->gc_mode = LState::GCMode::Incremental; /* incremental-only collector */
+        return MultiValue(clx::string(L, "generational"));
     }
     if (opt == "param") {
         if (arg_count < 2)
-            return MultiValue(clx::number(0.0));
+            clx::error(L, "bad argument #2 to 'collectgarbage' (option expected)");
         std::string_view param = clx::check_string(L, args[1]);
-        int old_val = 0;
+        int* target = nullptr;
+        int old_val;
         if (param == "pause")
-            old_val = L->gc_pause;
+            target = &L->gc_pause;
         else if (param == "stepmul")
-            old_val = L->gc_stepmul;
+            target = &L->gc_stepmul;
         else if (param == "stepsize")
-            old_val = L->gc_stepsize;
+            target = &L->gc_stepsize;
+        else if (param == "minormul")
+            target = &L->gc_minormul;
+        else if (param == "majorminor")
+            target = &L->gc_majorminor;
+        else if (param == "minormajor")
+            target = &L->gc_minormajor;
         else
-            return MultiValue(clx::number(0.0));
+            clx::error(L, "bad option parameter to 'collectgarbage'");
+        old_val = *target;
         if (arg_count >= 3) {
             int new_val = static_cast<int>(clx::check_integer(L, args[2]));
             new_val = std::clamp(new_val, 0, 100000);
-            if (param == "pause")
-                L->gc_pause = new_val;
-            else if (param == "stepmul")
-                L->gc_stepmul = new_val;
-            else if (param == "stepsize")
-                L->gc_stepsize = new_val;
+            *target = new_val;
         }
         return MultiValue(clx::integer(old_val));
     }
@@ -218,7 +225,7 @@ static MultiValue type(LState* L, const LValue* args, size_t count)
 static MultiValue assert(LState* L, const LValue* args, size_t count)
 {
     if (count == 0 || !clx::to_boolean(args[0])) {
-        if (count > 1 && clx::is_string(args[1]))
+        if (count > 1)
             throw LRuntimeException(args[1]);
         clx::error(L, "assertion failed!");
     }
@@ -289,7 +296,7 @@ static MultiValue tonumber(LState* L, const LValue* args, size_t count)
 static MultiValue lua_rawequal(LState* L, const LValue* args, size_t count)
 {
     if (count < 2)
-        return MultiValue(clx::boolean(false));
+        clx::error(L, "bad argument to 'rawequal' (2 values expected)");
     return MultiValue(clx::boolean(clx::rawequal(args[0], args[1])));
 }
 
@@ -318,6 +325,8 @@ static MultiValue lua_rawlen(LState* L, const LValue* args, size_t count)
     if (count < 1) {
         clx::error(L, "bad argument #1 to 'rawlen' (value expected)");
     }
+    if (args[0].type != ValueType::Table && args[0].type != ValueType::String)
+        clx::error(L, "bad argument #1 to 'rawlen' (table or string expected)");
     return MultiValue(clx::integer(clx::rawlen(args[0])));
 }
 
@@ -391,7 +400,7 @@ static MultiValue pairs(LState* L, const LValue* args, size_t count)
         }
     }
 
-    return MultiValue({ get_global(L, "next"), t, LValue() });
+    return MultiValue({ get_global(L, "next"), t, LValue(), LValue() }, L);
 }
 
 //------------------ clx_select: selects a range of arguments (global select function)
@@ -405,7 +414,7 @@ static clx::MultiValue select(clx::LState* L, const clx::LValue* args, size_t ar
 
     if (clx::is_string(arg1)) {
         if (std::string_view(arg1.as_string()) == "#") {
-            return clx::MultiValue(clx::number(static_cast<double>(arg_count - 1)));
+            return clx::MultiValue(clx::integer(static_cast<int64_t>(arg_count) - 1));
         }
     }
 
@@ -457,8 +466,8 @@ static MultiValue ipairs_iter(LState* L, const LValue* args, size_t count)
     }
 
     if (val.type == Nil)
-        return MultiValue();
-    return MultiValue({ clx::number(static_cast<double>(idx)), val });
+        return MultiValue(clx::LValue());
+    return MultiValue({ clx::integer(idx), val });
 }
 
 //------------------ clx_ipairs: returns iterator for array traversal (global ipairs function)
@@ -503,7 +512,7 @@ void luastd_base(LState* L)
             { "getmetatable", lua_getmetatable }, { "collectgarbage", collectgarbage }, { "type", type },
             { "pcall", lua_pcall }, { "xpcall", lua_xpcall }, { "warn", warn }, { "next", lua_next },
             { "pairs", pairs }, { "ipairs", ipairs }, { "select", select } });
-    clx::set_field(L, g, "_VERSION", clx::string(L, "lua 5.5"));
+    clx::set_field(L, g, "_VERSION", clx::string(L, "Lua 5.5"));
 }
 
 }
