@@ -24,16 +24,19 @@ jobs:
             artifact: clx-linux-x86_64
             binary: clx
             exe_ext: ""
+            format: tar.gz
           - name: windows-x86_64
             os: windows-latest
             artifact: clx-windows-x86_64
             binary: clx.exe
             exe_ext: ".exe"
+            format: zip
           - name: macos-arm64
             os: macos-latest
             artifact: clx-macos-arm64
             binary: clx
             exe_ext: ""
+            format: tar.gz
 
 
     steps:
@@ -57,7 +60,6 @@ jobs:
           cp -f build/libclx.a build/libclx_size.a staging/$FOLDER/lib/
           cp -f build/clx_lua/libclx_lua.a staging/$FOLDER/lib/ 2>/dev/null || true
           tar czf $FOLDER.tar.gz -C staging $FOLDER
-          (cd staging && zip -r ../$FOLDER.zip $FOLDER)
 
       - name: Archive (Windows)
         if: runner.os == 'Windows'
@@ -75,9 +77,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: |
-            ${{ matrix.artifact }}.tar.gz
-            ${{ matrix.artifact }}.zip
+          path: ${{ matrix.artifact }}.${{ matrix.format }}
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

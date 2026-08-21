@@ -554,7 +554,7 @@ int main(int argc, char* argv[])
                 break;
             }
         }
-        // Portable in-tree layout: build outputs in <project>/lib (from CMAKE_ARCH_OUTPUT_DIRECTORY).
+        // Portable in-tree layout: build outputs in <project>/lib (from CMAKE_ARCHIVE_OUTPUT_DIRECTORY).
         if (!found) {
             lib_path = build_root / "lib" / lib_file;
             if (fs::exists(lib_path))
