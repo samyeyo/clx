@@ -193,6 +193,8 @@ static MultiValue math_tan(LState* L, const LValue* args, size_t count)
 //------------------ math_frexp: breaks float into mantissa and exponent
 static MultiValue math_frexp(LState* L, const LValue* args, size_t count)
 {
+    if (count == 0)
+        clx::error(L, "bad argument #1 to 'frexp' (number expected, got no value)");
     double x = clx::check_number(L, args[0]);
     int e;
     double m = std::frexp(x, &e);
