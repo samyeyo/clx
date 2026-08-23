@@ -199,6 +199,12 @@ void Lexer::advance()
         if (pos + eq < src.length() && src[pos + eq] == '[') {
             size_t close_eq = eq;
             pos += eq + 1;
+            if (pos < src.length() && src[pos] == '\r')
+                pos++;
+            if (pos < src.length() && src[pos] == '\n') {
+                pos++;
+                current_line++;
+            }
             size_t start = pos;
             std::string close;
             close += ']';
