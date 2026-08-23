@@ -782,12 +782,11 @@ void CodeEmitter::emit_native(uint32_t n_idx)
                 return;
             }
             if (state.bce_safe_nodes.count(n_idx)) {
-                out << "([&](){ auto* _t" << n_idx << " = static_cast<clx::LTable*>((";
+                out << "([&](){ clx::LValue _tb" << n_idx << " = ";
                 emit_node(n.as.table_access.table);
-                out << ").as_pointer()); size_t _k" << n_idx << " = static_cast<size_t>(";
+                out << "; return clx::table_get_int(L, _tb" << n_idx << ", static_cast<size_t>(";
                 emit_native(n.as.table_access.key);
-                out << "); return clx::LValue(_t" << n_idx << "->array[_k" << n_idx << " - 1], _t" << n_idx
-                    << "->array_types[_k" << n_idx << " - 1]).as_number(); }())";
+                out << ")).as_number(); }())";
                 return;
             }
             bool pure_t = ctx.nodes[n.as.table_access.table].type == NodeType::Identifier;
@@ -2541,17 +2540,16 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
                     out << "0.0";
                 out << "; }\n";
             } else if (state.bce_safe_nodes.count(t_idx)) {
-                out << "{ auto* _t" << t_idx << " = static_cast<clx::LTable*>((";
+                out << "{ clx::LValue _tb" << t_idx << " = ";
                 emit_node(t_node.as.table_access.table);
-                out << ").as_pointer()); size_t _k" << t_idx << " = static_cast<size_t>(";
-                emit_native(t_node.as.table_access.key);
-                out << ") - 1; auto _sv" << t_idx << " = ";
+                out << "; clx::LValue _sv" << t_idx << " = ";
                 if (v_count > 0)
                     emit_node(ctx.block_statements[first_v]);
                 else
                     out << "clx::LValue()";
-                out << "; _t" << t_idx << "->array[_k" << t_idx << "] = _sv" << t_idx << ".val; _t" << t_idx
-                    << "->array_types[_k" << t_idx << "] = _sv" << t_idx << ".type; }\n";
+                out << "; clx::table_set_int(L, _tb" << t_idx << ", static_cast<size_t>(";
+                emit_native(t_node.as.table_access.key);
+                out << "), _sv" << t_idx << "); }\n";
             } else {
                 bool key_is_native = false;
                 uint32_t k_idx = t_node.as.table_access.key;
@@ -2978,12 +2976,11 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
                 emit_native(t_node.as.table_access.key);
                 out << ") - 1] = " << num_str << ";\n";
             } else if (state.bce_safe_nodes.count(t_idx)) {
-                out << "{ auto* _t" << t_idx << " = static_cast<clx::LTable*>((";
+                out << "{ clx::LValue _tb" << t_idx << " = ";
                 emit_node(t_node.as.table_access.table);
-                out << ").as_pointer()); size_t _k" << t_idx << " = static_cast<size_t>(";
+                out << "; clx::table_set_int(L, _tb" << t_idx << ", static_cast<size_t>(";
                 emit_native(t_node.as.table_access.key);
-                out << ") - 1; _t" << t_idx << "->array[_k" << t_idx << "] = " << val_str << ".val; _t" << t_idx
-                    << "->array_types[_k" << t_idx << "] = " << val_str << ".type; }\n";
+                out << "), " << val_str << "); }\n";
             } else {
                 bool key_is_native = false;
                 uint32_t k_idx = t_node.as.table_access.key;
@@ -4191,12 +4188,11 @@ void CodeEmitter::emitTableAccess(const ASTNode& node, uint32_t node_idx)
         return;
     }
     if (state.bce_safe_nodes.count(node_idx)) {
-        out << "([&](){ auto* _tb" << node_idx << " = static_cast<clx::LTable*>((";
+        out << "([&](){ clx::LValue _tb" << node_idx << " = ";
         emit_node(node.as.table_access.table);
-        out << ").as_pointer()); size_t _ki" << node_idx << " = static_cast<size_t>(";
+        out << "; return clx::table_get_int(L, _tb" << node_idx << ", static_cast<size_t>(";
         emit_native(node.as.table_access.key);
-        out << "); return clx::LValue(_tb" << node_idx << "->array[_ki" << node_idx << " - 1], _tb" << node_idx
-            << "->array_types[_ki" << node_idx << " - 1]); }())";
+        out << ")); }())";
     } else {
         bool key_is_native = false;
         uint32_t k_idx = node.as.table_access.key;
