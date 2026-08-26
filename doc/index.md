@@ -5,6 +5,7 @@ extending clx, the Lua to native compiler.
 
 ## Getting started
 
+- **[Installation](./install.md)** - Build from source, pre-built binaries, and `CLX_ARCH` target selection
 - **[Getting Started](./getting-started.md)** - Your first program and a tour of the language
 - **[CLI Reference](./cli.md)** - All the command-line options
 - **[Lua modules](./modules.md)** - Splitting your project across files, plus native C++ modules

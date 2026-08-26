@@ -1266,6 +1266,43 @@
                 </div>
 
                 <div class="doc-section">
+                    <h3>Target architecture (<span class="inline-code">CLX_ARCH</span>)</h3>
+                    <p>By default clx targets the widest compatibility baseline: <span class="inline-code">sse2</span> on x86_64 (<span class="inline-code">-msse2</span> / <span class="inline-code">/arch:SSE2</span>) and <span class="inline-code">native</span> on ARM64 (<span class="inline-code">-mcpu=native</span>). The same flag is baked into the runtime libraries and injected into every binary clx compiles (including <span class="inline-code">--debug</span> builds), unless you override it with an explicit compiler flag.</p>
+                    <p>Override at configure time:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">sh</span><span>x86 / ARM</span></div>
+                        <div class="code-body"><span class="comment"># x86: sse2 (default) | avx | avx2 | native</span>
+<span class="prompt">$</span> cmake -S . -B build -DCLX_ARCH=avx2 &amp;&amp; cmake --build build
+
+<span class="comment"># ARM: native (default) | generic (portable, no -mcpu flag)</span>
+<span class="prompt">$</span> cmake -S . -B build -DCLX_ARCH=generic &amp;&amp; cmake --build build
+
+<span class="comment"># Optimize for the build machine</span>
+<span class="prompt">$</span> cmake -S . -B build -DCLX_ARCH=native &amp;&amp; cmake --build build</div>
+                    </div>
+                    <div class="bench-wrap">
+                        <table class="bench-table">
+                            <thead>
+                                <tr>
+                                    <th><span class="inline-code">CLX_ARCH</span></th>
+                                    <th>x86 flag (Clang/GCC)</th>
+                                    <th>x86 flag (MSVC)</th>
+                                    <th>ARM flag</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr><td><span class="inline-code">sse2</span> (x86 default)</td><td><span class="inline-code">-msse2</span></td><td><span class="inline-code">/arch:SSE2</span></td><td>—</td></tr>
+                                <tr><td><span class="inline-code">avx</span></td><td><span class="inline-code">-mavx</span></td><td><span class="inline-code">/arch:AVX</span></td><td>—</td></tr>
+                                <tr><td><span class="inline-code">avx2</span></td><td><span class="inline-code">-mavx2</span></td><td><span class="inline-code">/arch:AVX2</span></td><td>—</td></tr>
+                                <tr><td><span class="inline-code">native</span></td><td><span class="inline-code">-march=native</span></td><td><span class="inline-code">/arch:AVX2</span></td><td><span class="inline-code">-mcpu=native</span> (ARM default)</td></tr>
+                                <tr><td><span class="inline-code">generic</span></td><td>—</td><td>—</td><td><em>no flag, portable</em></td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p>If you pass an explicit arch flag to <span class="inline-code">clx</span> itself, it takes precedence and the <span class="inline-code">CLX_ARCH</span> default is not added: <span class="inline-code">clx file.lua -march=native</span>.</p>
+                </div>
+
+                <div class="doc-section">
                     <h3>Verify installation</h3>
                     <div class="code-block">
                         <div class="code-header"><span class="lang">sh</span><span>Verify</span></div>
