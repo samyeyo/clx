@@ -369,6 +369,31 @@ int main(int argc, char* argv[])
         msvc_opt_flags = "/O2 /Ot /GL /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy /utf-8";
     }
 
+#ifndef CLX_ARCH_GCC_FLAG
+#define CLX_ARCH_GCC_FLAG ""
+#endif
+#ifndef CLX_ARCH_MSVC_FLAG
+#define CLX_ARCH_MSVC_FLAG ""
+#endif
+    {
+        std::string clx_arch_gcc = CLX_ARCH_GCC_FLAG;
+        std::string clx_arch_msvc = CLX_ARCH_MSVC_FLAG;
+        bool user_overrode_arch = cc_options_str.find("-mavx") != std::string::npos
+            || cc_options_str.find("-msse") != std::string::npos
+            || cc_options_str.find("-march=") != std::string::npos
+            || cc_options_str.find("-mcpu=") != std::string::npos
+            || cc_options_str.find("/arch:") != std::string::npos
+            || cc_options_str.find("-arch") != std::string::npos;
+        if (!user_overrode_arch) {
+            if (!clx_arch_gcc.empty()) {
+                opt_flags += " " + clx_arch_gcc;
+            }
+            if (!clx_arch_msvc.empty()) {
+                msvc_opt_flags += " " + clx_arch_msvc;
+            }
+        }
+    }
+
     std::string output_name
         = custom_output_name.empty() ? fs::path(input_files[0]).stem().string() : custom_output_name;
 
