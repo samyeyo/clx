@@ -60,7 +60,7 @@ void clx_coro_init(CoroutineContext* ctx, void* stack_top, void* entry);
 #define CLX_MUSTTAIL
 #elif __has_builtin(__builtin_musttail)
 #define CLX_MUSTTAIL [[clang::musttail]]
-#elif defined(__GNUC__) && defined(__has_cpp_attribute) && __has_cpp_attribute(gnu::musttail)
+#elif defined(__GNUC__) && __has_cpp_attribute(gnu::musttail) && !defined(__aarch64__)
 #define CLX_MUSTTAIL [[gnu::musttail]]
 #else
 #define CLX_MUSTTAIL
