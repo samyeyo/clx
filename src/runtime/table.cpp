@@ -279,12 +279,12 @@ MultiValue table_unpack(LState* L, const LValue* args, size_t count)
         LValue vals[8];
         for (size_t k = 0; k < n; ++k)
             vals[k] = get_elem(list, i + k);
-        return MultiValue(vals, n);
+        return MultiValue(vals, n, L);
     }
     LValue* vals = new LValue[n];
     for (size_t k = 0; k < n; ++k)
         vals[k] = get_elem(list, i + k);
-    MultiValue res(vals, n);
+    MultiValue res(vals, n, L);
     delete[] vals;
     return res;
 }

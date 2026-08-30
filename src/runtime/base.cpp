@@ -73,7 +73,7 @@ clx::MultiValue lua_xpcall(clx::LState* L, const clx::LValue* args, size_t count
         results.push_back(clx::boolean(true));
         for (size_t i = 0; i < ret.count; ++i)
             results.push_back(ret[i]);
-        return clx::MultiValue(results);
+        return clx::MultiValue(results, L);
 
     } catch (const clx::LRuntimeException& e) {
         clx::LValue err_obj = e.error_obj;
@@ -229,7 +229,7 @@ static MultiValue assert(LState* L, const LValue* args, size_t count)
             throw LRuntimeException(args[1]);
         clx::error(L, "assertion failed!");
     }
-    return MultiValue(args, count);
+    return MultiValue(args, count, L);
 }
 
 //------------------ clx_tostring: converts value to string (global tostring function)
@@ -443,7 +443,7 @@ static clx::MultiValue select(clx::LState* L, const clx::LValue* args, size_t ar
         ret_vals.push_back(args[i]);
     }
 
-    return clx::MultiValue(ret_vals);
+    return clx::MultiValue(ret_vals, L);
 }
 
 //------------------ clx_ipairs_iter: iterator function for ipairs traversal

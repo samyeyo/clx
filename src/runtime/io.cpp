@@ -253,7 +253,7 @@ static MultiValue file_read_args(LState* L, FileUd* f, const LValue* a, size_t c
             }
         }
     }
-    return MultiValue(results.data(), results.size());
+    return MultiValue(results.data(), results.size(), L);
 }
 
 static void file_write_args(LState* L, FileUd* f, const LValue* a, size_t c, bool lenient = false)
@@ -700,7 +700,7 @@ static MultiValue io_read(LState* L, const LValue* args, size_t count)
             }
         }
     }
-    return MultiValue(results.data(), results.size());
+    return MultiValue(results.data(), results.size(), L);
 }
 
 static MultiValue io_write(LState* L, const LValue* args, size_t count)

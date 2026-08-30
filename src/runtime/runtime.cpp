@@ -220,7 +220,7 @@ LValue create_thread(LState* L, const LValue& func, double stack_size)
 MultiValue resume(LState* L, const LValue& thread, const LValue* args, size_t count)
 {
     LThread* t = static_cast<LThread*>(thread.as_pointer());
-    t->resume_args = MultiValue(args, count);
+    t->resume_args = MultiValue(args, count, L);
     t->caller = L->running_thread;
     t->caller->status = THREAD_NORMAL;
     t->status = THREAD_RUNNING;
@@ -257,7 +257,7 @@ MultiValue yield(LState* L, const LValue* args, size_t count)
     LThread* t = L->running_thread;
     if (t->is_main)
         clx::error(L, "attempt to yield from outside a coroutine");
-    t->yield_args = MultiValue(args, count);
+    t->yield_args = MultiValue(args, count, L);
     t->status = THREAD_SUSPENDED;
 
     LThread* caller = t->caller;
@@ -1711,7 +1711,7 @@ MultiValue pcall_function(LState* L, const LValue& func, const LValue* args, siz
         results.push_back(LValue(true));
         for (size_t i = 0; i < ret.count; ++i)
             results.push_back(ret[i]);
-        return MultiValue(results);
+        return MultiValue(results, L);
     } catch (const LRuntimeException& e) {
 
         LValue err_val = LValue(L->intern_string(e.what()));

@@ -18,6 +18,7 @@
 #include <initializer_list>
 #include <iostream>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -1195,6 +1196,8 @@ struct LState {
 
     CLX_INLINE_HOT LValue* alloc_overflow(size_t n)
     {
+        if (!this)
+            throw std::runtime_error("clx: alloc_overflow called on a null LState");
         if (overflow_heap_used + n > overflow_heap_cap) {
             size_t new_cap = overflow_heap_cap ? overflow_heap_cap * 2 : 64;
             while (new_cap < overflow_heap_used + n)
@@ -1245,6 +1248,12 @@ inline std::string file_line_prefix(LState* L)
 
 inline void MultiValue::overflow_init(const clx::LValue* arr, size_t c)
 {
+    // A MultiValue built from an array larger than INLINE_CAP must carry a non-null LState
+    // (from the 3rd constructor arg). A missing L would dereference nullptr here; throw a
+    // catchable exception instead of letting pcall see a raw SIGSEGV.
+    if (!alloc_L)
+        throw std::runtime_error(
+            "clx: MultiValue overflow requires an LState; pass L when returning more than 4 values");
     overflow = alloc_L->alloc_overflow(c - INLINE_CAP);
     for (size_t i = INLINE_CAP; i < c; ++i)
         overflow[i - INLINE_CAP] = arr[i];

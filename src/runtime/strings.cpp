@@ -247,7 +247,7 @@ MultiValue str_byte(LState* L, const LValue* args, size_t count)
         vals_ptr[i] = LValue(static_cast<int64_t>((unsigned char)s[posi + i - 1]));
     if (n == 1)
         return MultiValue(vals_ptr[0]);
-    return MultiValue(vals_ptr, n);
+    return MultiValue(vals_ptr, n, L);
 }
 
 //------------------ str_char — string.char: build string from byte values
@@ -914,7 +914,7 @@ static MultiValue str_find_aux(LState* L, const LValue* args, size_t count, int 
                         results[rc++] = (capl == CAP_POSITION) ? LValue(static_cast<int64_t>((cap - s) + 1))
                                                                : L->intern_lvalue(cap, (size_t)capl);
                     }
-                    return MultiValue(results, rc);
+                    return MultiValue(results, rc, L);
                 } else {
                     int nlevels = (ms.level == 0) ? 1 : ms.level;
                     LValue results[LUA_MAXCAPTURES];
@@ -925,7 +925,7 @@ static MultiValue str_find_aux(LState* L, const LValue* args, size_t count, int 
                         results[rc++] = (capl == CAP_POSITION) ? LValue(static_cast<int64_t>((cap - s) + 1))
                                                                : L->intern_lvalue(cap, (size_t)capl);
                     }
-                    return MultiValue(results, rc);
+                    return MultiValue(results, rc, L);
                 }
             }
             s1++;
@@ -976,7 +976,7 @@ static MultiValue gmatch_aux(LState* L, const LValue* args, size_t count, void* 
             }
             if (rc == 1)
                 return MultiValue(results[0]);
-            return MultiValue(results, rc);
+            return MultiValue(results, rc, L);
         }
     }
     return MultiValue();
@@ -1602,7 +1602,7 @@ MultiValue str_unpack(LState* L, const LValue* args, size_t count)
         pos += size;
     }
     results.push_back(LValue(static_cast<int64_t>(pos + 1)));
-    return MultiValue(results.data(), results.size());
+    return MultiValue(results.data(), results.size(), L);
 }
 
 //------------------ luastd_string — register string library and metatable

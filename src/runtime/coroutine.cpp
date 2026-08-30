@@ -22,12 +22,12 @@ clx::MultiValue coroutine_resume(clx::LState* L, const clx::LValue* args, size_t
 {
     if (count == 0 || !clx::is_thread(args[0])) {
         clx::LValue r[2] = { clx::boolean(false), clx::string(L, "bad argument #1 to 'resume' (thread expected)") };
-        return clx::MultiValue(r, 2);
+        return clx::MultiValue(r, 2, L);
     }
     LThread* t = static_cast<LThread*>(args[0].as_pointer());
     if (t->status == THREAD_DEAD) {
         clx::LValue r[2] = { clx::boolean(false), clx::string(L, "cannot resume dead coroutine") };
-        return clx::MultiValue(r, 2);
+        return clx::MultiValue(r, 2, L);
     }
 
     clx::LValue thread_val = args[0];
@@ -98,7 +98,7 @@ clx::MultiValue coroutine_running(clx::LState* L, const clx::LValue* args, size_
 {
     clx::LThread* t = L->running_thread;
     clx::LValue r[2] = { clx::thread(t), clx::boolean(t->is_main) };
-    return clx::MultiValue(r, 2);
+    return clx::MultiValue(r, 2, L);
 }
 
 //------------------ coroutine_close: closes a coroutine
@@ -106,7 +106,7 @@ clx::MultiValue coroutine_close(clx::LState* L, const clx::LValue* args, size_t 
 {
     if (count == 0 || !clx::is_thread(args[0])) {
         clx::LValue r[2] = { clx::boolean(false), clx::string(L, "bad argument #1 to 'close' (thread expected)") };
-        return clx::MultiValue(r, 2);
+        return clx::MultiValue(r, 2, L);
     }
     return clx::close_thread(L, args[0]);
 }
