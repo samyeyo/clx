@@ -2050,7 +2050,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
                                 state.in_fast_function = false;
                                 state.current_fast_func = "";
                                 out << ";\n";
-
+                                out << "#line " << ctx.nodes[v_idx].line << " \"" << ctx.filename << "\"\n";
                                 out << "auto _fast_" << name << " = [&]( ";
                                 for (uint32_t a = 0; a < state.func_param_counts[name]; ++a) {
                                     out << "double p" << a << (a < state.func_param_counts[name] - 1 ? ", " : "");
@@ -2072,6 +2072,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
                                         out << ", ";
                                 }
                                 out << "))));\n};\n";
+                                out << "#line " << ctx.nodes[v_idx].line << " \"" << ctx.filename << "\"\n";
                                 out << "clx::LValue l_" << name << " = L->create_closure(_impl_" << name
                                     << ", static_cast<clx::LTable*>(_ENV.as_pointer()));\n";
                                 out << "L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&l_" << name << ".val, &l_"
@@ -2099,6 +2100,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
                                 state.emit_raw_lambda = false;
                                 state.ref_capture.clear();
                                 out << ";\n";
+                                out << "#line " << ctx.nodes[v_idx].line << " \"" << ctx.filename << "\"\n";
                                 out << "l_" << name << " = L->create_closure(_impl_" << name
                                     << ", static_cast<clx::LTable*>(_ENV.as_pointer()));\n";
                                 out << "L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&l_" << name << ".val, &l_"
@@ -2368,7 +2370,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
                                 state.in_fast_function = false;
                                 state.current_fast_func = "";
                                 out << ";\n";
-
+                                out << "#line " << ctx.nodes[v_idx].line << " \"" << ctx.filename << "\"\n";
                                 out << "auto _fast_" << name << " = [&]( ";
                                 for (uint32_t a = 0; a < state.func_param_counts[name]; ++a) {
                                     out << "double p" << a << (a < state.func_param_counts[name] - 1 ? ", " : "");
@@ -2404,6 +2406,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
                                 out << "(*l_" << name << ") = L->create_closure(_impl_" << name
                                     << ", static_cast<clx::LTable*>(_ENV.as_pointer()));\n";
                             else
+                                out << "#line " << ctx.nodes[v_idx].line << " \"" << ctx.filename << "\"\n";
                                 out << "l_" << name << " = L->create_closure(_impl_" << name
                                     << ", static_cast<clx::LTable*>(_ENV.as_pointer()));\n";
                             {
