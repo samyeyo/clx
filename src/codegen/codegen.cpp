@@ -773,8 +773,7 @@ void CodeEmitter::emit_native(uint32_t n_idx)
                         std::string_view fn(ctx.nodes[n.as.table_access.key].as.string.text,
                             ctx.nodes[n.as.table_access.key].as.string.length);
                         if (it->second.count(fn)) {
-                            size_t idx = std::distance(state.string_pool.begin(),
-                                std::find(state.string_pool.begin(), state.string_pool.end(), fn));
+                            size_t idx = state.string_pool_index.at(fn);
                             out << "clx::table_get(L, ";
                             emit_node(n.as.table_access.table);
                             out << ", cstr_[" << idx << "]).as_number()";
@@ -2078,8 +2077,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
                                 out << "L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&l_" << name << ".val, &l_"
                                     << name << ".type);\n";
                                 {
-                                    size_t _sfi = std::distance(state.string_pool.begin(),
-                                        std::find(state.string_pool.begin(), state.string_pool.end(), name));
+                                    size_t _sfi = state.string_pool_index.at(name);
                                     out << "L->_G->settable(cstr_[" << _sfi << "], l_" << name << ");\n";
                                 }
                                 locals.push_back({ name, false });
@@ -2106,8 +2104,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
                                 out << "L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&l_" << name << ".val, &l_"
                                     << name << ".type);\n";
                                 {
-                                    size_t _sfi = std::distance(state.string_pool.begin(),
-                                        std::find(state.string_pool.begin(), state.string_pool.end(), name));
+                                    size_t _sfi = state.string_pool_index.at(name);
                                     out << "L->_G->settable(cstr_[" << _sfi << "], l_" << name << ");\n";
                                 }
                             }
@@ -2207,8 +2204,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
                                 << name << "->type);\n";
                             if (is_func) {
                                 state.ref_capture.clear();
-                                size_t _sfi = std::distance(state.string_pool.begin(),
-                                    std::find(state.string_pool.begin(), state.string_pool.end(), name));
+                                size_t _sfi = state.string_pool_index.at(name);
                                 out << "L->_G->settable(cstr_[" << _sfi << "], *l_" << name << ");\n";
                             }
                             if (state.string_builders.count(name) && !state.global_string_builders.count(name)
@@ -2321,9 +2317,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
                             uint32_t op_idx = ops[i];
                             const auto& op_node = ctx.nodes[op_idx];
                             if (op_node.type == NodeType::String) {
-                                size_t sfi = std::distance(state.string_pool.begin(),
-                                    std::find(state.string_pool.begin(), state.string_pool.end(),
-                                        std::string_view(op_node.as.string.text, op_node.as.string.length)));
+                                size_t sfi = state.string_pool_index.at(std::string_view(op_node.as.string.text, op_node.as.string.length));
                                 out << "  sb_" << name << ".append(cstr_[" << sfi << "].as_string(), cstr_[" << sfi
                                     << "].string_len());\n";
                             } else if (op_node.type == NodeType::Integer) {
@@ -2413,8 +2407,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
                                 out << "l_" << name << " = L->create_closure(_impl_" << name
                                     << ", static_cast<clx::LTable*>(_ENV.as_pointer()));\n";
                             {
-                                size_t _sfi2 = std::distance(state.string_pool.begin(),
-                                    std::find(state.string_pool.begin(), state.string_pool.end(), name));
+                                size_t _sfi2 = state.string_pool_index.at(name);
                                 out << "L->_G->settable(cstr_[" << _sfi2 << "], "
                                     << (is_boxed ? "(*l_" + std::string(name) + ")" : "l_" + std::string(name))
                                     << ");\n";
@@ -2463,9 +2456,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
                                     uint32_t op_idx = concat_ops[i];
                                     const auto& op_node = ctx.nodes[op_idx];
                                     if (op_node.type == NodeType::String) {
-                                        size_t sfi = std::distance(state.string_pool.begin(),
-                                            std::find(state.string_pool.begin(), state.string_pool.end(),
-                                                std::string_view(op_node.as.string.text, op_node.as.string.length)));
+                                        size_t sfi = state.string_pool_index.at(std::string_view(op_node.as.string.text, op_node.as.string.length));
                                         out << "  sb_" << name << ".append(cstr_[" << sfi << "].as_string(), cstr_["
                                             << sfi << "].string_len());\n";
                                     } else if (op_node.type == NodeType::Integer) {
@@ -2509,8 +2500,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
                     out << ";\n";
                 }
             } else {
-                size_t idx = std::distance(
-                    state.string_pool.begin(), std::find(state.string_pool.begin(), state.string_pool.end(), name));
+                size_t idx = state.string_pool_index.at(name);
                 out << "L->_G->settable(cstr_[" << idx << "], ";
                 if (v_count > 0)
                     emit_node(ctx.block_statements[first_v]);
@@ -2639,9 +2629,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
                                 is_known_field = true;
                         }
                         int _cs_i = -1;
-                        size_t _cstr_idx = std::distance(state.string_pool.begin(),
-                            std::find(state.string_pool.begin(), state.string_pool.end(),
-                                std::string_view(ctx.nodes[kt].as.string.text, ctx.nodes[kt].as.string.length)));
+                        size_t _cstr_idx = state.string_pool_index.at(std::string_view(ctx.nodes[kt].as.string.text, ctx.nodes[kt].as.string.length));
                         if (is_known_field) {
                             out << "clx::table_set_direct(L, ";
                             emit_node(t_node.as.table_access.table);
@@ -3011,8 +2999,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
             } else if (t_node.as.ident.is_global) {
                 out << "clx::set_env_var(L, _ENV, \"" << name << "\", " << val_str << ");\n";
             } else {
-                size_t idx = std::distance(
-                    state.string_pool.begin(), std::find(state.string_pool.begin(), state.string_pool.end(), name));
+                size_t idx = state.string_pool_index.at(name);
                 out << "L->_G->settable(cstr_[" << idx << "], " << val_str << ");\n";
             }
         } else if (t_node.type == NodeType::TableAccess) {
@@ -3061,9 +3048,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
                             if (_it != state.numeric_table_fields.end() && _it->second.count(_kn))
                                 is_known_field = true;
                         }
-                        size_t _cstr_idx = std::distance(state.string_pool.begin(),
-                            std::find(state.string_pool.begin(), state.string_pool.end(),
-                                std::string_view(ctx.nodes[kt2].as.string.text, ctx.nodes[kt2].as.string.length)));
+                        size_t _cstr_idx = state.string_pool_index.at(std::string_view(ctx.nodes[kt2].as.string.text, ctx.nodes[kt2].as.string.length));
                         if (is_known_field) {
                             out << "clx::table_set_direct(L, ";
                             emit_node(t_node.as.table_access.table);
@@ -3578,8 +3563,7 @@ void CodeEmitter::emitIdentifier(const ASTNode& node, uint32_t node_idx)
         else
             out << "l_" << emit_name;
     } else {
-        size_t idx = std::distance(
-            state.string_pool.begin(), std::find(state.string_pool.begin(), state.string_pool.end(), name));
+        size_t idx = state.string_pool_index.at(name);
         out << "clx_gettable_safe(L->_G->gettable(cstr_[" << idx << "]))";
     }
 }
@@ -3589,7 +3573,7 @@ void CodeEmitter::emitString(const ASTNode& node, uint32_t node_idx)
 {
     std::string_view s(node.as.string.text, node.as.string.length);
     size_t idx
-        = std::distance(state.string_pool.begin(), std::find(state.string_pool.begin(), state.string_pool.end(), s));
+        = state.string_pool_index.at(s);
     out << "cstr_[" << idx << "]";
 }
 
@@ -4299,9 +4283,7 @@ void CodeEmitter::emitTableAccess(const ASTNode& node, uint32_t node_idx)
                 out << "clx::table_get(L, ";
                 emit_node(node.as.table_access.table);
                 out << ", cstr_["
-                    << (std::distance(state.string_pool.begin(),
-                           std::find(state.string_pool.begin(), state.string_pool.end(),
-                               std::string_view(ctx.nodes[kt].as.string.text, ctx.nodes[kt].as.string.length))))
+                    << (state.string_pool_index.at(std::string_view(ctx.nodes[kt].as.string.text, ctx.nodes[kt].as.string.length)))
                     << "])";
             } else {
                 out << "clx::table_get(L, ";

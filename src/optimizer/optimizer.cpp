@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <map>
 #include <set>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace clx {
@@ -156,9 +157,9 @@ static bool is_literal_number(
 //------------------ Optimizer::run — main optimization entry point
 void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
 {
-
     state.native_numbers.clear();
     state.string_pool.clear();
+    state.string_pool_index.clear();
     state.table_presize.clear();
     state.global_constants.clear();
     state.bce_safe_nodes.clear();
@@ -952,16 +953,19 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
     for (const auto& node : ctx.nodes) {
         if (node.type == NodeType::String) {
             std::string_view s(node.as.string.text, node.as.string.length);
-            if (std::find(state.string_pool.begin(), state.string_pool.end(), s) == state.string_pool.end())
+            if (state.string_pool_index.find(s) == state.string_pool_index.end()) {
+                state.string_pool_index[s] = state.string_pool.size();
                 state.string_pool.push_back(s);
+            }
         }
         if (node.type == NodeType::Identifier) {
             std::string_view s(node.as.ident.name, node.as.ident.length);
-            if (std::find(state.string_pool.begin(), state.string_pool.end(), s) == state.string_pool.end())
+            if (state.string_pool_index.find(s) == state.string_pool_index.end()) {
+                state.string_pool_index[s] = state.string_pool.size();
                 state.string_pool.push_back(s);
+            }
         }
     }
-
     state.pure_numeric_arrays.clear();
     std::set<std::string_view> pure_candidates;
     std::set<std::string_view> disqualified_arrays;
@@ -1258,7 +1262,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
     for (auto name : promote_ready) {
         state.pure_numeric_arrays.insert(name);
     }
-
     state.numeric_table_fields.clear();
     for (const auto& node : ctx.nodes) {
         if (node.type != NodeType::LocalDecl)
@@ -1347,13 +1350,14 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
                 state.numeric_table_fields[nm] = numeric_fields;
 
                 for (auto& fld : numeric_fields) {
-                    if (std::find(state.string_pool.begin(), state.string_pool.end(), fld) == state.string_pool.end())
+                    if (state.string_pool_index.find(fld) == state.string_pool_index.end()) {
+                        state.string_pool_index[fld] = state.string_pool.size();
                         state.string_pool.push_back(fld);
+                    }
                 }
             }
         }
     }
-
     for (const auto& node : ctx.nodes) {
         if (node.type != NodeType::LocalDecl)
             continue;
@@ -1395,11 +1399,68 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
         if (valid && !numeric_fields.empty()) {
             state.numeric_table_fields[nm] = numeric_fields;
             for (auto& fld : numeric_fields) {
-                if (std::find(state.string_pool.begin(), state.string_pool.end(), fld) == state.string_pool.end())
+                if (state.string_pool_index.find(fld) == state.string_pool_index.end()) {
+                    state.string_pool_index[fld] = state.string_pool.size();
                     state.string_pool.push_back(fld);
+                }
             }
         }
     }
+    // Precompute maps to avoid O(n^2) scans per function
+    std::unordered_map<std::string_view, std::vector<uint32_t>> local_decl_by_pname;
+    local_decl_by_pname.reserve(1024);
+    for (uint32_t idx = 0; idx < ctx.nodes.size(); ++idx) {
+        const auto &nd2 = ctx.nodes[idx];
+        if (nd2.type != NodeType::LocalDecl)
+            continue;
+        if (nd2.as.local_decl.ident_count != 1 || nd2.as.local_decl.value_count != 1)
+            continue;
+        uint32_t id_idx = ctx.block_statements[nd2.as.local_decl.first_ident];
+        uint32_t val_idx = ctx.block_statements[nd2.as.local_decl.first_value];
+        if (id_idx >= ctx.nodes.size() || val_idx >= ctx.nodes.size())
+            continue;
+        if (ctx.nodes[id_idx].type != NodeType::Identifier)
+            continue;
+        if (ctx.nodes[val_idx].type != NodeType::TableAccess)
+            continue;
+        uint32_t tbl = ctx.nodes[val_idx].as.table_access.table;
+        if (tbl >= ctx.nodes.size() || ctx.nodes[tbl].type != NodeType::Identifier)
+            continue;
+        std::string_view pname(ctx.nodes[tbl].as.ident.name, ctx.nodes[tbl].as.ident.length);
+        local_decl_by_pname[pname].push_back(idx);
+    }
+    std::unordered_map<std::string_view, std::vector<uint32_t>> binary_op_by_sname;
+    binary_op_by_sname.reserve(1024);
+    for (uint32_t idx = 0; idx < ctx.nodes.size(); ++idx) {
+        const auto &bn = ctx.nodes[idx];
+        if (bn.type != NodeType::BinaryOp)
+            continue;
+        std::function<void(uint32_t, std::vector<std::string_view>&)> collect_snames
+            = [&](uint32_t side, std::vector<std::string_view> &out) {
+                  if (side >= ctx.nodes.size())
+                      return;
+                  const auto &sn = ctx.nodes[side];
+                  if (sn.type == NodeType::TableAccess) {
+                      uint32_t stbl = sn.as.table_access.table;
+                      if (stbl < ctx.nodes.size() && ctx.nodes[stbl].type == NodeType::Identifier) {
+                          if (sn.as.table_access.key < ctx.nodes.size()
+                              && ctx.nodes[sn.as.table_access.key].type == NodeType::String) {
+                              std::string_view sname(ctx.nodes[stbl].as.ident.name, ctx.nodes[stbl].as.ident.length);
+                              out.push_back(sname);
+                          }
+                      }
+                  } else if (sn.type == NodeType::ParenExpression) {
+                      collect_snames(sn.as.paren_expr.expr, out);
+                  }
+              };
+        std::vector<std::string_view> snames;
+        collect_snames(bn.as.bin_op.left, snames);
+        collect_snames(bn.as.bin_op.right, snames);
+        for (auto &sname : snames) {
+            binary_op_by_sname[sname].push_back(idx);
+        }
+    }
+
     for (const auto& nd : ctx.nodes) {
         if (nd.type != NodeType::FunctionDef)
             continue;
@@ -1413,7 +1474,12 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
         if (func_params.empty())
             continue;
         std::map<std::string_view, std::string_view> local_to_param;
-        for (const auto& scan : ctx.nodes) {
+        for (auto &pname : func_params) {
+            auto it = local_decl_by_pname.find(pname);
+            if (it == local_decl_by_pname.end())
+                continue;
+            for (uint32_t scan_idx : it->second) {
+                const auto &scan = ctx.nodes[scan_idx];
             if (scan.type != NodeType::LocalDecl)
                 continue;
             if (scan.as.local_decl.ident_count != 1 || scan.as.local_decl.value_count != 1)
@@ -1436,11 +1502,17 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
                 continue;
             std::string_view lname(ctx.nodes[id_idx].as.ident.name, ctx.nodes[id_idx].as.ident.length);
             local_to_param[lname] = pname;
+            }
         }
         if (local_to_param.empty())
             continue;
         std::map<std::string_view, std::set<std::string_view>> param_arith_fields;
-        for (const auto& bn : ctx.nodes) {
+        for (auto &kv : local_to_param) {
+            auto it2 = binary_op_by_sname.find(kv.first);
+            if (it2 == binary_op_by_sname.end())
+                continue;
+            for (uint32_t bn_idx : it2->second) {
+                const auto &bn = ctx.nodes[bn_idx];
             if (bn.type != NodeType::BinaryOp)
                 continue;
             std::function<void(uint32_t)> check_side;
@@ -1468,13 +1540,16 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
             };
             check_side(bn.as.bin_op.left);
             check_side(bn.as.bin_op.right);
+            }
         }
         for (auto& [pn, fields] : param_arith_fields) {
             if (!fields.empty() && !state.numeric_table_fields.count(pn)) {
                 state.numeric_table_fields[pn] = fields;
                 for (auto& fld : fields) {
-                    if (std::find(state.string_pool.begin(), state.string_pool.end(), fld) == state.string_pool.end())
+                    if (state.string_pool_index.find(fld) == state.string_pool_index.end()) {
+                        state.string_pool_index[fld] = state.string_pool.size();
                         state.string_pool.push_back(fld);
+                    }
                 }
             }
         }
@@ -1487,7 +1562,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
             }
         }
     }
-
     {
 
         int safety2 = 100;
@@ -1568,7 +1642,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
             }
         } while (changed2);
     }
-
     state.param_numbers.clear();
     for (const auto& node : ctx.nodes) {
         if (node.type == NodeType::LocalDecl) {
@@ -1787,8 +1860,7 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
                 }
             }
         }
-    }
-    state.native_numbers.clear();
+    }    state.native_numbers.clear();
     for (auto name : known_numbers) {
         if (disqualified.find(name) == disqualified.end() && param_names.find(name) == param_names.end()) {
             state.native_numbers.push_back(name);
@@ -1871,7 +1943,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
             }
         }
     }
-
     {
         std::set<std::string_view> loop_vars;
         for (const auto& nd : ctx.nodes) {
@@ -1882,7 +1953,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
                 }
             }
         }
-
         std::vector<const ASTNode*> func_defs;
         for (const auto& nd : ctx.nodes) {
             if (nd.type == NodeType::FunctionDef) {
@@ -1896,6 +1966,78 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
                 }
             }
         }
+        std::unordered_set<std::string_view> assigned_vars;
+        assigned_vars.reserve(1024);
+        for (const auto &nd2 : ctx.nodes) {
+            if (nd2.type == NodeType::Assignment) {
+                for (uint32_t ii = 0; ii < nd2.as.assign.target_count; ++ii) {
+                    uint32_t ti = ctx.block_statements[nd2.as.assign.first_target + ii];
+                    if (ti < ctx.nodes.size() && ctx.nodes[ti].type == NodeType::Identifier) {
+                        assigned_vars.insert(std::string_view(ctx.nodes[ti].as.ident.name, ctx.nodes[ti].as.ident.length));
+                    }
+                }
+            }
+        }
+        std::unordered_set<std::string_view> all_loop_vars;
+        all_loop_vars.reserve(1024);
+        for (const auto &nd2 : ctx.nodes) {
+            if (nd2.type == NodeType::ForStatement) {
+                uint32_t vi = nd2.as.for_stmt.var_ident;
+                if (vi < ctx.nodes.size() && ctx.nodes[vi].type == NodeType::Identifier) {
+                    all_loop_vars.insert(std::string_view(ctx.nodes[vi].as.ident.name, ctx.nodes[vi].as.ident.length));
+                }
+            }
+        }
+        std::unordered_map<std::string_view, std::vector<uint32_t>> pure_numeric_bin_by_sname2;
+        pure_numeric_bin_by_sname2.reserve(1024);
+        for (uint32_t idx = 0; idx < ctx.nodes.size(); ++idx) {
+            const auto &bn2 = ctx.nodes[idx];
+            if (bn2.type != NodeType::BinaryOp)
+                continue;
+            int bop2 = bn2.as.bin_op.op;
+            if (bop2 < static_cast<int>(BinaryOp::Add) || bop2 > static_cast<int>(BinaryOp::Div))
+                continue;
+            std::function<void(uint32_t, std::vector<std::string_view>&)> collect_pure2 = [&](uint32_t side, std::vector<std::string_view> &out) {
+                if (side >= ctx.nodes.size())
+                    return;
+                const auto &sn2 = ctx.nodes[side];
+                if (sn2.type == NodeType::TableAccess) {
+                    uint32_t stbl2 = sn2.as.table_access.table;
+                    if (stbl2 < ctx.nodes.size() && ctx.nodes[stbl2].type == NodeType::Identifier) {
+                        uint32_t key_idx2 = sn2.as.table_access.key;
+                        if (key_idx2 < ctx.nodes.size()) {
+                            const auto &kn2 = ctx.nodes[key_idx2];
+                            bool key_is_num2 = (kn2.type == NodeType::Number || kn2.type == NodeType::Integer);
+                            if (!key_is_num2 && kn2.type == NodeType::Identifier) {
+                                std::string_view knm2(kn2.as.ident.name, kn2.as.ident.length);
+                                key_is_num2 = state.native_integers.count(knm2) > 0;
+                                if (!key_is_num2) {
+                                    key_is_num2 = std::find(state.native_numbers.begin(), state.native_numbers.end(), knm2) != state.native_numbers.end();
+                                }
+                                if (!key_is_num2) {
+                                    key_is_num2 = all_loop_vars.count(knm2) > 0;
+                                }
+                            }
+                            if (key_is_num2) {
+                                std::string_view sname2(ctx.nodes[stbl2].as.ident.name, ctx.nodes[stbl2].as.ident.length);
+                                out.push_back(sname2);
+                            }
+                        }
+                    }
+                } else if (sn2.type == NodeType::ParenExpression) {
+                    collect_pure2(sn2.as.paren_expr.expr, out);
+                } else if (sn2.type == NodeType::BinaryOp) {
+                    collect_pure2(sn2.as.bin_op.left, out);
+                    collect_pure2(sn2.as.bin_op.right, out);
+                }
+            };
+            std::vector<std::string_view> tmp_snames2;
+            collect_pure2(bn2.as.bin_op.left, tmp_snames2);
+            collect_pure2(bn2.as.bin_op.right, tmp_snames2);
+            for (auto &sname2 : tmp_snames2) {
+                pure_numeric_bin_by_sname2[sname2].push_back(idx);
+            }
+        }
         for (const auto* fnd : func_defs) {
             const auto& nd = *fnd;
             std::set<std::string_view> func_params;
@@ -1907,70 +2049,21 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
             if (func_params.empty())
                 continue;
 
-            for (const auto& scan : ctx.nodes) {
-                if (scan.type == NodeType::Assignment) {
-                    for (uint32_t ii = 0; ii < scan.as.assign.target_count; ++ii) {
-                        uint32_t ti = ctx.block_statements[scan.as.assign.first_target + ii];
-                        if (ctx.nodes[ti].type == NodeType::Identifier) {
-                            std::string_view nm(ctx.nodes[ti].as.ident.name, ctx.nodes[ti].as.ident.length);
-                            func_params.erase(nm);
-                        }
-                    }
-                }
+            for (auto it = func_params.begin(); it != func_params.end();) {
+                if (assigned_vars.count(*it))
+                    it = func_params.erase(it);
+                else
+                    ++it;
             }
             if (func_params.empty())
                 continue;
 
-            for (const auto& bn : ctx.nodes) {
-                if (bn.type != NodeType::BinaryOp)
-                    continue;
-                int bop = bn.as.bin_op.op;
-                bool is_arith = (bop >= static_cast<int>(BinaryOp::Add) && bop <= static_cast<int>(BinaryOp::Div));
-                if (!is_arith)
-                    continue;
-
-                std::function<void(uint32_t)> check_side;
-                check_side = [&](uint32_t side_idx) {
-                    if (side_idx >= ctx.nodes.size())
-                        return;
-                    const auto& sn = ctx.nodes[side_idx];
-                    if (sn.type == NodeType::TableAccess) {
-                        uint32_t stbl = sn.as.table_access.table;
-                        if (stbl < ctx.nodes.size() && ctx.nodes[stbl].type == NodeType::Identifier) {
-                            std::string_view sname(ctx.nodes[stbl].as.ident.name, ctx.nodes[stbl].as.ident.length);
-                            if (func_params.count(sname)) {
-                                uint32_t key_idx = sn.as.table_access.key;
-                                if (key_idx < ctx.nodes.size()) {
-                                    const auto& kn = ctx.nodes[key_idx];
-                                    bool key_is_num = (kn.type == NodeType::Number || kn.type == NodeType::Integer);
-                                    if (!key_is_num && kn.type == NodeType::Identifier) {
-                                        std::string_view knm(kn.as.ident.name, kn.as.ident.length);
-                                        key_is_num = state.native_integers.count(knm) > 0;
-                                        if (!key_is_num) {
-                                            key_is_num = std::find(state.native_numbers.begin(),
-                                                             state.native_numbers.end(), knm)
-                                                != state.native_numbers.end();
-                                        }
-                                        if (!key_is_num) {
-                                            key_is_num = loop_vars.count(knm) > 0;
-                                        }
-                                    }
-                                    if (key_is_num) {
-                                        state.pure_numeric_func_params[sname].insert(
-                                            static_cast<uint32_t>(fnd - ctx.nodes.data()));
-                                    }
-                                }
-                            }
-                        }
-                    } else if (sn.type == NodeType::ParenExpression) {
-                        check_side(sn.as.paren_expr.expr);
-                    } else if (sn.type == NodeType::BinaryOp) {
-                        check_side(sn.as.bin_op.left);
-                        check_side(sn.as.bin_op.right);
-                    }
-                };
-                check_side(bn.as.bin_op.left);
-                check_side(bn.as.bin_op.right);
+            for (auto &sname : func_params) {
+                auto it2 = pure_numeric_bin_by_sname2.find(sname);
+                if (it2 != pure_numeric_bin_by_sname2.end()) {
+                    uint32_t fnd_idx = static_cast<uint32_t>(fnd - &ctx.nodes[0]);
+                    state.pure_numeric_func_params[sname].insert(fnd_idx);
+                }
             }
         }
     }
@@ -2382,7 +2475,30 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
                 }
             }
             return true;
-        };
+        };        std::unordered_map<uint32_t, std::string_view> func_name_map;
+        func_name_map.reserve(ctx.nodes.size());
+        for (uint32_t j = 0; j < ctx.nodes.size(); ++j) {
+            const auto& ln = ctx.nodes[j];
+            uint32_t fv = 0xFFFFFFFF, fi = 0xFFFFFFFF;
+            if (ln.type == NodeType::LocalDecl && ln.as.local_decl.value_count == 1) {
+                fv = ctx.block_statements[ln.as.local_decl.first_value];
+                fi = ctx.block_statements[ln.as.local_decl.first_ident];
+            } else if (ln.type == NodeType::Assignment && ln.as.assign.value_count == 1) {
+                fv = ctx.block_statements[ln.as.assign.first_value];
+                fi = ctx.block_statements[ln.as.assign.first_target];
+            } else
+                continue;
+            if (fv >= ctx.nodes.size() || fi >= ctx.nodes.size())
+                continue;
+            if (ctx.nodes[fv].type != NodeType::FunctionDef)
+                continue;
+            if (ctx.nodes[fi].type != NodeType::Identifier)
+                continue;
+            if (ctx.nodes[fi].as.ident.is_global)
+                continue;
+            std::string_view nm(ctx.nodes[fi].as.ident.name, ctx.nodes[fi].as.ident.length);
+            func_name_map.emplace(fv, nm);
+        }
 
         for (uint32_t i = 0; i < ctx.nodes.size(); ++i) {
             const auto& nd = ctx.nodes[i];
@@ -2393,29 +2509,10 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
             std::set<std::string_view> loop_vars;
             if (!walk_for_int_returns(nd.as.func_def.body_block, loop_vars))
                 continue;
-            for (uint32_t j = 0; j < ctx.nodes.size(); ++j) {
-                const auto& ln = ctx.nodes[j];
-                uint32_t fv = 0xFFFFFFFF, fi = 0xFFFFFFFF;
-                if (ln.type == NodeType::LocalDecl && ln.as.local_decl.value_count == 1) {
-                    fv = ctx.block_statements[ln.as.local_decl.first_value];
-                    fi = ctx.block_statements[ln.as.local_decl.first_ident];
-                } else if (ln.type == NodeType::Assignment && ln.as.assign.value_count == 1) {
-                    fv = ctx.block_statements[ln.as.assign.first_value];
-                    fi = ctx.block_statements[ln.as.assign.first_target];
-                } else
-                    continue;
-                if (fv != i || fi >= ctx.nodes.size())
-                    continue;
-                if (ctx.nodes[fi].type != NodeType::Identifier)
-                    continue;
-                if (ctx.nodes[fi].as.ident.is_global)
-                    continue;
-                std::string_view nm(ctx.nodes[fi].as.ident.name, ctx.nodes[fi].as.ident.length);
-                state.int_returning_funcs.insert(nm);
-                break;
-            }
+            auto it = func_name_map.find(i);
+            if (it != func_name_map.end())
+                state.int_returning_funcs.insert(it->second);
         }
-
         for (uint32_t i = 0; i < ctx.nodes.size(); ++i) {
             const auto& nd = ctx.nodes[i];
             if (nd.type != NodeType::LocalDecl)
@@ -2439,7 +2536,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
                 state.int_typed_locals.insert(ln);
             }
         }
-    }
-}
+    }}
 
 }

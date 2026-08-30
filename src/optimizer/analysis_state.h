@@ -23,6 +23,7 @@ struct AnalysisState {
     //------------------ Whole-program facts discovered by the optimizer
     std::vector<std::string_view> native_numbers;
     std::vector<std::string_view> string_pool;
+    std::unordered_map<std::string_view, size_t> string_pool_index;
     std::set<std::string_view> native_return_funcs;
     std::map<uint32_t, std::set<std::string>> param_numbers;
     std::vector<std::string> param_names;
