@@ -18,7 +18,10 @@ shift
 goto parse
 :done_parse
 
-cmake -S . -B build -G "NMake Makefiles" -D CMAKE_BUILD_TYPE=%BUILD_TYPE%
+set ARCH_ARGS=
+if defined CLX_ARCH set ARCH_ARGS=-DCLX_ARCH=%CLX_ARCH%
+
+cmake -S . -B build -G "NMake Makefiles" -D CMAKE_BUILD_TYPE=%BUILD_TYPE% %ARCH_ARGS%
 if errorlevel 1 exit /b %errorlevel%
 
 :: Build the project

@@ -33,7 +33,12 @@ for arg in "$@"; do
     esac
 done
 
-cmake -S . -B build -DCMAKE_BUILD_TYPE=$BUILD_TYPE
+ARCH_ARGS=""
+if [ -n "$CLX_ARCH" ]; then
+    ARCH_ARGS="-DCLX_ARCH=$CLX_ARCH"
+fi
+
+cmake -S . -B build -DCMAKE_BUILD_TYPE=$BUILD_TYPE $ARCH_ARGS
 cmake --build build --config $BUILD_TYPE
 
 if [ "$DO_INSTALL" = true ]; then
