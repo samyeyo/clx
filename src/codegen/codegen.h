@@ -18,6 +18,15 @@
 
 namespace clx {
 
+//------------------ DeferredBlockScope: state emitBlock captures when a repeat body must
+struct DeferredBlockScope {
+    size_t prev_locals = 0;                    // locals.size() to restore after condition emission
+    size_t prev_native_count = 0;              // native_numbers.size() to restore
+    std::set<std::string_view> prev_hoisted;   // hoisted_locals to restore
+    int close_braces = 0;                      // number of "}" to emit to close this body's scopes
+    bool emit_close = false;                   // whether an outer "}" is owed (body emitted its own "{")
+};
+
 //------------------ LocalVar: tracks a local variable's name and boxed status
 struct LocalVar {
     std::string_view name;
@@ -68,7 +77,7 @@ private:
     void emitParenExpression(const ASTNode& node, uint32_t node_idx);
     void emitLabelStatement(const ASTNode& node, uint32_t node_idx);
     void emitGotoStatement(const ASTNode& node, uint32_t node_idx);
-    void emitBlock(const ASTNode& node, uint32_t node_idx);
+    void emitBlock(const ASTNode& node, uint32_t node_idx, DeferredBlockScope* defer = nullptr);
     void emitFunctionDef(const ASTNode& node, uint32_t node_idx);
     void emitReturnStatement(const ASTNode& node, uint32_t node_idx);
     //------------------ emitAssignmentLike: handles GlobalDeclStatement, LocalDecl, and Assignment

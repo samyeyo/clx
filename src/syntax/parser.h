@@ -46,7 +46,7 @@ private:
     //------------------ parse_postfix_expression: parse postfix operators (calls, indices)
     uint32_t parse_postfix_expression();
     //------------------ parse_block: parse a block of statements
-    uint32_t parse_block(bool is_main);
+    uint32_t parse_block(bool is_main, bool keep_scope_open = false);
     //------------------ parse_funcbody: parse function parameter list and body
     uint32_t parse_funcbody(bool is_method);
     //------------------ parse_relational: parse relational operators (<, >, ==, etc)

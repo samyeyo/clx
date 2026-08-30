@@ -1299,7 +1299,7 @@ void CodeEmitter::emitGotoStatement(const ASTNode& node, uint32_t node_idx)
 }
 
 //------------------ emitBlock: handles NodeType::Block
-void CodeEmitter::emitBlock(const ASTNode& node, uint32_t node_idx)
+void CodeEmitter::emitBlock(const ASTNode& node, uint32_t node_idx, DeferredBlockScope* def)
 {
     bool prev_skip_braces = state.skip_block_braces;
     state.skip_block_braces = false;
@@ -1471,6 +1471,15 @@ void CodeEmitter::emitBlock(const ASTNode& node, uint32_t node_idx)
             && stmt.type != NodeType::LabelStatement && stmt.type != NodeType::DoStatement) {
             out << ";\n";
         }
+    }
+
+    if (def) {
+        def->prev_locals = prev_locals;
+        def->prev_native_count = prev_native_count;
+        def->prev_hoisted = prev_hoisted;
+        def->close_braces = redecl_scopes;
+        def->emit_close = !prev_skip_braces;
+        return;
     }
 
     for (int i = 0; i < redecl_scopes; ++i) {
@@ -3611,11 +3620,29 @@ void CodeEmitter::emitRepeatStatement(const ASTNode& node, uint32_t node_idx)
 {
     out << "#line " << node.line << " \"" << ctx.filename << "\"\n";
     out << "do\n";
-    if (node.as.repeat_stmt.body_block != 0xFFFFFFFF)
-        emit_node(node.as.repeat_stmt.body_block);
-    out << "while (!(";
+    DeferredBlockScope defer;
+    bool saved_skip = state.skip_block_braces;
+    if (node.as.repeat_stmt.body_block != 0xFFFFFFFF) {
+        const ASTNode& body = ctx.nodes[node.as.repeat_stmt.body_block];
+        bool body_is_block = body.type == NodeType::Block;
+        state.skip_block_braces = false;
+        if (body_is_block)
+            emitBlock(body, node.as.repeat_stmt.body_block, &defer);
+        else
+            emit_node(node.as.repeat_stmt.body_block);
+    }
+    out << "if (";
     emit_condition(node.as.repeat_stmt.condition);
-    out << "));\n";
+    out << ") break;\n";
+    for (int i = 0; i < defer.close_braces; ++i)
+        out << "}\n";
+    if (defer.emit_close)
+        out << "}\n";
+    locals.resize(defer.prev_locals);
+    state.native_numbers.resize(defer.prev_native_count);
+    state.hoisted_locals = defer.prev_hoisted;
+    state.skip_block_braces = saved_skip;
+    out << "while (true);\n";
 }
 
 //------------------ emitForStatement: handles NodeType::ForStatement

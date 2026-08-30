@@ -1045,12 +1045,13 @@ uint32_t Parser::parse_statement()
     if (current_token.type == TokRepeat) {
         int line = current_token.line;
         advance();
-        uint32_t body_block = parse_block(false);
+        uint32_t body_block = parse_block(false, /*keep_scope_open=*/true);
         uint32_t condition = INVALID_NODE;
         if (current_token.type == TokUntil) {
             advance();
             condition = parse_expression();
         }
+        leave_scope();
         ASTNode node;
         node.type = NodeType::RepeatStatement;
         node.line = line;
@@ -1367,7 +1368,7 @@ uint32_t Parser::parse_statement()
 }
 
 //------------------ PARSER: parse_block - parses a sequence of statements, manages scope entry/exit
-uint32_t Parser::parse_block(bool is_main)
+uint32_t Parser::parse_block(bool is_main, bool keep_scope_open)
 {
     int line = current_token.line;
     std::vector<uint32_t> statements;
@@ -1386,7 +1387,7 @@ uint32_t Parser::parse_block(bool is_main)
             statements.push_back(stmt);
     }
 
-    if (!is_main)
+    if (!is_main && !keep_scope_open)
         leave_scope();
 
     ASTNode node;
