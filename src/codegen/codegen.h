@@ -21,7 +21,11 @@ namespace clx {
 //------------------ LocalVar: tracks a local variable's name and boxed status
 struct LocalVar {
     std::string_view name;
+    std::string cpp_name;
     bool is_boxed;
+    LocalVar() = default;
+    LocalVar(std::string_view n, bool boxed) : name(n), cpp_name(), is_boxed(boxed) {}
+    LocalVar(std::string_view n, std::string cpp, bool boxed) : name(n), cpp_name(std::move(cpp)), is_boxed(boxed) {}
 };
 
 //------------------ lookup_builtin: maps "module.func" to C++ function name
@@ -44,6 +48,7 @@ private:
 
     //------------------ is_local: checks if name is a local and sets out_is_boxed
     bool is_local(std::string_view name, bool& out_is_boxed);
+    bool is_local(std::string_view name, bool& out_is_boxed, std::string_view& out_cpp_name);
 
     //------------------ var_reassigned_non_int: checks if a variable receives any non-integer value in a block tree
     bool var_reassigned_non_int(std::string_view name, uint32_t block_idx);

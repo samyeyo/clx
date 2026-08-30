@@ -16,15 +16,14 @@
 #include <iomanip>
 #include <map>
 #include <set>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace clx {
 
 //------------------ is_zero_number_literal: is a node a numeric literal equal to zero?
-// Real-world libraries express infinities/NaN with the Lua idiom `1/0`, `-1/0`, `0/0`.
-// Emitting that as a literal `/ 0` makes MSVC fail constant evaluation (C2124), so the
-// codegen must avoid a literal constant-expression divisor of zero. This predicate is
-// used to substitute an IEEE-equivalent multiply-by-infinity instead.
+
 static bool is_zero_number_literal(const ASTContext& ctx, uint32_t n_idx)
 {
     const ASTNode& n = ctx.nodes[n_idx];
@@ -192,9 +191,16 @@ CodeEmitter::CodeEmitter(const ASTContext& context, const char* output_path, Ana
 //------------------ is_local: checks if variable is local in current scope
 bool CodeEmitter::is_local(std::string_view name, bool& out_is_boxed)
 {
+    std::string_view dummy;
+    return is_local(name, out_is_boxed, dummy);
+}
+
+bool CodeEmitter::is_local(std::string_view name, bool& out_is_boxed, std::string_view& out_cpp_name)
+{
     for (auto it = locals.rbegin(); it != locals.rend(); ++it) {
         if (it->name == name) {
             out_is_boxed = it->is_boxed;
+            out_cpp_name = it->cpp_name.empty() ? it->name : std::string_view(it->cpp_name);
             return true;
         }
     }
@@ -643,17 +649,23 @@ void CodeEmitter::emit_native(uint32_t n_idx)
                 return;
             }
             if (state.int_typed_locals.count(name)) {
-                out << "static_cast<size_t>(l_" << name << ".as_integer())";
+                bool is_boxed_tmp = false;
+                std::string_view cpp_tmp;
+                bool is_loc_tmp = this->is_local(name, is_boxed_tmp, cpp_tmp);
+                std::string_view emit_tmp = cpp_tmp.empty() ? name : cpp_tmp;
+                out << "static_cast<size_t>(l_" << emit_tmp << ".as_integer())";
                 return;
             }
             if (std::find(state.native_numbers.begin(), state.native_numbers.end(), name)
                 != state.native_numbers.end()) {
                 bool is_boxed = false;
-                this->is_local(name, is_boxed);
+                std::string_view cpp_name;
+                this->is_local(name, is_boxed, cpp_name);
+                std::string_view emit_name = cpp_name.empty() ? name : cpp_name;
                 if (is_boxed)
-                    out << "(*l_" << name << ").as_number()";
+                    out << "(*l_" << emit_name << ").as_number()";
                 else
-                    out << "l_" << name;
+                    out << "l_" << emit_name;
                 return;
             }
         }
@@ -1490,11 +1502,19 @@ void CodeEmitter::emitFunctionDef(const ASTNode& node, uint32_t node_idx)
     state.current_func_body = node.as.func_def.body_block;
 
     if (is_fast) {
-        out << "[&](auto& self";
+        std::unordered_map<std::string_view, int> fast_param_counts;
+        std::vector<std::string> fast_param_cpp;
+        fast_param_cpp.reserve(node.as.func_def.param_count);
         for (uint32_t i = 0; i < node.as.func_def.param_count; ++i) {
             uint32_t p_idx = ctx.block_statements[node.as.func_def.first_param + i];
             std::string_view pname(ctx.nodes[p_idx].as.ident.name, ctx.nodes[p_idx].as.ident.length);
-            out << ", double l_" << pname;
+            int cnt = fast_param_counts[pname]++;
+            std::string unique = (cnt == 0) ? std::string(pname) : std::string(pname) + std::to_string(cnt);
+            fast_param_cpp.push_back(std::move(unique));
+        }
+        out << "[&](auto& self";
+        for (uint32_t i = 0; i < node.as.func_def.param_count; ++i) {
+            out << ", double l_" << fast_param_cpp[i];
         }
         out << ") -> double {\n";
 
@@ -1503,7 +1523,7 @@ void CodeEmitter::emitFunctionDef(const ASTNode& node, uint32_t node_idx)
         for (uint32_t i = 0; i < node.as.func_def.param_count; ++i) {
             uint32_t p_idx = ctx.block_statements[node.as.func_def.first_param + i];
             std::string_view pname(ctx.nodes[p_idx].as.ident.name, ctx.nodes[p_idx].as.ident.length);
-            locals.push_back({ pname, false });
+            locals.push_back({ pname, fast_param_cpp[i], false });
             if (std::find(state.native_numbers.begin(), state.native_numbers.end(), pname)
                 == state.native_numbers.end())
                 state.native_numbers.push_back(pname);
@@ -1549,9 +1569,38 @@ void CodeEmitter::emitFunctionDef(const ASTNode& node, uint32_t node_idx)
 
     size_t prev_native_count_for_params = state.native_numbers.size();
 
+    std::unordered_map<std::string_view, int> param_name_counts;
+    std::vector<std::string> param_cpp_names;
+    param_cpp_names.reserve(node.as.func_def.param_count);
     for (uint32_t i = 0; i < node.as.func_def.param_count; ++i) {
         uint32_t p_idx = ctx.block_statements[node.as.func_def.first_param + i];
         std::string_view pname(ctx.nodes[p_idx].as.ident.name, ctx.nodes[p_idx].as.ident.length);
+        int cnt = param_name_counts[pname]++;
+        std::string unique;
+        if (cnt == 0)
+            unique = std::string(pname);
+        else
+            unique = std::string(pname) + std::to_string(cnt);
+        param_cpp_names.push_back(std::move(unique));
+    }
+    std::string vararg_cpp_name;
+    if (node.as.func_def.is_vararg && node.as.func_def.named_vararg_ident != 0xFFFFFFFF) {
+        std::string_view vaname(ctx.nodes[node.as.func_def.named_vararg_ident].as.ident.name,
+            ctx.nodes[node.as.func_def.named_vararg_ident].as.ident.length);
+        auto it = param_name_counts.find(vaname);
+        if (it != param_name_counts.end()) {
+            vararg_cpp_name = std::string(vaname) + std::to_string(it->second);
+            param_name_counts[vaname]++;
+        } else {
+            vararg_cpp_name = std::string(vaname);
+            param_name_counts[vaname] = 1;
+        }
+    }
+
+    for (uint32_t i = 0; i < node.as.func_def.param_count; ++i) {
+        uint32_t p_idx = ctx.block_statements[node.as.func_def.first_param + i];
+        std::string_view pname(ctx.nodes[p_idx].as.ident.name, ctx.nodes[p_idx].as.ident.length);
+        const std::string& cpp_name = param_cpp_names[i];
         bool is_cap = ctx.nodes[p_idx].as.ident.is_captured;
         bool is_native
             = std::find(state.native_numbers.begin(), state.native_numbers.end(), pname) != state.native_numbers.end()
@@ -1559,59 +1608,61 @@ void CodeEmitter::emitFunctionDef(const ASTNode& node, uint32_t node_idx)
 
         if (is_cap) {
             if (state.constant_upvalues.count(pname)) {
-                out << "clx::LValue l_" << pname << " = (" << i << " < arg_count) ? args[" << i
+                out << "clx::LValue l_" << cpp_name << " = (" << i << " < arg_count) ? args[" << i
                     << "] : clx::LValue();\n";
-                out << "L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&l_" << pname << ".val, &l_" << pname
+                out << "L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&l_" << cpp_name << ".val, &l_" << cpp_name
                     << ".type);\n";
             } else {
-                out << "clx::LUpValue l_" << pname << ";\n";
-                out << "l_" << pname << " = clx::make_upvalue((" << i << " < arg_count) ? args[" << i
+                out << "clx::LUpValue l_" << cpp_name << ";\n";
+                out << "l_" << cpp_name << " = clx::make_upvalue((" << i << " < arg_count) ? args[" << i
                     << "] : clx::LValue());\n";
-                out << "L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&l_" << pname << "->val, &l_" << pname
+                out << "L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&l_" << cpp_name << "->val, &l_" << cpp_name
                     << "->type);\n";
             }
         } else if (is_native) {
-            out << "double l_" << pname << " = (" << i << " < arg_count) ? args[" << i << "].as_number() : 0.0;\n";
+            out << "double l_" << cpp_name << " = (" << i << " < arg_count) ? args[" << i << "].as_number() : 0.0;\n";
             if (std::find(state.native_numbers.begin(), state.native_numbers.end(), pname)
                 == state.native_numbers.end())
                 state.native_numbers.push_back(pname);
         } else {
-            out << "clx::LValue l_" << pname << " = (" << i << " < arg_count) ? args[" << i << "] : clx::LValue();\n";
-            out << "L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&l_" << pname << ".val, &l_" << pname
+            out << "clx::LValue l_" << cpp_name << " = (" << i << " < arg_count) ? args[" << i << "] : clx::LValue();\n";
+            out << "L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&l_" << cpp_name << ".val, &l_" << cpp_name
                 << ".type);\n";
         }
         if (state.string_builders.count(pname) && !state.global_string_builders.count(pname)
             && !state.module_string_builders.count(pname)) {
-            out << "clx::StringBuilder sb_" << pname << ";\n";
+            out << "clx::StringBuilder sb_" << cpp_name << ";\n";
         }
     }
 
     if (node.as.func_def.is_vararg && node.as.func_def.named_vararg_ident != 0xFFFFFFFF) {
         std::string_view vaname(ctx.nodes[node.as.func_def.named_vararg_ident].as.ident.name,
             ctx.nodes[node.as.func_def.named_vararg_ident].as.ident.length);
-        out << "clx::LValue l_" << vaname << " = L->create_table(_va_count, 1);\n";
-        out << "clx::LTable* _t_" << vaname << " = static_cast<clx::LTable*>(l_" << vaname << ".as_pointer());\n";
-        out << "_t_" << vaname
+        out << "clx::LValue l_" << vararg_cpp_name << " = L->create_table(_va_count, 1);\n";
+        out << "clx::LTable* _t_" << vararg_cpp_name << " = static_cast<clx::LTable*>(l_" << vararg_cpp_name
+            << ".as_pointer());\n";
+        out << "_t_" << vararg_cpp_name
             << "->settable(clx::LValue(L->intern_string(\"n\")), clx::LValue(static_cast<double>(_va_count)));\n";
         out << "for (size_t i = 0; i < _va_count; ++i) {\n";
-        out << "    _t_" << vaname << "->settable(clx::LValue(static_cast<double>(i + 1)), _va_args[i]);\n";
+        out << "    _t_" << vararg_cpp_name << "->settable(clx::LValue(static_cast<double>(i + 1)), _va_args[i]);\n";
         out << "}\n";
-        out << "L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&l_" << vaname << ".val, &l_" << vaname
-            << ".type);\n";
+        out << "L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&l_" << vararg_cpp_name << ".val, &l_"
+            << vararg_cpp_name << ".type);\n";
     }
 
     size_t prev_locals = locals.size();
     for (uint32_t i = 0; i < node.as.func_def.param_count; ++i) {
         uint32_t p_idx = ctx.block_statements[node.as.func_def.first_param + i];
         std::string_view pname(ctx.nodes[p_idx].as.ident.name, ctx.nodes[p_idx].as.ident.length);
+        const std::string& cpp_name = param_cpp_names[i];
         bool is_cap = ctx.nodes[p_idx].as.ident.is_captured;
         bool param_is_boxed = is_cap && !state.constant_upvalues.count(pname);
-        locals.push_back({ pname, param_is_boxed });
+        locals.push_back({ pname, cpp_name, param_is_boxed });
     }
     if (node.as.func_def.is_vararg && node.as.func_def.named_vararg_ident != 0xFFFFFFFF) {
         std::string_view vaname(ctx.nodes[node.as.func_def.named_vararg_ident].as.ident.name,
             ctx.nodes[node.as.func_def.named_vararg_ident].as.ident.length);
-        locals.push_back({ vaname, false });
+        locals.push_back({ vaname, vararg_cpp_name, false });
     }
 
     if (node.as.func_def.body_block != 0xFFFFFFFF) {
@@ -3494,7 +3545,9 @@ void CodeEmitter::emitIdentifier(const ASTNode& node, uint32_t node_idx)
     bool is_native
         = std::find(state.native_numbers.begin(), state.native_numbers.end(), name) != state.native_numbers.end();
     bool is_boxed = false;
-    bool is_loc = this->is_local(name, is_boxed);
+    std::string_view cpp_name;
+    bool is_loc = this->is_local(name, is_boxed, cpp_name);
+    std::string_view emit_name = cpp_name.empty() ? name : cpp_name;
 
     if (node.as.ident.is_global) {
         if (name == "_ENV") {
@@ -3502,27 +3555,28 @@ void CodeEmitter::emitIdentifier(const ASTNode& node, uint32_t node_idx)
         } else if (state.global_constants.count(name)) {
             out << "clx::LValue(static_cast<double>(" << state.global_constants[name] << "))";
         } else if (state.string_builders.count(name)) {
-            out << "(sb_" << name << ".empty() ? clx::get_env_var(L, _ENV, \"" << name << "\") : clx::LValue(sb_"
-                << name << ".to_string(L)))";
+            out << "(sb_" << emit_name << ".empty() ? clx::get_env_var(L, _ENV, \"" << name << "\") : clx::LValue(sb_"
+                << emit_name << ".to_string(L)))";
         } else {
             out << "clx::get_env_var(L, _ENV, \"" << name << "\")";
         }
     } else if (is_native && !is_boxed && !node.as.ident.is_captured) {
-        out << "clx::LValue(l_" << name << ")";
+        out << "clx::LValue(l_" << emit_name << ")";
     } else if (is_loc) {
         if (state.string_builders.count(name)) {
             if (is_boxed) {
-                out << "(sb_" << name << ".empty() ? (*l_" << name << ") : clx::LValue(sb_" << name
+                out << "(sb_" << emit_name << ".empty() ? (*l_" << emit_name << ") : clx::LValue(sb_" << emit_name
                     << ".to_string(L)))";
             } else {
-                out << "(sb_" << name << ".empty() ? l_" << name << " : clx::LValue(sb_" << name << ".to_string(L)))";
+                out << "(sb_" << emit_name << ".empty() ? l_" << emit_name << " : clx::LValue(sb_" << emit_name
+                    << ".to_string(L)))";
             }
         } else if (is_boxed)
-            out << "(*l_" << name << ")";
+            out << "(*l_" << emit_name << ")";
         else if (is_native)
-            out << "clx::LValue(l_" << name << ")";
+            out << "clx::LValue(l_" << emit_name << ")";
         else
-            out << "l_" << name;
+            out << "l_" << emit_name;
     } else {
         size_t idx = std::distance(
             state.string_pool.begin(), std::find(state.string_pool.begin(), state.string_pool.end(), name));
