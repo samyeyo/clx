@@ -27,11 +27,12 @@ struct DeferredBlockScope {
     bool emit_close = false;                   // whether an outer "}" is owed (body emitted its own "{")
 };
 
-//------------------ LocalVar: tracks a local variable's name and boxed status
+//------------------ LocalVar: tracks a local variable's name, boxed status, and has_sb flag
 struct LocalVar {
     std::string_view name;
     std::string cpp_name;
     bool is_boxed;
+    bool has_sb = false;
     LocalVar() = default;
     LocalVar(std::string_view n, bool boxed) : name(n), cpp_name(), is_boxed(boxed) {}
     LocalVar(std::string_view n, std::string cpp, bool boxed) : name(n), cpp_name(std::move(cpp)), is_boxed(boxed) {}

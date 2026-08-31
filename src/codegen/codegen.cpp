@@ -418,6 +418,51 @@ void CodeEmitter::emit(uint32_t root_node, std::string_view module_name)
 
     Optimizer(ctx, state).run(ctx, root_node);
 
+    std::set<std::string_view> captured_decl_names;
+    for (uint32_t i = 0; i < ctx.nodes.size(); ++i) {
+        const auto& nd = ctx.nodes[i];
+        if (nd.type == NodeType::LocalDecl) {
+            for (uint32_t ii = 0; ii < nd.as.local_decl.ident_count; ++ii) {
+                uint32_t idi = ctx.block_statements[nd.as.local_decl.first_ident + ii];
+                if (ctx.nodes[idi].type == NodeType::Identifier && ctx.nodes[idi].as.ident.is_captured) {
+                    captured_decl_names.insert(
+                        std::string_view(ctx.nodes[idi].as.ident.name, ctx.nodes[idi].as.ident.length));
+                }
+            }
+        } else if (nd.type == NodeType::FunctionDef) {
+            for (uint32_t pi = 0; pi < nd.as.func_def.param_count; ++pi) {
+                uint32_t pidx = ctx.block_statements[nd.as.func_def.first_param + pi];
+                if (ctx.nodes[pidx].type == NodeType::Identifier && ctx.nodes[pidx].as.ident.is_captured) {
+                    captured_decl_names.insert(
+                        std::string_view(ctx.nodes[pidx].as.ident.name, ctx.nodes[pidx].as.ident.length));
+                }
+            }
+            if (nd.as.func_def.named_vararg_ident != 0xFFFFFFFF) {
+                uint32_t vidx = nd.as.func_def.named_vararg_ident;
+                if (ctx.nodes[vidx].type == NodeType::Identifier && ctx.nodes[vidx].as.ident.is_captured) {
+                    captured_decl_names.insert(
+                        std::string_view(ctx.nodes[vidx].as.ident.name, ctx.nodes[vidx].as.ident.length));
+                }
+            }
+        } else if (nd.type == NodeType::ForStatement) {
+            uint32_t vidx = nd.as.for_stmt.var_ident;
+            if (vidx < ctx.nodes.size() && ctx.nodes[vidx].type == NodeType::Identifier
+                && ctx.nodes[vidx].as.ident.is_captured) {
+                captured_decl_names.insert(
+                    std::string_view(ctx.nodes[vidx].as.ident.name, ctx.nodes[vidx].as.ident.length));
+            }
+        } else if (nd.type == NodeType::GenericForStatement) {
+            for (uint32_t vi = 0; vi < nd.as.generic_for.var_count; ++vi) {
+                uint32_t vidx = ctx.block_statements[nd.as.generic_for.first_var + vi];
+                if (vidx < ctx.nodes.size() && ctx.nodes[vidx].type == NodeType::Identifier
+                    && ctx.nodes[vidx].as.ident.is_captured) {
+                    captured_decl_names.insert(
+                        std::string_view(ctx.nodes[vidx].as.ident.name, ctx.nodes[vidx].as.ident.length));
+                }
+            }
+        }
+    }
+
     for (uint32_t i = 0; i < ctx.nodes.size(); ++i) {
         const auto& node = ctx.nodes[i];
         bool is_module_level = false;
@@ -454,7 +499,7 @@ void CodeEmitter::emit(uint32_t root_node, std::string_view module_name)
                     }
                     if (!ops.empty() && ctx.nodes[ops[0]].type == NodeType::Identifier) {
                         std::string_view fn(ctx.nodes[ops[0]].as.ident.name, ctx.nodes[ops[0]].as.ident.length);
-                        if (fn == name) {
+                        if (fn == name && !captured_decl_names.count(name)) {
                             state.string_builders.insert(name);
                             if (ctx.nodes[t_idx].as.ident.is_global) {
                                 state.global_string_builders.insert(name);
@@ -1140,6 +1185,15 @@ void CodeEmitter::emitCallExpression(const ASTNode& node, uint32_t node_idx)
             collect_string_builder_refs(ctx, av, state.string_builders, used_sb);
         }
         for (const auto& sb_name : used_sb) {
+            bool has_enclosing_builder = false;
+            for (auto _it = locals.rbegin(); _it != locals.rend(); ++_it) {
+                if (_it->name == sb_name) {
+                    has_enclosing_builder = _it->has_sb;
+                    break;
+                }
+            }
+            if (has_enclosing_builder)
+                continue;
             if (!state.global_string_builders.count(sb_name) && !state.module_string_builders.count(sb_name)) {
                 out << "    clx::StringBuilder sb_" << sb_name << ";\n";
             }
@@ -1666,6 +1720,9 @@ void CodeEmitter::emitFunctionDef(const ASTNode& node, uint32_t node_idx)
         bool is_cap = ctx.nodes[p_idx].as.ident.is_captured;
         bool param_is_boxed = is_cap && !state.constant_upvalues.count(pname);
         locals.push_back({ pname, cpp_name, param_is_boxed });
+        if (state.string_builders.count(pname) && !state.global_string_builders.count(pname)
+            && !state.module_string_builders.count(pname))
+            locals.back().has_sb = true;
     }
     if (node.as.func_def.is_vararg && node.as.func_def.named_vararg_ident != 0xFFFFFFFF) {
         std::string_view vaname(ctx.nodes[node.as.func_def.named_vararg_ident].as.ident.name,
@@ -2183,12 +2240,17 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
                                     out << "clx::LValue()";
                                 out << ";\nL->shadow_stack[L->shadow_top++] = clx::TypedSlot(&l_" << name << ".val, &l_"
                                     << name << ".type);\n";
-                            }
+                            }                            
                             if (state.string_builders.count(name) && !state.global_string_builders.count(name)
                                 && !state.module_string_builders.count(name)) {
                                 out << "clx::StringBuilder sb_" << name << ";\n";
+                                locals.back().has_sb = true;
                             }
                             locals.push_back({ name, false });
+                            if (state.string_builders.count(name) && !state.global_string_builders.count(name)
+                                && !state.module_string_builders.count(name)) {
+                                locals.back().has_sb = true;
+                            }
 
                             if (t_node.as.ident.attr == clx::Attribute::Close) {
                                 out << "clx::CloseGuard __cg_" << node_idx << "_0(L, l_" << name << ");\n";
@@ -2217,12 +2279,12 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
                                 state.ref_capture.clear();
                                 size_t _sfi = state.string_pool_index.at(name);
                                 out << "L->_G->settable(cstr_[" << _sfi << "], *l_" << name << ");\n";
-                            }
+                            }                            
                             if (state.string_builders.count(name) && !state.global_string_builders.count(name)
                                 && !state.module_string_builders.count(name)) {
                                 out << "clx::StringBuilder sb_" << name << ";\n";
+                                locals.back().has_sb = true;
                             }
-
                             if (t_node.as.ident.attr == clx::Attribute::Close) {
                                 out << "clx::CloseGuard __cg_" << node_idx << "_0(L, *l_" << name << ");\n";
                             }
@@ -2269,6 +2331,10 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
                             out << "clx::StringBuilder sb_" << name << ";\n";
                         }
                         locals.push_back({ name, false });
+                        if (state.string_builders.count(name) && !state.global_string_builders.count(name)
+                            && !state.module_string_builders.count(name)) {
+                            locals.back().has_sb = true;
+                        }
 
                         if (t_node.as.ident.attr == clx::Attribute::Close) {
                             out << "clx::CloseGuard __cg_" << node_idx << "_0(L, l_" << name << ");\n";
@@ -2322,8 +2388,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
                     if (is_sb_concat) {
 
                         out << "{ clx::LValue _gval = clx::get_env_var(L, _ENV, \"" << name << "\");\n";
-                        out << "  if (sb_" << name << ".empty() && _gval.type == clx::ValueType::String) {\n";
-                        out << "    sb_" << name << ".append(_gval.as_string(), _gval.string_len()); }\n";
+                        out << "  if (sb_" << name << ".empty()) sb_" << name << ".append(L, _gval);\n";
                         for (size_t i = 1; i < ops.size(); ++i) {
                             uint32_t op_idx = ops[i];
                             const auto& op_node = ctx.nodes[op_idx];
@@ -2347,6 +2412,10 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
                             << ".to_string(L)));\n";
                         out << "}\n";
                     } else {
+                        if (state.global_string_builders.count(name)
+                            || state.module_string_builders.count(name)) {
+                            out << "    sb_" << name << ".clear();\n";
+                        }
                         out << "clx::set_env_var(L, _ENV, \"" << name << "\", ";
                         if (v_count > 0)
                             emit_node(ctx.block_statements[first_v]);
@@ -2454,14 +2523,15 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
                         if (!concat_ops.empty() && ctx.nodes[concat_ops[0]].type == NodeType::Identifier) {
                             std::string_view first_name(
                                 ctx.nodes[concat_ops[0]].as.ident.name, ctx.nodes[concat_ops[0]].as.ident.length);
-                            if (first_name == name && !ctx.nodes[concat_ops[0]].as.ident.is_global) {
+                            if (first_name == name && !ctx.nodes[concat_ops[0]].as.ident.is_global
+                                && state.string_builders.count(name)) {
 
                                 if (is_boxed) {
-                                    out << "if (sb_" << name << ".empty()) sb_" << name << ".append((*l_" << name
-                                        << ").as_string(), (*l_" << name << ").string_len());\n";
+                                    out << "if (sb_" << name << ".empty()) sb_" << name << ".append(L, (*l_" << name
+                                        << "));\n";
                                 } else {
-                                    out << "if (sb_" << name << ".empty()) sb_" << name << ".append(l_" << name
-                                        << ".as_string(), l_" << name << ".string_len());\n";
+                                    out << "if (sb_" << name << ".empty()) sb_" << name << ".append(L, l_" << name
+                                        << ");\n";
                                 }
 
                                 for (size_t i = 1; i < concat_ops.size(); ++i) {
@@ -2510,6 +2580,10 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
                     } else
                         out << "clx::LValue()";
                     out << ";\n";
+                    if (state.string_builders.count(name) && !state.global_string_builders.count(name)
+                        && !state.module_string_builders.count(name)) {
+                        out << "    sb_" << name << ".clear();\n";
+                    }
                 }
             } else {
                 size_t idx = state.string_pool_index.at(name);
@@ -2936,6 +3010,10 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
                     out << "clx::StringBuilder sb_" << name << ";\n";
                 }
                 locals.push_back({ name, false });
+                if (state.string_builders.count(name) && !state.global_string_builders.count(name)
+                    && !state.module_string_builders.count(name)) {
+                    locals.back().has_sb = true;
+                }
             }
         }
     }
