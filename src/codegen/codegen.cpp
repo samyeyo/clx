@@ -2015,8 +2015,9 @@ void CodeEmitter::emitAssignmentLike(const ASTNode& node, uint32_t node_idx)
             single_name = std::string_view(ctx.nodes[t_idx].as.ident.name, ctx.nodes[t_idx].as.ident.length);
             bool in_native = std::find(state.native_numbers.begin(), state.native_numbers.end(), single_name)
                 != state.native_numbers.end();
-            bool rhs_yields_number
-                = yields_number(ctx, state, ctx.block_statements[first_v], nullptr, state.current_fast_func);
+            bool rhs_yields_number = (v_count > 0)
+                ? yields_number(ctx, state, ctx.block_statements[first_v], nullptr, state.current_fast_func)
+                : false;
             if (!ctx.nodes[t_idx].as.ident.is_captured) {
                 if (is_local) {
                     if (in_native || rhs_yields_number)
