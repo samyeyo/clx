@@ -1548,10 +1548,13 @@ public:
     virtual const char* what() const noexcept override;
 };
 
+//------------------ Interns an error message raised without an LState
+const char* intern_error_message(const char* msg, size_t len);
+
 //------------------ Throws an LRuntimeException
 [[noreturn]] CLX_INLINE_COLD void throw_runtime_error(const char* msg)
 {
-    throw LRuntimeException(LValue(msg));
+    throw LRuntimeException(LValue(intern_error_message(msg, clx_strlen(msg))));
 }
 
 //------------------ Stack scope guard
