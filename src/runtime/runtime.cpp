@@ -354,7 +354,7 @@ std::string LValue::to_string(LState* L) const
                 L->shadow_top--;
 
                 if (ret.count > 0 && ret[0].type == String) {
-                    return std::string(ret[0].as_string());
+                    return std::string(ret[0].as_string(), ret[0].string_len());
                 }
             }
         }
@@ -373,7 +373,7 @@ std::string LValue::to_string(LState* L) const
     case Int64:
         return std::to_string(as_integer());
     case String:
-        return std::string(as_string());
+        return std::string(as_string(), string_len());
     case Table: {
         const char* prefix = "table";
         if (L) {
