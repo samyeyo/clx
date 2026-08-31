@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -304,6 +305,16 @@ MultiValue close_thread(LState* L, const LValue& thread)
         return MultiValue(clx::boolean(true));
 
     return MultiValue(clx::boolean(false));
+}
+
+//------------------ intern_error_message — interns an error message raised without an LState
+const char* intern_error_message(const char* msg, size_t len)
+{
+    static std::mutex pool_mutex;
+    static StringPool pool;
+    uint64_t h = len <= 8 ? swar_hash_8(msg, len) : wyhash_str(msg, len);
+    std::lock_guard<std::mutex> guard(pool_mutex);
+    return pool.intern(msg, len, h);
 }
 
 //------------------ LRuntimeException::LRuntimeException — error exception constructor
