@@ -1,4 +1,5 @@
 @echo off
+setlocal enabledelayedexpansion
 
 set BUILD_TYPE=Release
 set DO_INSTALL=0
@@ -19,9 +20,11 @@ goto parse
 :done_parse
 
 set ARCH_ARGS=
-if defined CLX_ARCH set ARCH_ARGS=-DCLX_ARCH=%CLX_ARCH%
+for /f "tokens=1,* delims==" %%a in ('set CLX_ 2^>nul') do (
+    set ARCH_ARGS=!ARCH_ARGS! -D%%a=%%b
+)
 
-cmake -S . -B build -G "NMake Makefiles" -D CMAKE_BUILD_TYPE=%BUILD_TYPE% %ARCH_ARGS%
+cmake -S . -B build -G "NMake Makefiles" -D CMAKE_BUILD_TYPE=%BUILD_TYPE% !ARCH_ARGS!
 if errorlevel 1 exit /b %errorlevel%
 
 :: Build the project
@@ -31,6 +34,7 @@ if errorlevel 1 exit /b %errorlevel%
 if "%DO_INSTALL%"=="1" (
     cmake --install build --config %BUILD_TYPE%
 )
+endlocal
 exit /b 0
 
 :do_uninstall

@@ -34,9 +34,13 @@ for arg in "$@"; do
 done
 
 ARCH_ARGS=""
-if [ -n "$CLX_ARCH" ]; then
-    ARCH_ARGS="-DCLX_ARCH=$CLX_ARCH"
-fi
+# Forward any CLX_* environment variables (CLX_ARCH, etc.) to CMake
+for var in $(env | cut -d= -f1 | grep '^CLX_'); do
+    eval val=\$$var
+    if [ -n "$val" ]; then
+        ARCH_ARGS="$ARCH_ARGS -D$var=$val"
+    fi
+done
 
 cmake -S . -B build -DCMAKE_BUILD_TYPE=$BUILD_TYPE $ARCH_ARGS
 cmake --build build --config $BUILD_TYPE
