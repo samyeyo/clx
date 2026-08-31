@@ -255,8 +255,10 @@ static MultiValue tostring(LState* L, const LValue* args, size_t count)
         int n = std::snprintf(buf, sizeof(buf), "%lld", (long long)v.as_integer());
         return MultiValue(clx::string(L, buf, (size_t)n));
     }
-    default:
-        return MultiValue(clx::string(L, v.to_string(L).c_str()));
+    default: {
+        std::string sv = v.to_string(L);
+        return MultiValue(clx::string(L, sv.data(), sv.size()));
+    }
     }
 }
 
