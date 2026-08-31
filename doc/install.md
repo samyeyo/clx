@@ -16,10 +16,16 @@ This installs the `clx` compiler to `/usr/local/bin`, the runtime libraries (`li
 
 ### Windows
 
-```cmd
+```bat
 git clone https://github.com/samyeyo/clx
 cd clx
 build.bat install
+```
+
+```bat
+:: with a specific architecture (and any other CLX_* option the same way):
+set CLX_ARCH=avx2 && build.bat
+set CLX_ARCH=avx2 && build.bat install
 ```
 
 This installs the compiler to `%ProgramFiles%\clx\bin`, the libraries (`clx.lib`, `clx_size.lib`) to `%ProgramFiles%\clx\lib`, and the headers to `%ProgramFiles%\clx\include`. Run `build.bat uninstall` to remove it.
@@ -35,19 +41,26 @@ By default clx targets the widest compatibility baseline:
 
 The same flag is baked into the runtime libraries **and** injected into every binary clx compiles (including `--debug` builds), unless you override it with an explicit compiler flag.
 
-Override at configure time with `CLX_ARCH`:
+Override at configure time with `CLX_ARCH` (and any other `CLX_*` CMake option) as an environment variable before the wrapper script:
 
 ```sh
 # x86: sse2 (default) | avx | avx2 | native
-cmake -S . -B build -DCLX_ARCH=avx2
-cmake --build build
+CLX_ARCH=avx2 ./build.sh
+CLX_ARCH=avx2 ./build.sh install
 
 # ARM: native (default) | generic (portable, no -mcpu flag)
-cmake -S . -B build -DCLX_ARCH=generic
-cmake --build build
+CLX_ARCH=generic ./build.sh
+CLX_ARCH=generic ./build.sh install
 
 # Optimize for the build machine specifically
-cmake -S . -B build -DCLX_ARCH=native
+CLX_ARCH=native ./build.sh
+CLX_ARCH=native ./build.sh install
+```
+
+When invoking `cmake` directly, use `-D` instead:
+
+```sh
+cmake -S . -B build -DCLX_ARCH=avx2
 cmake --build build
 ```
 
