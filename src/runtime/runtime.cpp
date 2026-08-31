@@ -80,7 +80,7 @@ static void fiber_entry_impl(LThread* t)
             t->status = THREAD_DEAD;
             t->has_error = true;
         } catch (...) {
-            t->yield_args = MultiValue(clx::LValue("unknown error"));
+            t->yield_args = MultiValue(clx::LValue(L->intern_string("unknown error")));
             t->status = THREAD_DEAD;
             t->has_error = true;
         }
