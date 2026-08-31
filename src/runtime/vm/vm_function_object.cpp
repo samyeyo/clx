@@ -68,7 +68,7 @@ MultiValue VMFunction::invoke(LState* clx_L, const LValue* args, size_t nargs)
     MultiValue out;
     if (!vm_pcall_function_(clx_L, registry_ref, args, nargs, out)) {
 
-        LValue err = (out.count > 0) ? out[0] : LValue("VM error");
+        LValue err = (out.count > 0) ? out[0] : LValue(clx_L->intern_string("VM error"));
         throw LRuntimeException(err);
     }
     return out;
