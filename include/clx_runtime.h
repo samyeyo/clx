@@ -1196,8 +1196,6 @@ struct LState {
 
     CLX_INLINE_HOT LValue* alloc_overflow(size_t n)
     {
-        if (!this)
-            throw std::runtime_error("clx: alloc_overflow called on a null LState");
         if (overflow_heap_used + n > overflow_heap_cap) {
             size_t new_cap = overflow_heap_cap ? overflow_heap_cap * 2 : 64;
             while (new_cap < overflow_heap_used + n)
