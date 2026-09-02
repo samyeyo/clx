@@ -311,7 +311,7 @@ uint32_t Parser::parse_postfix_expression()
                                   { "tan", "std::tan" }, { "atan", "std::atan" }, { "asin", "std::asin" },
                                   { "acos", "std::acos" }, { "sinh", "std::sinh" }, { "cosh", "std::cosh" },
                                   { "tanh", "std::tanh" }, { "atan2", "std::atan2" }, { "pow", "std::pow" },
-                                  { "deg", "__clx_deg" }, { "rad", "__clx_rad" } };
+                                  { "fmod", "std::fmod" }, { "deg", "__clx_deg" }, { "rad", "__clx_rad" } };
                         auto _mit = _m.find(kname);
                         if (_mit != _m.end())
                             intrinsic_cname = _mit->second;
