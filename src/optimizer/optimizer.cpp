@@ -1729,10 +1729,13 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
                 continue;
 
             std::vector<uint32_t> stack = { nd.as.func_def.body_block };
+            std::set<uint32_t> visited;
             while (!stack.empty()) {
                 uint32_t nid = stack.back();
                 stack.pop_back();
                 if (nid == 0xFFFFFFFF || nid >= ctx.nodes.size())
+                    continue;
+                if (!visited.insert(nid).second)
                     continue;
                 const auto& nn = ctx.nodes[nid];
 
@@ -1774,6 +1777,13 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
                 }
                 if (nn.type == NodeType::ParenExpression) {
                     stack.push_back(nn.as.paren_expr.expr);
+                }
+                if (nn.type == NodeType::GenericForStatement) {
+                    stack.push_back(nn.as.generic_for.body_block);
+                }
+                if (nn.type == NodeType::ReturnStatement) {
+                    for (uint32_t ri = 0; ri < nn.as.return_stmt.value_count; ++ri)
+                        stack.push_back(ctx.block_statements[nn.as.return_stmt.first_value + ri]);
                 }
 
                 if (nn.type == NodeType::BinaryOp) {
@@ -1825,38 +1835,6 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
                             }
                         }
                     }
-                }
-                auto push_block = [&](uint32_t b) {
-                    if (b != 0xFFFFFFFF)
-                        stack.push_back(b);
-                };
-                if (nn.type == NodeType::Block)
-                    for (uint32_t i = 0; i < nn.as.block.count; ++i)
-                        push_block(ctx.block_statements[nn.as.block.first_statement + i]);
-                else if (nn.type == NodeType::FunctionDef) {
-                } else if (nn.type == NodeType::IfStatement) {
-                    push_block(nn.as.if_stmt.condition);
-                    push_block(nn.as.if_stmt.then_block);
-                    push_block(nn.as.if_stmt.else_block);
-                } else if (nn.type == NodeType::WhileStatement) {
-                    push_block(nn.as.while_stmt.condition);
-                    push_block(nn.as.while_stmt.body_block);
-                } else if (nn.type == NodeType::RepeatStatement) {
-                    push_block(nn.as.repeat_stmt.condition);
-                    push_block(nn.as.repeat_stmt.body_block);
-                } else if (nn.type == NodeType::ForStatement) {
-                    push_block(nn.as.for_stmt.body_block);
-                } else if (nn.type == NodeType::GenericForStatement) {
-                    push_block(nn.as.generic_for.body_block);
-                } else if (nn.type == NodeType::ReturnStatement) {
-                    for (uint32_t ri = 0; ri < nn.as.return_stmt.value_count; ++ri)
-                        push_block(ctx.block_statements[nn.as.return_stmt.first_value + ri]);
-                } else if (nn.type == NodeType::Assignment) {
-                    for (uint32_t ai = 0; ai < nn.as.assign.value_count; ++ai)
-                        push_block(ctx.block_statements[nn.as.assign.first_value + ai]);
-                } else if (nn.type == NodeType::LocalDecl) {
-                    for (uint32_t li = 0; li < nn.as.local_decl.value_count; ++li)
-                        push_block(ctx.block_statements[nn.as.local_decl.first_value + li]);
                 }
             }
         }
