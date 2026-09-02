@@ -77,7 +77,7 @@ static void fiber_entry_impl(LThread* t)
             t->status = THREAD_DEAD;
         } catch (const LRuntimeException& e) {
 
-            t->yield_args = MultiValue(clx::LValue(L->intern_string(e.what())));
+            t->yield_args = MultiValue(e.error_obj);
             t->status = THREAD_DEAD;
             t->has_error = true;
         } catch (...) {
@@ -404,7 +404,8 @@ LValue LValue::slow_eq(const LValue& other) const
     if (type != other.type)
         return LValue(false);
     if (type == String) {
-        return LValue(std::string_view(as_string()) == std::string_view(other.as_string()));
+        return LValue(string_len() == other.string_len()
+            && clx_memcmp(as_string(), other.as_string(), string_len()) == 0);
     }
     return LValue(false);
 }
@@ -418,7 +419,10 @@ LValue LValue::slow_lt(const LValue& other) const
         return LValue(l < r);
     }
     if (type == String && other.type == String) {
-        return LValue(std::string_view(as_string()) < std::string_view(other.as_string()));
+        size_t al = string_len(), bl = other.string_len();
+        int cmp = clx_memcmp(as_string(), other.as_string(), std::min(al, bl));
+        if (cmp != 0) return LValue(cmp < 0);
+        return LValue(al < bl);
     }
     return LValue(false);
 }
@@ -432,7 +436,10 @@ LValue LValue::slow_le(const LValue& other) const
         return LValue(l <= r);
     }
     if (type == String && other.type == String) {
-        return LValue(std::string_view(as_string()) <= std::string_view(other.as_string()));
+        size_t al = string_len(), bl = other.string_len();
+        int cmp = clx_memcmp(as_string(), other.as_string(), std::min(al, bl));
+        if (cmp != 0) return LValue(cmp <= 0 ? cmp < 0 : false);
+        return LValue(al <= bl);
     }
     return LValue(false);
 }
@@ -1725,7 +1732,12 @@ MultiValue pcall_function(LState* L, const LValue& func, const LValue* args, siz
         return MultiValue(results, L);
     } catch (const LRuntimeException& e) {
 
-        LValue err_val = LValue(L->intern_string(e.what()));
+        LValue err_val = e.error_obj;
+        // e.error_obj is already interned with correct length (may contain NULs); re-interning via e.what() would truncate
+        if (err_val.type != String) {
+            // Ensure string errors are interned correctly if they were somehow non-string
+            err_val = LValue(L->intern_string(e.what()));
+        }
         return MultiValue({ LValue(false), err_val });
     } catch (const std::exception& e) {
         return MultiValue({ LValue(false), LValue(L->intern_string(e.what())) });

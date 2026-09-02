@@ -28,8 +28,9 @@ clx::MultiValue lua_error(clx::LState* L, const clx::LValue* args, size_t count)
 
     if (err_val.type == clx::String && level > 0) {
         std::string prefix = clx::file_line_prefix(L);
-        std::string full_msg = prefix + err_val.as_string();
-        throw clx::LRuntimeException(clx::string(L, full_msg.c_str()));
+        std::string err_str(err_val.as_string(), err_val.string_len());
+        std::string full_msg = prefix + err_str;
+        throw clx::LRuntimeException(clx::string(L, full_msg.data(), full_msg.size()));
     }
     throw clx::LRuntimeException(err_val);
 }
@@ -140,7 +141,7 @@ MultiValue collectgarbage(LState* L, const LValue* args, size_t arg_count)
 {
     if (arg_count == 0 || !clx::is_string(args[0]))
         return MultiValue(clx::number(0.0));
-    std::string_view opt = args[0].as_string();
+    std::string_view opt(args[0].as_string(), args[0].string_len());
     if (opt == "collect") {
         L->collect_garbage();
         return MultiValue(clx::number(0.0));
@@ -342,7 +343,7 @@ static MultiValue warn(LState* L, const LValue* args, size_t count)
         return MultiValue();
 
     if (clx::is_string(args[0])) {
-        std::string_view s = args[0].as_string();
+        std::string_view s(args[0].as_string(), args[0].string_len());
         if (s == "@off") {
             warnings_enabled = false;
             return MultiValue();
@@ -415,7 +416,7 @@ static clx::MultiValue select(clx::LState* L, const clx::LValue* args, size_t ar
     const clx::LValue& arg1 = args[0];
 
     if (clx::is_string(arg1)) {
-        if (std::string_view(arg1.as_string()) == "#") {
+        if (arg1.string_len()==1 && arg1.as_string()[0]=='#') {
             return clx::MultiValue(clx::integer(static_cast<int64_t>(arg_count) - 1));
         }
     }

@@ -615,7 +615,7 @@ extern "C" int clx_vm_proxy_call(lua_State* L)
         clx_L->shadow_top = prev_shadow;
         if (heap)
             delete[] clx_args;
-        lua_pushstring(L, e.what());
+        lua_pushlstring(L, e.error_obj.as_string(), e.error_obj.string_len());
         lua_error(L);
         return 0;
     } catch (const std::exception& e) {
