@@ -984,7 +984,21 @@ void Optimizer::run(const ASTContext& ctx, uint32_t root_node)
                     std::string_view name(ctx.nodes[t_idx].as.ident.name, ctx.nodes[t_idx].as.ident.length);
                     const auto& tc = ctx.nodes[v_idx].as.table_cons;
                     if (tc.count > 0 && state.known_table_lengths.find(name) == state.known_table_lengths.end()) {
-                        state.known_table_lengths[name] = tc.count;
+                        bool _all_implicit = true;
+                        for (uint32_t ei = 0; ei < tc.count; ++ei) {
+                            uint32_t ek = ctx.block_statements[tc.first_item + ei * 2];
+                            if (ek != 0xFFFFFFFF) {
+                                _all_implicit = false;
+                                break;
+                            }
+                        }
+                        if (_all_implicit) {
+                            uint32_t lv = ctx.block_statements[tc.first_item + (tc.count - 1) * 2 + 1];
+                            if (lv >= ctx.nodes.size() || (ctx.nodes[lv].type != NodeType::Vararg
+                                && ctx.nodes[lv].type != NodeType::CallExpression)) {
+                                state.known_table_lengths[name] = tc.count;
+                            }
+                        }
                     }
                     if (tc.count > 0) {
                         bool has_string_key = false;
