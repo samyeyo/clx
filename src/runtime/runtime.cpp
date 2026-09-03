@@ -608,7 +608,7 @@ void LTable::resize_hash(size_t new_size)
     uint32_t mask = static_cast<uint32_t>(new_size - 1);
     if (ex->entries) {
         for (size_t i = 0; i < ex->hash_size; ++i) {
-            if (ex->entries[i].ktype == Nil)
+            if (ex->entries[i].ktype == Nil || ex->entries[i].vtype == Nil)
                 continue;
             uint64_t h = lvalue_hash(LValue(ex->entries[i].key, ex->entries[i].ktype)) & mask;
             while (new_entries[h].ktype != Nil)
@@ -718,7 +718,7 @@ void LTable::settable(const LValue& key, const LValue& val)
             array_cap = new_cap;
             if (ext && ext->hash_size > 0) {
                 for (size_t i = 0; i < ext->hash_size; ++i) {
-                    if (ext->entries[i].ktype == Nil)
+                    if (ext->entries[i].ktype == Nil || ext->entries[i].vtype == Nil)
                         continue;
                     LValue kv(ext->entries[i].key, ext->entries[i].ktype);
                     int64_t hidx = -1;
@@ -781,7 +781,7 @@ void LTable::settable(const LValue& key, const LValue& val)
                 array_cap = new_cap;
                 if (ext && ext->hash_size > 0) {
                     for (size_t i = 0; i < ext->hash_size; ++i) {
-                        if (ext->entries[i].ktype == Nil)
+                        if (ext->entries[i].ktype == Nil || ext->entries[i].vtype == Nil)
                             continue;
                         LValue kv(ext->entries[i].key, ext->entries[i].ktype);
                         int64_t hidx = -1;
@@ -825,15 +825,13 @@ void LTable::settable(const LValue& key, const LValue& val)
                 if (e.key.payload.u64 == HASH_EMPTY)
                     return;
             } else if (lvalue_eq_fast(LValue(e.key, e.ktype), key)) {
-                e.key.payload.u64 = HASH_TOMBSTONE;
-                e.ktype = Nil;
+                if (e.vtype == Nil)
+                    return;
                 e.val = TValue();
                 e.vtype = Nil;
                 ex->hash_count--;
                 ex->hash_tombs++;
                 ex->hash_version++;
-                if (ex->hash_bitmap)
-                    ex->hash_bitmap[h / 64] &= ~(1ULL << (h % 64));
                 return;
             }
             h = (h + 1) & mask;
@@ -858,7 +856,7 @@ void LTable::settable(const LValue& key, const LValue& val)
         if (_ic.key_payload == key.val.payload.u64 && _ic.table_ver == ex->hash_version
             && _ic.entry_idx < ex->hash_size) {
             HashEntry& _e = ex->entries[_ic.entry_idx];
-            if (_e.ktype != Nil) {
+            if (_e.ktype != Nil && _e.vtype != Nil) {
                 _e.val = val.val;
                 _e.vtype = val.type;
                 return;
@@ -891,6 +889,12 @@ void LTable::settable(const LValue& key, const LValue& val)
             if (tomb == -1)
                 tomb = static_cast<int32_t>(h);
         } else if (lvalue_eq_fast(LValue(e.key, e.ktype), key)) {
+            if (e.vtype == Nil) {
+                ex->hash_count++;
+                ex->hash_tombs--;
+                if (ex->hash_bitmap)
+                    ex->hash_bitmap[h / 64] |= (1ULL << (h % 64));
+            }
             e.val = val.val;
             e.vtype = val.type;
             return;
