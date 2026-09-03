@@ -1209,7 +1209,74 @@ void CodeEmitter::emitCallExpression(const ASTNode& node, uint32_t node_idx)
                     out << ", ";
             }
             out << "};\n";
-            if (is_direct) {
+            bool _sub1 = false;
+            bool _subvar = false;
+            int64_t _subi = 0;
+            if (!is_method_call && node.as.call_expr.arg_count >= 3
+                && node.as.call_expr.target < ctx.nodes.size()
+                && ctx.nodes[node.as.call_expr.target].type == NodeType::TableAccess
+                && state.reassigned_vars.count("string") == 0
+                && node.as.call_expr.first_arg + 2 < ctx.block_statements.size()) {
+                uint32_t _stt = ctx.nodes[node.as.call_expr.target].as.table_access.table;
+                uint32_t _stk = ctx.nodes[node.as.call_expr.target].as.table_access.key;
+                if (_stt < ctx.nodes.size() && _stk < ctx.nodes.size()
+                    && ctx.nodes[_stt].type == NodeType::Identifier
+                    && ctx.nodes[_stk].type == NodeType::String
+                    && ctx.nodes[_stt].as.ident.is_global
+                    && std::string_view(ctx.nodes[_stt].as.ident.name, ctx.nodes[_stt].as.ident.length) == "string"
+                    && std::string_view(ctx.nodes[_stk].as.string.text, ctx.nodes[_stk].as.string.length) == "sub") {
+                    uint32_t _snid = ctx.block_statements[node.as.call_expr.first_arg + 1];
+                    uint32_t _enid = ctx.block_statements[node.as.call_expr.first_arg + 2];
+                    if (_snid < ctx.nodes.size() && _enid < ctx.nodes.size()) {
+                        auto& _sns = ctx.nodes[_snid];
+                        auto& _ens = ctx.nodes[_enid];
+                        if (_sns.type == NodeType::Integer && _ens.type == NodeType::Integer
+                            && _sns.as.integer.val == _ens.as.integer.val && _sns.as.integer.val >= 1) {
+                            _sub1 = true;
+                            _subi = _sns.as.integer.val;
+                        } else if (_sns.type == NodeType::Number && _ens.type == NodeType::Number
+                            && _sns.as.number.val == _ens.as.number.val
+                            && static_cast<double>(static_cast<int64_t>(_sns.as.number.val)) == _sns.as.number.val
+                            && _sns.as.number.val >= 1.0) {
+                            _sub1 = true;
+                            _subi = static_cast<int64_t>(_sns.as.number.val);
+                        } else if (_sns.type == NodeType::Identifier && _ens.type == NodeType::Identifier
+                            && !_sns.as.ident.is_global && !_ens.as.ident.is_global
+                            && std::string_view(_sns.as.ident.name, _sns.as.ident.length)
+                                == std::string_view(_ens.as.ident.name, _ens.as.ident.length)) {
+                            _sub1 = true;
+                            _subvar = true;
+                        }
+                    }
+                }
+            }
+            if (_sub1) {
+                out << "    size_t _ssaved = L->shadow_top;\n";
+                out << "    for (size_t i = 0; i < " << node.as.call_expr.arg_count
+                    << "; ++i) L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&args[i].val, &args[i].type);\n";
+                out << "    clx::MultiValue _main_ret;\n";
+                if (_subvar) {
+                    out << "    int64_t _sk = 0;\n";
+                    out << "    bool _sok = clx::to_integer(args[1], _sk);\n";
+                    out << "    if (!_sok) { double _sd = 0.0; if (args[1].to_number(_sd)) { _sk = "
+                           "static_cast<int64_t>(_sd); _sok = true; } }\n";
+                } else {
+                    out << "    int64_t _sk = " << _subi << ";\n";
+                    out << "    bool _sok = true;\n";
+                }
+                out << "    if (_sok && args[0].type == clx::ValueType::String) {\n";
+                out << "        size_t _sl = args[0].string_len();\n";
+                out << "        if (_sk >= 1 && static_cast<size_t>(_sk) <= _sl) {\n";
+                out << "            _main_ret = clx::MultiValue(clx::make_string_pooled(L, args[0].as_string() + "
+                    << "static_cast<size_t>(_sk) - 1, 1));\n";
+                out << "        } else {\n";
+                out << "            _main_ret = clx::MultiValue(clx::LValue(L->intern_string(\"\", 0)));\n";
+                out << "        }\n";
+                out << "    } else {\n";
+                out << "        _main_ret = clx::str_sub(L, args, " << node.as.call_expr.arg_count << ");\n";
+                out << "    }\n";
+                out << "    L->shadow_top = _ssaved;\n";
+            } else if (is_direct) {
                 out << "    size_t _ssaved = L->shadow_top;\n";
                 out << "    clx::MultiValue _main_ret = _impl_" << fname << "(L, args, " << node.as.call_expr.arg_count
                     << ");\n";
