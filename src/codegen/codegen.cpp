@@ -4350,7 +4350,7 @@ void CodeEmitter::emitTableConstructor(const ASTNode& node, uint32_t node_idx)
         for (uint32_t i = 0; i < node.as.table_cons.count; ++i) {
             uint32_t k = ctx.block_statements[node.as.table_cons.first_item + i * 2];
             uint32_t v = ctx.block_statements[node.as.table_cons.first_item + i * 2 + 1];
-            if (i == node.as.table_cons.count - 1
+            if (k == 0xFFFFFFFF && i == node.as.table_cons.count - 1
                 && (ctx.nodes[v].type == NodeType::Vararg || ctx.nodes[v].type == NodeType::CallExpression)) {
                 state.expect_multivalue = true;
                 out << "clx::MultiValue _mret_" << node_idx << " = ";
