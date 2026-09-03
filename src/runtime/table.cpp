@@ -186,7 +186,7 @@ MultiValue table_sort(LState* L, const LValue* args, size_t count)
         return MultiValue();
 
     if ((count < 2 || args[1].type == Nil) && len <= list->array_size) {
-        if (clx_validate_types_range(reinterpret_cast<const uint8_t*>(list->array_types), 0, len, 2, 4)) {
+        if (clx_validate_types_range(reinterpret_cast<const uint8_t*>(list->array_types), 0, len, 2, 3)) {
             std::vector<double> nums(len);
             for (size_t k = 0; k < len; ++k) {
                 if (list->array_types[k] == Double)
