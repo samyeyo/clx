@@ -6,6 +6,7 @@
 // └─────────────────────────────────────────────┘
 
 #include "clx_runtime.h"
+#include "../include/clx_simd.h"
 #include <algorithm>
 #include <cctype>
 #include <climits>
@@ -130,8 +131,7 @@ MultiValue str_reverse(LState* L, const LValue* args, size_t count)
         return MultiValue(LValue::istr(buf, static_cast<uint32_t>(l)));
     }
     char* dst = new char[l + 1];
-    for (size_t i = 0; i < l; i++)
-        dst[i] = s[l - i - 1];
+    clx_reverse_bytes(dst, s, l);
     dst[l] = '\0';
     MultiValue result = MultiValue(make_string_pooled(L, dst, l));
     delete[] dst;
@@ -145,13 +145,11 @@ MultiValue str_lower(LState* L, const LValue* args, size_t count)
     const char* s = get_string(L, args, count, l, 1);
     if (l <= 6) {
         char buf[8];
-        for (size_t i = 0; i < l; i++)
-            buf[i] = (char)std::tolower((unsigned char)s[i]);
+        clx_case_fold(buf, s, l, 1);
         return MultiValue(LValue::istr(buf, static_cast<uint32_t>(l)));
     }
     char* dst = new char[l + 1];
-    for (size_t i = 0; i < l; i++)
-        dst[i] = (char)std::tolower((unsigned char)s[i]);
+    clx_case_fold(dst, s, l, 1);
     dst[l] = '\0';
     MultiValue result = MultiValue(make_string_pooled(L, dst, l));
     delete[] dst;
@@ -165,13 +163,11 @@ MultiValue str_upper(LState* L, const LValue* args, size_t count)
     const char* s = get_string(L, args, count, l, 1);
     if (l <= 6) {
         char buf[8];
-        for (size_t i = 0; i < l; i++)
-            buf[i] = (char)std::toupper((unsigned char)s[i]);
+        clx_case_fold(buf, s, l, 0);
         return MultiValue(LValue::istr(buf, static_cast<uint32_t>(l)));
     }
     char* dst = new char[l + 1];
-    for (size_t i = 0; i < l; i++)
-        dst[i] = (char)std::toupper((unsigned char)s[i]);
+    clx_case_fold(dst, s, l, 0);
     dst[l] = '\0';
     MultiValue result = MultiValue(make_string_pooled(L, dst, l));
     delete[] dst;
@@ -524,39 +520,71 @@ static const char* classend(MatchState* ms, const char* p)
 }
 
 //------------------ match_class — test char against Lua character class (%a, %d, etc.)
+struct MatchClassTable {
+    unsigned short bit[256];
+    MatchClassTable()
+    {
+        for (int c = 0; c < 256; ++c) {
+            unsigned short b = 0;
+            if (std::isalpha(c))
+                b |= 1 << 0;
+            if (std::iscntrl(c))
+                b |= 1 << 1;
+            if (std::isdigit(c))
+                b |= 1 << 2;
+            if (std::isgraph(c))
+                b |= 1 << 3;
+            if (std::islower(c))
+                b |= 1 << 4;
+            if (std::ispunct(c))
+                b |= 1 << 5;
+            if (std::isspace(c))
+                b |= 1 << 6;
+            if (std::isupper(c))
+                b |= 1 << 7;
+            if (std::isalnum(c))
+                b |= 1 << 8;
+            if (std::isxdigit(c))
+                b |= 1 << 9;
+            bit[c] = b;
+        }
+    }
+};
+
 static int match_class(int c, int cl)
 {
+    static const MatchClassTable tbl;
     int res;
     switch (std::tolower(cl)) {
     case 'a':
-        res = std::isalpha(c);
+        res = (tbl.bit[(unsigned char)c] & (1 << 0)) != 0;
         break;
     case 'c':
-        res = std::iscntrl(c);
+        res = (tbl.bit[(unsigned char)c] & (1 << 1)) != 0;
         break;
     case 'd':
-        res = std::isdigit(c);
+        res = (tbl.bit[(unsigned char)c] & (1 << 2)) != 0;
         break;
     case 'g':
-        res = std::isgraph(c);
+        res = (tbl.bit[(unsigned char)c] & (1 << 3)) != 0;
         break;
     case 'l':
-        res = std::islower(c);
+        res = (tbl.bit[(unsigned char)c] & (1 << 4)) != 0;
         break;
     case 'p':
-        res = std::ispunct(c);
+        res = (tbl.bit[(unsigned char)c] & (1 << 5)) != 0;
         break;
     case 's':
-        res = std::isspace(c);
+        res = (tbl.bit[(unsigned char)c] & (1 << 6)) != 0;
         break;
     case 'u':
-        res = std::isupper(c);
+        res = (tbl.bit[(unsigned char)c] & (1 << 7)) != 0;
         break;
     case 'w':
-        res = std::isalnum(c);
+        res = (tbl.bit[(unsigned char)c] & (1 << 8)) != 0;
         break;
     case 'x':
-        res = std::isxdigit(c);
+        res = (tbl.bit[(unsigned char)c] & (1 << 9)) != 0;
         break;
     case 'z':
         res = (c == 0);
@@ -863,10 +891,30 @@ static int nospecials(const char* p, size_t l)
 {
     size_t upto = 0;
     do {
-        if (std::strpbrk(p + upto, SPECIALS))
+        size_t seg = clx_strlen(p + upto);
+        if (clx_find_byte_of_set(p + upto, seg))
             return 0;
-        upto += std::strlen(p + upto) + 1;
+        upto += seg + 1;
     } while (upto <= l);
+    return 1;
+}
+
+//------------------ literal_first_byte — check if pattern starts with a literal byte (for optimization)
+static int literal_first_byte(const char* p, size_t lp, char* out_c)
+{
+    if (lp == 0)
+        return 0;
+    unsigned char c0 = (unsigned char)p[0];
+    if (c0 == '\0' || c0 == L_ESC)
+        return 0;
+    if (std::strchr(SPECIALS, c0))
+        return 0;
+    if (lp >= 2) {
+        char q = p[1];
+        if (q == '*' || q == '+' || q == '-' || q == '?')
+            return 0;
+    }
+    *out_c = (char)c0;
     return 1;
 }
 
@@ -898,6 +946,8 @@ static MultiValue str_find_aux(LState* L, const LValue* args, size_t count, int 
             lp--;
         }
         prepstate(&ms, L, s, ls, p, lp);
+        char first_c;
+        bool can_skip = !anchor && literal_first_byte(p, lp, &first_c);
         do {
             reprepstate(&ms);
             const char* res = match(&ms, s1, p);
@@ -928,7 +978,14 @@ static MultiValue str_find_aux(LState* L, const LValue* args, size_t count, int 
                     return MultiValue(results, rc, L);
                 }
             }
-            s1++;
+            if (can_skip && s1 < ms.src_end) {
+                const char* nx = (const char*)std::memchr(s1 + 1, first_c, (size_t)(ms.src_end - (s1 + 1)));
+                if (!nx)
+                    break;
+                s1 = nx;
+            } else {
+                s1++;
+            }
         } while (s1 <= ms.src_end && !anchor);
     }
     return MultiValue();
@@ -1032,6 +1089,8 @@ MultiValue str_gsub(LState* L, const LValue* args, size_t count)
     const char* src_pos = src;
 
     prepstate(&ms, L, src, srcl, p, lp);
+    char first_c;
+    bool can_skip = !anchor && literal_first_byte(p, lp, &first_c);
 
     StringBuilder result;
     if (srcl > 64)
@@ -1047,16 +1106,15 @@ MultiValue str_gsub(LState* L, const LValue* args, size_t count)
             if (tr_type == String) {
                 const char* news = args[2].as_string();
                 size_t l = args[2].string_len();
-                StringBuilder repl;
                 size_t i = 0;
                 while (i < l) {
                     if (news[i] == L_ESC && i + 1 < l) {
                         i++;
                         if (news[i] == L_ESC) {
-                            repl.append("%", 1);
+                            result.append("%", 1);
                         } else if (news[i] == '0') {
                             size_t ml = e - src_pos;
-                            repl.append(src_pos, static_cast<uint32_t>(ml));
+                            result.append(src_pos, static_cast<uint32_t>(ml));
                         } else if (std::isdigit((unsigned char)news[i])) {
                             int ci = news[i] - '1';
                             const char* cap;
@@ -1064,9 +1122,9 @@ MultiValue str_gsub(LState* L, const LValue* args, size_t count)
                             if (capl == CAP_POSITION) {
                                 char tmp[24];
                                 int tw = std::snprintf(tmp, sizeof(tmp), "%lld", (long long)((cap - src) + 1));
-                                repl.append_owned(tmp, static_cast<uint32_t>(tw));
+                                result.append_owned(tmp, static_cast<uint32_t>(tw));
                             } else {
-                                repl.append(cap, static_cast<uint32_t>(capl));
+                                result.append(cap, static_cast<uint32_t>(capl));
                             }
                         }
                         i++;
@@ -1074,10 +1132,9 @@ MultiValue str_gsub(LState* L, const LValue* args, size_t count)
                         size_t start = i;
                         while (i < l && news[i] != L_ESC)
                             i++;
-                        repl.append(&news[start], static_cast<uint32_t>(i - start));
+                        result.append(&news[start], static_cast<uint32_t>(i - start));
                     }
                 }
-                result.append(repl);
 
             } else if (tr_type == Function) {
                 int nlevels = (ms.level == 0) ? 1 : ms.level;
@@ -1115,8 +1172,18 @@ MultiValue str_gsub(LState* L, const LValue* args, size_t count)
 
             src_pos = lastmatch = e;
         } else if (src_pos < ms.src_end) {
-            result.append(src_pos, 1);
-            src_pos++;
+            if (can_skip) {
+                const char* nx = (const char*)std::memchr(
+                    src_pos + 1, first_c, (size_t)(ms.src_end - (src_pos + 1)));
+                size_t span = nx ? (size_t)(nx - src_pos) : (size_t)(ms.src_end - src_pos);
+                result.append(src_pos, static_cast<uint32_t>(span));
+                src_pos += span;
+                if (!nx)
+                    break;
+            } else {
+                result.append(src_pos, 1);
+                src_pos++;
+            }
         } else
             break;
         if (anchor)
