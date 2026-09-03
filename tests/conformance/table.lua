@@ -170,4 +170,30 @@ assert_eq(mv2[3], 5, "move within same: src[3]")
 assert_eq(mv2[4], 4, "move within same: src[4]")
 assert_eq(mv2[5], 5, "move within same: src[5]")
 
+print("\n----------------- keyed call values in constructors")
+local function one_ret()
+    return "abc"
+end
+local function two_rets()
+    return 7, 8
+end
+local kc = { rets = one_ret() }
+assert_eq(kc.rets, "abc", "keyed call assigns to key")
+assert_eq(#kc, 0, "keyed call leaves array empty")
+assert_eq(kc[1], nil, "keyed call does not leak to array")
+local kc2 = { x = 1, rets = one_ret() }
+assert_eq(kc2.x, 1, "keyed call: other key intact")
+assert_eq(kc2.rets, "abc", "keyed call last assigns key")
+local ke = { two_rets() }
+assert_eq(#ke, 2, "trailing call expands to array")
+assert_eq(ke[1], 7, "trailing call expand [1]")
+assert_eq(ke[2], 8, "trailing call expand [2]")
+local km = { 10, 20, x = 1 }
+assert_eq(#km, 2, "mixed table len")
+assert_eq(km.x, 1, "mixed table key")
+assert_eq(km[2], 20, "mixed table array")
+local kx = { 1, two_rets() }
+assert_eq(#kx, 3, "implicit plus trailing expand len")
+assert_eq(kx[3], 8, "implicit plus trailing expand tail")
+
 print_summary("TABLES")
