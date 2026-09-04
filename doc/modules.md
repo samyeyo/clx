@@ -35,6 +35,41 @@ When Lua calls `require("mymodule")`:
 There's nothing special to write — just ordinary Lua files. clx bundles them
 into a single native binary, so there's nothing to copy alongside your program.
 
+## Runtime-loaded Lua modules (`package.path`)
+
+With `--dynamic`, `require()` can also load Lua files **at runtime** through
+`package.path`, using the same searcher chain as stock Lua
+(`package.searchers` = preload → Lua file → C). The file is compiled and
+executed on the embedded Lua 5.5 VM — it is *not* AOT-compiled:
+
+```bash
+clx main.lua --dynamic --output myapp
+```
+
+```lua
+-- main.lua
+package.path = package.path .. ";./lib/?.lua;./lib/?/init.lua"
+local greet = require("greet")   -- ./lib/greet.lua, runs on the embedded VM
+```
+
+Because required files execute on the VM:
+
+- their code is interpreted, not compiled to native code — keep hot loops in
+  your AOT-compiled files;
+- the value they return crosses the clx/VM boundary (copied or proxied), the
+  same as any `load()`-ed chunk;
+- they run on the VM's own standard libraries and globals.
+
+Modules compiled into the binary (the previous section) and native C++ modules
+(`--modules`) are found by the preload searcher first, so they always take
+precedence and never touch the VM.
+
+In plain AOT builds `package.path`, `package.searchers`, and
+`package.searchpath` still exist — `package.searchpath()` can locate files —
+but `require` of a file module reports that `--dynamic` is required.
+
+See [Dynamic Lua](./dynamic-lua.md) for the boundary details.
+
 ## Native C++ modules
 
 If you have existing C++ code (or want extra performance), you can compile it

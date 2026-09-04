@@ -2472,6 +2472,10 @@ MultiValue str_pack(LState*, const LValue*, size_t);
 MultiValue str_packsize(LState*, const LValue*, size_t);
 MultiValue str_unpack(LState*, const LValue*, size_t);
 
+//------------------ package module (package.cpp); package_searchpath resolves module names against path templates
+std::string package_searchpath(LState* L, const char* name, size_t name_len, const char* path, size_t path_len, char sep,
+    char rep, std::string* tried);
+
 MultiValue table_concat(LState*, const LValue*, size_t);
 MultiValue table_insert(LState*, const LValue*, size_t);
 MultiValue table_remove(LState*, const LValue*, size_t);

@@ -28,6 +28,34 @@ A `--dynamic` build adds three familiar global functions from Lua 5.5:
 | `loadfile(filename)` | Reads a file, compiles it, returns it as a callable function |
 | `dofile(filename)` | Loads a file and immediately runs it |
 
+It also completes `require()`: `package.searchers[2]` loads Lua file modules found via
+`package.path`, so multi-file programs and libraries work as they do in stock Lua.
+Keep in mind that these modules are **executed on the embedded Lua 5.5 VM** — they
+are not AOT-compiled, exactly like chunks loaded with `loadfile`:
+
+```lua
+package.path = package.path .. ";./lib/?.lua;./lib/?/init.lua"
+local greet = require("greet")       -- ./lib/greet.lua
+local util = require("util")        -- ./lib/util/init.lua
+```
+
+Concretely, this means:
+
+- **Module code runs on the VM.** Every function defined in a required file executes
+  on the embedded Lua 5.5 engine each time you call it, with the usual cross-boundary
+  overhead — keep hot loops in your compiled code, not in a required module.
+- **The returned value crosses the boundary.** Whatever the module returns is
+  converted (copied or proxied) into the compiled environment, like any value
+  returned by a loaded chunk.
+- **AOT modules take precedence.** Modules bundled at compile time or registered in
+  `package.preload` are found by the preload searcher before the file searcher is
+  consulted.
+
+In plain AOT builds `package.path`, `package.searchers`, and `package.searchpath`
+still exist, but the file searcher only reports that `--dynamic` is required.
+Modules registered in `package.preload` (including statically linked native modules
+via `--modules`) load in every build mode.
+
 ### `load`
 
 ```lua

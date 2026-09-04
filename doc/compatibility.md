@@ -66,10 +66,12 @@ testing is still ongoing.
 
 | Feature | Status |
 | --- | --- |
-| `require` | ✅ |
-| `package.path` | ✅ |
+| `require` | ✅ (file modules need `--dynamic`) |
+| `package.path` | ✅ field; used by `require` file searcher with `--dynamic` |
+| `package.searchers` | ✅ preload always; Lua-file searcher needs `--dynamic` |
+| `package.searchpath` | ✅ |
 | Native modules | ✅ |
-| Module linking | ✅ |
+| Module linking | ✅ via static linking (`--modules`); no dynamic library loading |
 
 ## Standard libraries
 
@@ -97,6 +99,7 @@ compiled runtime. See [Dynamic Lua](./dynamic-lua.md).
 | `load()` | Requires `--dynamic`; accepts source strings, not reader functions |
 | `loadfile()` | Requires `--dynamic` |
 | `dofile()` | Requires `--dynamic` |
+| `require` of file modules | Requires `--dynamic`; `package.searchers[2]` loads `package.path` matches through the embedded VM. In plain AOT builds the searcher locates the file but reports that `--dynamic` is required. `package.preload` searchers and statically linked native modules (`--modules`) work everywhere. |
 
 ## Things that aren't provided
 

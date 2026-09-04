@@ -1434,7 +1434,7 @@ print("Fibonacci(20) = " .. fib(20))</div>
                 </div>
                 <div class="doc-section">
                     <h3>Language Features</h3>
-                    <p>clx supports most Lua 5.5 features including variables, control flow, functions, tables, metatables, coroutines, standard libraries, and bitwise operations. <span class="inline-code">load()</span>, <span class="inline-code">loadfile()</span>, and <span class="inline-code">dofile()</span> are registered only for programs compiled with <span class="inline-code">--dynamic</span>; they execute source in the embedded Lua VM and are absent from ordinary AOT and <span class="inline-code">--minimal</span> builds. The AOT runtime does not provide <span class="inline-code">string.dump()</span> or <span class="inline-code">debug</span> directly; the dynamic VM provides its own library behavior.</p>
+                    <p>clx supports most Lua 5.5 features including variables, control flow, functions, tables, metatables, coroutines, standard libraries, and bitwise operations. <span class="inline-code">load()</span>, <span class="inline-code">loadfile()</span>, and <span class="inline-code">dofile()</span> are registered only for programs compiled with <span class="inline-code">--dynamic</span>; they execute source in the embedded Lua VM and are absent from ordinary AOT and <span class="inline-code">--minimal</span> builds. <span class="inline-code">require()</span> of Lua file modules through <span class="inline-code">package.path</span> also requires <span class="inline-code">--dynamic</span>: those files are compiled and executed on the embedded VM rather than AOT-compiled. The AOT runtime does not provide <span class="inline-code">string.dump()</span> or <span class="inline-code">debug</span> directly; the dynamic VM provides its own library behavior.</p>
                     <h4>Variables and Types</h4>
                     <div class="code-block">
                         <div class="code-header"><span class="lang">lua</span></div>
@@ -1707,6 +1707,17 @@ end
                     <p>Always check the first result before calling the chunk, especially if the source comes from an untrusted user.</p>
                 </div>
                 <div class="doc-section">
+                    <h3>Requiring modules at runtime</h3>
+                    <p>A <span class="inline-code">--dynamic</span> build also completes <span class="inline-code">require()</span>: <span class="inline-code">package.searchers[2]</span> finds Lua files via <span class="inline-code">package.path</span> and runs them on the embedded VM — the same way <span class="inline-code">loadfile</span> does. Required modules are not AOT-compiled, and the value they return crosses the boundary back to your compiled code:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span><span>Example</span></div>
+                        <div class="code-body">package.path = package.path .. <span class="str">";./lib/?.lua;./lib/?/init.lua"</span>
+<span class="kw">local</span> greet = <span class="fn">require</span>(<span class="str">"greet"</span>)     -- ./lib/greet.lua, executed on the embedded VM
+<span class="fn">print</span>(greet.hello(<span class="str">"world"</span>))</div>
+                    </div>
+                    <p>Modules bundled at compile time or registered in <span class="inline-code">package.preload</span> are found by the preload searcher first and never touch the VM. In plain AOT builds the file searcher locates the file but reports that <span class="inline-code">--dynamic</span> is required.</p>
+                </div>
+                <div class="doc-section">
                     <h3>Things to keep in mind</h3>
                     <ul>
                         <li><strong>Your compiled code is usually faster.</strong> Dynamic calls cross between the two environments with some overhead, so keep performance-critical loops out of loaded code.</li>
@@ -1870,7 +1881,7 @@ end
                 </h2>
 
                 <div class="doc-section">
-                    <p>clx supports two ways to organize and load modules: Lua source modules compiled alongside your entry point (static preload), and statically linked C++ modules with <span class="inline-code">--modules</span>. Both are consumed via Lua's <span class="inline-code">require()</span>.</p>
+                    <p>clx supports three ways to organize and load modules: Lua source modules compiled alongside your entry point (static preload), statically linked C++ modules with <span class="inline-code">--modules</span>, and — with <span class="inline-code">--dynamic</span> — Lua files loaded at runtime through <span class="inline-code">package.path</span>, which execute on the embedded Lua 5.5 VM. All three are consumed via Lua's <span class="inline-code">require()</span>.</p>
                     <p>Binary modules must be compiled with the clx C++ API, as the Lua C API is not supported.</p>
                 </div>
 
@@ -1927,6 +1938,22 @@ utils.help()</div>
 
 <span class="kw">return</span> M</div>
                     </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Runtime-Loaded Lua Modules (package.path)</h3>
+                    <p>With <span class="inline-code">--dynamic</span>, <span class="inline-code">require()</span> can also load Lua files at runtime through <span class="inline-code">package.path</span>, using the same searcher chain as stock Lua (<span class="inline-code">package.searchers</span>: preload → Lua file → C). Required files are compiled and executed on the embedded Lua 5.5 VM — they are not AOT-compiled, so keep hot loops in your bundled modules:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">sh</span><span>Build</span></div>
+                        <div class="code-body"><span class="prompt">$</span> clx main.lua --dynamic --output myapp</div>
+                    </div>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span><span>main.lua</span></div>
+                        <div class="code-body">package.path = package.path .. <span class="str">";./lib/?.lua;./lib/?/init.lua"</span>
+<span class="kw">local</span> greet = <span class="fn">require</span>(<span class="str">"greet"</span>)   -- ./lib/greet.lua, runs on the embedded VM
+<span class="kw">local</span> util = <span class="fn">require</span>(<span class="str">"util"</span>)      -- ./lib/util/init.lua</div>
+                    </div>
+                    <p>In plain AOT builds, <span class="inline-code">package.path</span>, <span class="inline-code">package.searchers</span>, and <span class="inline-code">package.searchpath</span> exist, but <span class="inline-code">require</span> of a file module reports that <span class="inline-code">--dynamic</span> is required. See <a href="#doc-dynamic-lua">Dynamic execution</a>.</p>
                 </div>
 
 
@@ -2147,6 +2174,10 @@ utils.help()</div>
                         <div class="feature-card">
                             <div class="feature-title"><span class="inline-code">dofile()</span></div>
                             <div class="feature-desc">Requires <span class="inline-code">--dynamic</span> — loads and executes a file through the bridge.</div>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-title"><span class="inline-code">require()</span> of file modules</div>
+                            <div class="feature-desc">Requires <span class="inline-code">--dynamic</span> — loads <span class="inline-code">package.path</span> matches and executes them on the embedded VM; bundled and <span class="inline-code">--modules</span> modules always work.</div>
                         </div>
                         <div class="feature-card">
                             <div class="feature-title"><span class="inline-code">string.dump()</span></div>
