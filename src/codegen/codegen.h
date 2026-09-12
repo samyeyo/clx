@@ -18,13 +18,13 @@
 
 namespace clx {
 
-//------------------ DeferredBlockScope: state emitBlock captures when a repeat body must
+//------------------ DeferredBlockScope: state emitBlock captures
 struct DeferredBlockScope {
-    size_t prev_locals = 0;                    // locals.size() to restore after condition emission
-    size_t prev_native_count = 0;              // native_numbers.size() to restore
-    std::set<std::string_view> prev_hoisted;   // hoisted_locals to restore
-    int close_braces = 0;                      // number of "}" to emit to close this body's scopes
-    bool emit_close = false;                   // whether an outer "}" is owed (body emitted its own "{")
+    size_t prev_locals = 0; 
+    size_t prev_native_count = 0;
+    std::set<std::string_view> prev_hoisted;
+    int close_braces = 0;
+    bool emit_close = false;
 };
 
 //------------------ LocalVar: tracks a local variable's name, boxed status, and has_sb flag
@@ -33,35 +33,61 @@ struct LocalVar {
     std::string cpp_name;
     bool is_boxed;
     bool has_sb = false;
+    bool has_csnap = false;
+    bool has_intf = false;
+    bool has_ii = false;
+    bool is_int_counter = false;
     LocalVar() = default;
-    LocalVar(std::string_view n, bool boxed) : name(n), cpp_name(), is_boxed(boxed) {}
-    LocalVar(std::string_view n, std::string cpp, bool boxed) : name(n), cpp_name(std::move(cpp)), is_boxed(boxed) {}
+
+    LocalVar(std::string_view n, bool boxed)
+        : name(n)
+        , cpp_name()
+        , is_boxed(boxed) { }
+
+    LocalVar(std::string_view n, std::string cpp, bool boxed)
+        : name(n)
+        , cpp_name(std::move(cpp))
+        , is_boxed(boxed) { }
 };
 
 //------------------ lookup_builtin: maps "module.func" to C++ function name
-const char* lookup_builtin(std::string_view module, std::string_view func);
+const char *lookup_builtin(std::string_view module, std::string_view func);
 
 //------------------ CodeEmitter: generates C++ source from the AST.
 class CodeEmitter {
 public:
     //------------------ CodeEmitter: constructs emitter for a given AST context, output file, and analysis results
-    CodeEmitter(const ASTContext& context, const char* output_path, AnalysisState& analysis);
+    CodeEmitter(const ASTContext &context, const char *output_path, AnalysisState &analysis);
 
     //------------------ emit: generates C++ code for the AST rooted at root_node
     void emit(uint32_t root_node, std::string_view module_name);
 
 private:
-    const ASTContext& ctx;
+    const ASTContext &ctx;
     std::ofstream out;
     std::vector<LocalVar> locals;
-    AnalysisState& state;
+    AnalysisState &state;
 
     //------------------ is_local: checks if name is a local and sets out_is_boxed
-    bool is_local(std::string_view name, bool& out_is_boxed);
-    bool is_local(std::string_view name, bool& out_is_boxed, std::string_view& out_cpp_name);
+    bool is_local(std::string_view name, bool &out_is_boxed);
 
-    //------------------ var_reassigned_non_int: checks if a variable receives any non-integer value in a block tree
-    bool var_reassigned_non_int(std::string_view name, uint32_t block_idx);
+    //------------------ gc_cells_arg: initializer list of in-scope upvalue cells for GC rooting of escaped closures
+    std::string gc_cells_arg(const std::string &exclude = "");
+    bool is_local(std::string_view name, bool &out_is_boxed, std::string_view &out_cpp_name);
+
+    //------------------ int_flag_expr: C++ bool expression for the runtime integer subtype of an expression
+    std::string int_flag_expr(uint32_t expr_idx, int depth);
+    //------------------ int_value_expr: C++ int64 expression for the exact integer value of an expression
+    // proven integral by int_flag_expr; "0" when no exact value is knowable (the flag will be false).
+    std::string int_value_expr(uint32_t expr_idx, int depth);
+    //------------------ fast_call_box_flag: C++ bool expression restoring the return subtype of a fast call
+    std::string fast_call_box_flag(std::string_view fname, uint32_t first_arg, uint32_t arg_count);
+
+    //------------------ box_native_identifier: boxes a native double local/param, restoring Int64 subtype via its runtime flag when present
+    void box_native_identifier(std::string_view emit_name, std::string_view lua_name);
+
+    //------------------ var_reassigned_non_int: checks if a variable receives any new non-integer value
+    bool var_reassigned_non_int(std::string_view name, uint32_t block_idx, uint32_t exclude_value_node = 0xFFFFFFFF);
 
     //------------------ emit_node: dispatches to the emitXxx method matching node's type
     void emit_node(uint32_t node_idx);
@@ -73,36 +99,39 @@ private:
     void emit_condition(uint32_t c_idx);
 
     //------------------ emitXxx: emission logic for one AST NodeType, called from emit_node's dispatcher
-    void emitIntrinsicCall(const ASTNode& node, uint32_t node_idx);
-    void emitCallExpression(const ASTNode& node, uint32_t node_idx);
-    void emitParenExpression(const ASTNode& node, uint32_t node_idx);
-    void emitLabelStatement(const ASTNode& node, uint32_t node_idx);
-    void emitGotoStatement(const ASTNode& node, uint32_t node_idx);
-    void emitBlock(const ASTNode& node, uint32_t node_idx, DeferredBlockScope* defer = nullptr);
-    void emitFunctionDef(const ASTNode& node, uint32_t node_idx);
-    void emitReturnStatement(const ASTNode& node, uint32_t node_idx);
+    void emitIntrinsicCall(const ASTNode &node, uint32_t node_idx);
+    void emitCallExpression(const ASTNode &node, uint32_t node_idx);
+
+    //------------------ impl_call: call expression for a direct-callable's impl, deref-ing heap holder cells
+    std::string impl_call(std::string_view fname);
+    void emitParenExpression(const ASTNode &node, uint32_t node_idx);
+    void emitLabelStatement(const ASTNode &node, uint32_t node_idx);
+    void emitGotoStatement(const ASTNode &node, uint32_t node_idx);
+    void emitBlock(const ASTNode &node, uint32_t node_idx, DeferredBlockScope *defer = nullptr);
+    void emitFunctionDef(const ASTNode &node, uint32_t node_idx);
+    void emitReturnStatement(const ASTNode &node, uint32_t node_idx);
     //------------------ emitAssignmentLike: handles GlobalDeclStatement, LocalDecl, and Assignment
-    void emitAssignmentLike(const ASTNode& node, uint32_t node_idx);
-    void emitDoStatement(const ASTNode& node, uint32_t node_idx);
-    void emitUnaryOp(const ASTNode& node, uint32_t node_idx);
-    void emitBinaryOp(const ASTNode& node, uint32_t node_idx);
-    void emitTrueLiteral(const ASTNode& node, uint32_t node_idx);
-    void emitFalseLiteral(const ASTNode& node, uint32_t node_idx);
-    void emitNilLiteral(const ASTNode& node, uint32_t node_idx);
+    void emitAssignmentLike(const ASTNode &node, uint32_t node_idx);
+    void emitDoStatement(const ASTNode &node, uint32_t node_idx);
+    void emitUnaryOp(const ASTNode &node, uint32_t node_idx);
+    void emitBinaryOp(const ASTNode &node, uint32_t node_idx);
+    void emitTrueLiteral(const ASTNode &node, uint32_t node_idx);
+    void emitFalseLiteral(const ASTNode &node, uint32_t node_idx);
+    void emitNilLiteral(const ASTNode &node, uint32_t node_idx);
     void emitTableOp(int bin_op, uint32_t lhs_tbl, uint32_t lhs_key, uint32_t const_idx);
-    void emitNumber(const ASTNode& node, uint32_t node_idx);
-    void emitInteger(const ASTNode& node, uint32_t node_idx);
-    void emitIdentifier(const ASTNode& node, uint32_t node_idx);
-    void emitString(const ASTNode& node, uint32_t node_idx);
-    void emitIfStatement(const ASTNode& node, uint32_t node_idx);
-    void emitWhileStatement(const ASTNode& node, uint32_t node_idx);
-    void emitRepeatStatement(const ASTNode& node, uint32_t node_idx);
-    void emitForStatement(const ASTNode& node, uint32_t node_idx);
-    void emitGenericForStatement(const ASTNode& node, uint32_t node_idx);
-    void emitTableConstructor(const ASTNode& node, uint32_t node_idx);
-    void emitTableAccess(const ASTNode& node, uint32_t node_idx);
-    void emitVararg(const ASTNode& node, uint32_t node_idx);
-    void emitBreakStatement(const ASTNode& node, uint32_t node_idx);
+    void emitNumber(const ASTNode &node, uint32_t node_idx);
+    void emitInteger(const ASTNode &node, uint32_t node_idx);
+    void emitIdentifier(const ASTNode &node, uint32_t node_idx);
+    void emitString(const ASTNode &node, uint32_t node_idx);
+    void emitIfStatement(const ASTNode &node, uint32_t node_idx);
+    void emitWhileStatement(const ASTNode &node, uint32_t node_idx);
+    void emitRepeatStatement(const ASTNode &node, uint32_t node_idx);
+    void emitForStatement(const ASTNode &node, uint32_t node_idx);
+    void emitGenericForStatement(const ASTNode &node, uint32_t node_idx);
+    void emitTableConstructor(const ASTNode &node, uint32_t node_idx);
+    void emitTableAccess(const ASTNode &node, uint32_t node_idx);
+    void emitVararg(const ASTNode &node, uint32_t node_idx);
+    void emitBreakStatement(const ASTNode &node, uint32_t node_idx);
 };
 
 }
