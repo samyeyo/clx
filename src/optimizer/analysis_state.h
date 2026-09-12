@@ -37,6 +37,7 @@ struct AnalysisState {
     std::map<uint32_t, uint32_t> node_func_owner;
     std::set<std::string, std::less<>> native_integers;
     std::set<std::string_view> int_returning_funcs;
+    std::map<std::string_view, uint32_t> int_preserving_masks;
     std::set<std::string, std::less<>> int_typed_locals;
 
     //------------------ Arena analysis data
@@ -45,12 +46,17 @@ struct AnalysisState {
     std::map<uint32_t, uint32_t> arena_table_sizes;
 
     //------------------ Per-function analysis data
-    std::map<std::string_view, std::set<std::string_view>> numeric_table_fields;
+    std::map<std::pair<uint32_t, std::string_view>, std::set<std::string_view>> numeric_table_fields;
     std::set<std::string_view> direct_callables;
     std::set<std::string_view> fast_callables;
     std::map<std::string_view, uint32_t> func_param_counts;
     std::map<std::string_view, std::vector<bool>> func_param_native;
     std::set<std::string_view> reassigned_vars;
+    std::set<std::string_view> int_numeric_arrays;
+    //------------------ for_counter_names: numeric-for loop counter identifiers. Codegen emits
+    std::set<std::string_view> for_counter_names;
+    //------------------ for_counter_int: numeric-for loop counter names holding integer values
+    std::set<std::string_view> for_counter_int;
     std::set<std::string_view> constant_upvalues;
     std::set<std::string_view> string_builders;
     std::set<std::string_view> global_string_builders;
@@ -60,6 +66,7 @@ struct AnalysisState {
     std::unordered_map<uint32_t, std::string> hoisted_lookups;
     std::unordered_map<std::string, std::string> hoisted_cfuncs;
     std::unordered_map<std::string, std::string> builtin_aliases;
+    std::vector<std::string> const_snapshot_cells;
 
     //------------------ Codegen emission state (mutated as CodeEmitter walks the tree)
     bool skip_block_braces = false;
@@ -70,17 +77,18 @@ struct AnalysisState {
     bool expect_multivalue = false;
     std::string_view current_fast_func;
     std::string ref_capture;
+    std::string raw_lambda_cell;
+    std::set<std::string_view> holder_cell_callables;
     uint32_t current_func_body = 0xFFFFFFFF;
     uint32_t current_arena_func = 0xFFFFFFFF;
     uint32_t current_func_idx = 0xFFFFFFFF;
 };
 
-//------------------ is_purely_integer_expr: returns true if a node always evaluates to an integer.
-inline bool is_purely_integer_expr(const ASTContext& ctx, const AnalysisState& state, uint32_t node_idx)
-{
+//------------------ is_purely_integer_expr: returns true if a node always evaluates to an integer
+inline bool is_purely_integer_expr(const ASTContext &ctx, const AnalysisState &state, uint32_t node_idx) {
     if (node_idx == 0xFFFFFFFF || node_idx >= ctx.nodes.size())
         return false;
-    const auto& n = ctx.nodes[node_idx];
+    const auto &n = ctx.nodes[node_idx];
     if (n.type == NodeType::Integer)
         return true;
     if (n.type == NodeType::Identifier) {
@@ -108,14 +116,35 @@ inline bool is_purely_integer_expr(const ASTContext& ctx, const AnalysisState& s
     return false;
 }
 
-//------------------ is_integer_typed_expr: stricter than is_purely_integer_expr. Returns true only for
-// expressions whose value is an *integer* in the Lua sense (never a whole-valued float literal, which
-// tostring renders as "500000.0"). Used to pick integer formatting for string concatenation.
-inline bool is_integer_typed_expr(const ASTContext& ctx, const AnalysisState& state, uint32_t node_idx)
-{
+//------------------ reassigned_with_non_int: true if the variable is assigned a value that is not
+// statically integer at any assignment site other than `decl_idx` (the site being considered)
+inline bool reassigned_with_non_int(
+    const ASTContext &ctx, const AnalysisState &state, std::string_view nm, uint32_t decl_idx) {
+    for (uint32_t ni = 0; ni < ctx.nodes.size(); ++ni) {
+        const auto &n = ctx.nodes[ni];
+        if (n.type != NodeType::Assignment)
+            continue;
+        for (uint32_t ti = 0; ti < n.as.assign.target_count; ++ti) {
+            uint32_t tgt = ctx.block_statements[n.as.assign.first_target + ti];
+            if (tgt >= ctx.nodes.size() || ctx.nodes[tgt].type != NodeType::Identifier)
+                continue;
+            std::string_view tn(ctx.nodes[tgt].as.ident.name, ctx.nodes[tgt].as.ident.length);
+            if (tn != nm || ni == decl_idx)
+                continue;
+            uint32_t vi
+                = (ti < n.as.assign.value_count) ? ctx.block_statements[n.as.assign.first_value + ti] : 0xFFFFFFFF;
+            if (!is_purely_integer_expr(ctx, state, vi))
+                return true;
+        }
+    }
+    return false;
+}
+
+//------------------ is_integer_typed_expr: stricter than is_purely_integer_expr
+inline bool is_integer_typed_expr(const ASTContext &ctx, const AnalysisState &state, uint32_t node_idx) {
     if (node_idx == 0xFFFFFFFF || node_idx >= ctx.nodes.size())
         return false;
-    const auto& n = ctx.nodes[node_idx];
+    const auto &n = ctx.nodes[node_idx];
     if (n.type == NodeType::Integer)
         return true;
     if (n.type == NodeType::Identifier) {
@@ -141,6 +170,12 @@ inline bool is_integer_typed_expr(const ASTContext& ctx, const AnalysisState& st
     if (n.type == NodeType::ParenExpression)
         return is_integer_typed_expr(ctx, state, n.as.paren_expr.expr);
     return false;
+}
+
+//------------------ owner_of_node: node index of the innermost enclosing FunctionDef (0xFFFFFFFF = file scope)
+inline uint32_t owner_of_node(const AnalysisState &state, uint32_t node_idx) {
+    auto it = state.node_func_owner.find(node_idx);
+    return it != state.node_func_owner.end() ? it->second : 0xFFFFFFFFu;
 }
 
 }
