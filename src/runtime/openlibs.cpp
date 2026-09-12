@@ -10,8 +10,7 @@
 namespace clx {
 
 //------------------ openlibs: opens all standard Lua libraries
-void openlibs(LState* L)
-{
+void openlibs(LState *L) {
     luastd_string(L);
     luastd_table(L);
     luastd_math(L);

@@ -41,9 +41,7 @@ std::vector<std::string> precompiled_modules;
 static bool dynamic_loading_enabled = false;
 
 //------------------ ENUM: BuildMode - output mode (executable binary, object file, or static library)
-enum class BuildMode { Executable,
-    Object,
-    Static };
+enum class BuildMode { Executable, Object, Static };
 
 //------------------ STRUCT: Compiler - holds C++ compiler name and command
 struct Compiler {
@@ -52,61 +50,46 @@ struct Compiler {
 };
 
 //------------------ clx install paths (embedded from CMake/GNUInstallDirs)
-// These describe where clx itself was configured to install. Empty when the
-// build did not provide them (e.g. older CMake-generated binaries).
 
-static fs::path clx_install_prefix()
-{
+static fs::path clx_install_prefix() {
 #ifdef CLX_INSTALL_PREFIX
     if (CLX_INSTALL_PREFIX[0] == '\0')
-        return {};
+        return { };
     return fs::absolute(fs::path(CLX_INSTALL_PREFIX));
 #else
-    return {};
+    return { };
 #endif
 }
 
-static fs::path clx_install_libdir()
-{
+static fs::path clx_install_libdir() {
 #ifdef CLX_INSTALL_LIBDIR
     if (CLX_INSTALL_LIBDIR[0] == '\0')
-        return {};
+        return { };
     return fs::path(CLX_INSTALL_LIBDIR); // may be relative (lib, lib64, lib/<triplet>) or absolute
 #else
-    return {};
+    return { };
 #endif
 }
 
-static fs::path clx_install_includedir()
-{
+static fs::path clx_install_includedir() {
 #ifdef CLX_INSTALL_INCLUDEDIR
     if (CLX_INSTALL_INCLUDEDIR[0] == '\0')
-        return {};
+        return { };
     return fs::path(CLX_INSTALL_INCLUDEDIR);
 #else
-    return {};
+    return { };
 #endif
 }
 
-//------------------ clx lib roots - candidate root dirs that contain clx's own
-// libraries (libclx.a / libclx_size.a and a ./clx subdir for native modules).
-// Enumerated in priority order: the in-tree build output dir, the executable-
-// adjacent portable layout, then the configured install prefix. The exe-
-// relative dirs come first so a dev build (./build/clx) always links the
-// freshly-built runtime rather than a stale system-installed copy.
+//------------------ clx lib roots - candidate root dirs that contain clx's own libraries and native modules
 
-static std::vector<fs::path> clx_lib_roots(const fs::path& exe_dir, const fs::path& build_root)
-{
+static std::vector<fs::path> clx_lib_roots(const fs::path &exe_dir, const fs::path &build_root) {
     std::vector<fs::path> roots;
 
-    // In-tree build: compiler/link driver output lives in <build_root>/build.
     roots.push_back(build_root / "build");
-
-    // Portable / direct-install layouts: <prefix>/lib{,64,<triplet>}.
     roots.push_back(build_root / "lib");
     roots.push_back(build_root / "lib64");
 
-    // Configured install prefix from CMake/GNUInstallDirs.
     auto pref = clx_install_prefix();
     auto libdir = clx_install_libdir();
     if (!pref.empty()) {
@@ -120,11 +103,10 @@ static std::vector<fs::path> clx_lib_roots(const fs::path& exe_dir, const fs::pa
 }
 
 //------------------ CLX: execute - runs a shell command, captures stdout and exit code
-std::string execute(const std::string& cmd, int& out_code)
-{
+std::string execute(const std::string &cmd, int &out_code) {
     std::string result;
 #ifdef _WIN32
-    auto run_one = [&](const std::string& one_cmd) -> int {
+    auto run_one = [&](const std::string &one_cmd) -> int {
         SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
         HANDLE h_read, h_write;
         if (!CreatePipe(&h_read, &h_write, &sa, 0))
@@ -140,7 +122,7 @@ std::string execute(const std::string& cmd, int& out_code)
         std::vector<char> cmd_buf(one_cmd.begin(), one_cmd.end());
         cmd_buf.push_back(0);
 
-        PROCESS_INFORMATION pi = {};
+        PROCESS_INFORMATION pi = { };
         BOOL ok = CreateProcessA(NULL, cmd_buf.data(), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
         CloseHandle(h_write);
 
@@ -190,17 +172,16 @@ std::string execute(const std::string& cmd, int& out_code)
 }
 
 //------------------ CLX: get_compiler - resolve the C++ compiler: CLX_CXX environment
-Compiler get_compiler()
-{
+Compiler get_compiler() {
 #ifndef CLX_DEFAULT_CXX
 #error "CLX_DEFAULT_CXX not defined — rebuild with CMake"
 #endif
 #ifndef CLX_DEFAULT_CXX_NAME
 #error "CLX_DEFAULT_CXX_NAME not defined — rebuild with CMake"
 #endif
-    if (const char* env = std::getenv("CLX_CXX"); env && *env) {
+    if (const char *env = std::getenv("CLX_CXX"); env && *env) {
         std::string base = fs::path(env).filename().string();
-        for (auto& c : base)
+        for (auto &c : base)
             c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         bool msvc_style = base.rfind("cl", 0) == 0;
         return { msvc_style ? std::string("MSVC") : std::string("Clang"), std::string(env) };
@@ -217,8 +198,7 @@ Compiler get_compiler()
 }
 
 //------------------ CLX: print_help - displays usage information
-void print_help()
-{
+void print_help() {
     std::cout << "Usage: clx [options] <file.lua> [<compiler-options>]\n\n"
               << "clx Compiler Options:\n"
               << "  -o, --output <name>   Specify output file name\n"
@@ -240,8 +220,7 @@ void print_help()
 }
 
 //------------------ CLX: main - entry point, parses CLI arguments, compiles Lua to C++, links output
-int main(int argc, char* argv[])
-{
+int main(int argc, char *argv[]) {
     if (argc < 2) {
         print_help();
         return 1;
@@ -321,7 +300,7 @@ int main(int argc, char* argv[])
     std::string cc_compile_str = "";
     std::string cc_link_str = "";
     bool link_seen = false;
-    for (const auto& opt : cc_options) {
+    for (const auto &opt : cc_options) {
         if (opt == "/link") {
             link_seen = true;
             continue;
@@ -379,10 +358,8 @@ int main(int argc, char* argv[])
         std::string clx_arch_gcc = CLX_ARCH_GCC_FLAG;
         std::string clx_arch_msvc = CLX_ARCH_MSVC_FLAG;
         bool user_overrode_arch = cc_options_str.find("-mavx") != std::string::npos
-            || cc_options_str.find("-msse") != std::string::npos
-            || cc_options_str.find("-march=") != std::string::npos
-            || cc_options_str.find("-mcpu=") != std::string::npos
-            || cc_options_str.find("/arch:") != std::string::npos
+            || cc_options_str.find("-msse") != std::string::npos || cc_options_str.find("-march=") != std::string::npos
+            || cc_options_str.find("-mcpu=") != std::string::npos || cc_options_str.find("/arch:") != std::string::npos
             || cc_options_str.find("-arch") != std::string::npos;
         if (!user_overrode_arch) {
             if (!clx_arch_gcc.empty()) {
@@ -403,7 +380,7 @@ int main(int argc, char* argv[])
 
     std::vector<std::string> cpp_files;
 
-    for (const auto& input_file : input_files) {
+    for (const auto &input_file : input_files) {
         std::ifstream t(input_file);
         if (!t.is_open()) {
             std::cerr << "Error: Cannot open input file " << input_file << "\n";
@@ -411,8 +388,7 @@ int main(int argc, char* argv[])
         }
         std::string source((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
 
-        if (source.size() >= 3
-            && (unsigned char)source[0] == 0xEF && (unsigned char)source[1] == 0xBB
+        if (source.size() >= 3 && (unsigned char)source[0] == 0xEF && (unsigned char)source[1] == 0xBB
             && (unsigned char)source[2] == 0xBF) {
             source.erase(0, 3);
         }
@@ -425,7 +401,7 @@ int main(int argc, char* argv[])
         uint32_t root = 0xFFFFFFFF;
         try {
             root = parser.parse();
-        } catch (const std::exception& e) {
+        } catch (const std::exception &e) {
             std::cerr << e.what() << "\n";
             return 1;
         }
@@ -455,11 +431,11 @@ int main(int argc, char* argv[])
         std::string main_module = fs::path(input_files[0]).stem().string();
         std::ofstream appender(cpp_files[0], std::ios::app);
 
-        for (const auto& file : input_files) {
+        for (const auto &file : input_files) {
             std::string mod = fs::path(file).stem().string();
             appender << "\nextern clx::LValue luaopen_" << mod << "(clx::LState* L);\n";
         }
-        for (const auto& mod : precompiled_modules) {
+        for (const auto &mod : precompiled_modules) {
             appender << "\nextern clx::LValue luaopen_" << mod << "(clx::LState* L);\n";
         }
 
@@ -473,8 +449,7 @@ int main(int argc, char* argv[])
         if (dynamic_loading_enabled && !minimal_active) {
             appender << "    // --dynamic enabled: link libclx_lua.a (POSIX) or clx_lua.lib (Windows)\n";
             appender << "    //   In-tree: build/clx_lua/libclx_lua.a (or build/clx_lua/clx_lua.lib)\n";
-            appender
-                << "    //   Installed: <libdir>/libclx_lua.a (or <ProgramFiles>/clx/lib/clx_lua.lib)\n";
+            appender << "    //   Installed: <libdir>/libclx_lua.a (or <ProgramFiles>/clx/lib/clx_lua.lib)\n";
             appender << "    clx_register_load_builtins(L);\n";
         }
         appender << "    try {\n";
@@ -485,14 +460,14 @@ int main(int argc, char* argv[])
             size_t dot = lua_mod.rfind('.');
             if (dot != std::string::npos)
                 lua_mod = lua_mod.substr(0, dot);
-            for (auto& c : lua_mod)
+            for (auto &c : lua_mod)
                 if (c == '/' || c == '\\')
                     c = '.';
             appender << "        L->register_module(\"" << lua_mod << "\", luaopen_" << mod << ");\n";
             if (lua_mod != mod)
                 appender << "        L->register_module(\"" << mod << "\", luaopen_" << mod << ");\n";
         }
-        for (const auto& mod : precompiled_modules) {
+        for (const auto &mod : precompiled_modules) {
             appender << "        L->register_module(\"" << mod << "\", luaopen_" << mod << ");\n";
         }
 
@@ -559,8 +534,6 @@ int main(int argc, char* argv[])
     fs::path build_root = exe_dir.parent_path();
     auto lib_roots = clx_lib_roots(exe_dir, build_root);
 
-    // --- Header include path: build-tree include first (dev builds), then the
-    // configured includedir (installed clx), then the current-dir include fallback.
     fs::path include_dir;
     if (!fs::exists(build_root / "include")) {
         auto inst_incl = clx_install_includedir();
@@ -586,7 +559,7 @@ int main(int argc, char* argv[])
         std::string lib_file = size_mode ? "clx_size.lib" : "clx.lib";
         fs::path lib_path;
         bool found = false;
-        for (const auto& root : lib_roots) {
+        for (const auto &root : lib_roots) {
             lib_path = root / "Release" / lib_file;
             if (fs::exists(lib_path)) {
                 found = true;
@@ -608,7 +581,7 @@ int main(int argc, char* argv[])
 #else
         std::string lib_file = size_mode ? "libclx_size.a" : "libclx.a";
         std::string lib_dir;
-        for (const auto& root : lib_roots) {
+        for (const auto &root : lib_roots) {
             if (fs::exists(root / lib_file)) {
                 lib_dir = root.string();
                 break;
@@ -623,11 +596,9 @@ int main(int argc, char* argv[])
 #endif
     }
 
-    // --- Native module search dirs: current dir, then <lib-root>/clx for each,
-    // then the in-tree <build_root>/lib/clx layout, plus any -L flags.
     std::vector<fs::path> mod_search_dirs;
     mod_search_dirs.push_back(fs::current_path());
-    for (const auto& root : lib_roots) {
+    for (const auto &root : lib_roots) {
         fs::path p = root / "clx";
         if (fs::exists(p))
             mod_search_dirs.push_back(p);
@@ -637,7 +608,7 @@ int main(int argc, char* argv[])
         if (fs::exists(p))
             mod_search_dirs.push_back(p);
     }
-    for (const auto& opt : cc_options) {
+    for (const auto &opt : cc_options) {
         if (opt.size() > 2 && opt[0] == '-' && opt[1] == 'L') {
             std::string dir = opt.substr(2);
             if (!dir.empty() && fs::is_directory(dir))
@@ -646,23 +617,23 @@ int main(int argc, char* argv[])
     }
 
     std::string all_cpp_files = "";
-    for (const auto& f : cpp_files) {
+    for (const auto &f : cpp_files) {
         all_cpp_files += "\"" + f + "\" ";
     }
 
     std::string obj_files;
-    for (const auto& f : cpp_files) {
+    for (const auto &f : cpp_files) {
         obj_files += fs::path(f).stem().string() + ".o ";
     }
 
-    for (const auto& mod : precompiled_modules) {
+    for (const auto &mod : precompiled_modules) {
 #ifdef _WIN32
         std::string target_lib = mod + ".lib";
 #else
         std::string target_lib = mod + ".a";
 #endif
         bool found = false;
-        for (const auto& dir : mod_search_dirs) {
+        for (const auto &dir : mod_search_dirs) {
             fs::path full = dir / target_lib;
             if (fs::exists(full)) {
                 if (dir == fs::current_path())
@@ -682,26 +653,23 @@ int main(int argc, char* argv[])
 #if defined(__APPLE__) || defined(__linux__) || defined(__unix__)
 
         std::vector<std::string> lua_search_dirs;
-        // In-tree vendored Lua source and in-tree bridge build output first.
         lua_search_dirs.push_back("deps/lua-5.5/src");
         lua_search_dirs.push_back((build_root / "build" / "clx_lua").string());
-        // Configurable -L dirs and installed module dirs (may contain the bridge).
-        for (const auto& opt : cc_options) {
+        for (const auto &opt : cc_options) {
             if (opt.size() > 2 && opt[0] == '-' && opt[1] == 'L') {
                 std::string dir = opt.substr(2);
                 if (!dir.empty())
                     lua_search_dirs.push_back(dir);
             }
         }
-        for (const auto& dir : mod_search_dirs)
+        for (const auto &dir : mod_search_dirs)
             lua_search_dirs.push_back(dir.string());
-        // Installed layout: <libdir>/libclx_lua.a.
-        for (const auto& root : lib_roots)
+        for (const auto &root : lib_roots)
             lua_search_dirs.push_back(root.string());
 
         std::string found_bridge_lib;
         std::string found_bare_lua_lib;
-        for (const auto& dir : lua_search_dirs) {
+        for (const auto &dir : lua_search_dirs) {
             fs::path p_bridge = fs::path(dir) / "libclx_lua.a";
             if (fs::exists(p_bridge) && found_bridge_lib.empty())
                 found_bridge_lib = fs::absolute(p_bridge).string();
@@ -726,7 +694,7 @@ int main(int argc, char* argv[])
         } else {
             std::cerr << "clx: --dynamic requires libclx_lua.a (vendored Lua 5.5 + "
                       << "clx bridge). Could not find it in:\n";
-            for (const auto& dir : lua_search_dirs)
+            for (const auto &dir : lua_search_dirs)
                 std::cerr << "  " << dir << "/\n";
             std::cerr << "Fix:\n"
                       << "  - Run `cmake --build build -j` to build clx_lua (libclx_lua.a), OR\n"
@@ -741,13 +709,12 @@ int main(int argc, char* argv[])
         lua_win_search_dirs.push_back(fs::path(input_files[0]).parent_path());
         lua_win_search_dirs.push_back(build_root / "build" / "clx_lua");
         lua_win_search_dirs.push_back(build_root / "lib");
-        for (const auto& dir : mod_search_dirs)
+        for (const auto &dir : mod_search_dirs)
             lua_win_search_dirs.push_back(dir);
-        // Installed layout: <libdir>/clx_lua.lib, via the same lib roots.
-        for (const auto& root : lib_roots)
+        for (const auto &root : lib_roots)
             lua_win_search_dirs.push_back(root);
         std::string found_bridge_lib;
-        for (const auto& dir : lua_win_search_dirs) {
+        for (const auto &dir : lua_win_search_dirs) {
             fs::path p = dir / "clx_lua.lib";
             if (fs::exists(p)) {
                 found_bridge_lib = fs::absolute(p).string();
@@ -757,7 +724,7 @@ int main(int argc, char* argv[])
         if (found_bridge_lib.empty()) {
             std::cerr << "clx: --dynamic requires clx_lua.lib (vendored Lua 5.5 + "
                       << "clx bridge). Could not find it in:\n";
-            for (const auto& dir : lua_win_search_dirs)
+            for (const auto &dir : lua_win_search_dirs)
                 std::cerr << "  " << dir.string() << "\n";
             std::cerr << "Fix:\n"
                       << "  - Run `cmake --build build` to build clx_lua, OR\n"
@@ -784,7 +751,7 @@ int main(int argc, char* argv[])
         std::string fe_arg = out_ext.empty() ? "" : " /Fe\"" + output_name + out_ext + "\"";
 
         std::string msvc_obj_files;
-        for (const auto& f : cpp_files) {
+        for (const auto &f : cpp_files) {
             msvc_obj_files += "\"" + tmp_dir + "\\" + fs::path(f).stem().string() + ".obj\" ";
         }
 
@@ -858,7 +825,7 @@ int main(int argc, char* argv[])
         } else {
             std::cerr << output << std::endl;
         }
-        for (const auto& f : cpp_files) {
+        for (const auto &f : cpp_files) {
             fs::remove(f);
             fs::path base = fs::path(f).parent_path() / fs::path(f).stem();
             fs::remove(fs::path(base.string() + ".obj"));
@@ -893,7 +860,7 @@ int main(int argc, char* argv[])
         }
     }
 
-    for (const auto& f : cpp_files) {
+    for (const auto &f : cpp_files) {
         fs::remove(f);
         fs::path base = fs::path(f).parent_path() / fs::path(f).stem();
         fs::remove(fs::path(base.string() + ".obj"));
