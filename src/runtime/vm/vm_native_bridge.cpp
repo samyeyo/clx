@@ -176,7 +176,6 @@ extern "C" int clx_vm_native_bridge_call(lua_State *L) {
             luaL_unref(L, LUA_REGISTRYINDEX, table_tracks[t].reg_ref);
         clx_L->shadow_top = prev_top;
         LValue err = e.error_obj;
-        // e.error_obj already interned with correct length (may contain NULs)
         if (err.type != String) {
             err = clx_L->intern_lvalue(e.what(), std::strlen(e.what()));
         }
