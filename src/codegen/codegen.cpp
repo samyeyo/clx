@@ -1080,9 +1080,9 @@ void CodeEmitter::emit_condition(uint32_t c_idx) {
                 ctx.nodes[c.as.table_access.table].as.ident.name, ctx.nodes[c.as.table_access.table].as.ident.length);
         }
         if (!t_name.empty() && state.pure_numeric_arrays.count(t_name)) {
-            out << "(l_" << t_name << "[static_cast<size_t>(";
+            out << "l_" << t_name << "[static_cast<size_t>(";
             emit_native(c.as.table_access.key);
-            out << ") - 1] != 0.0)";
+            out << ") - 1] != 0.0";
             return;
         }
     }
@@ -1101,11 +1101,12 @@ void CodeEmitter::emit_condition(uint32_t c_idx) {
             bool right_native = yields_number(ctx, state, c.as.bin_op.right, nullptr, state.current_fast_func);
             if (left_native && right_native) {
                 static const char *ops[] = { "", "", "", "", "", " == ", " < ", " > ", " <= ", " >= ", " != " };
-                out << "(";
+                // No surrounding parens: `==` binds tighter than &&/||, and statement
+                // callers already wrap the whole condition in if/while parens. Extra
+                // parens here trigger clang -Wparentheses-equality.
                 emit_native(c.as.bin_op.left);
                 out << ops[op];
                 emit_native(c.as.bin_op.right);
-                out << ")";
                 return;
             }
         }
@@ -1117,9 +1118,10 @@ void CodeEmitter::emit_condition(uint32_t c_idx) {
         return;
     }
     if (c.type == NodeType::ParenExpression) {
-        out << "(";
+        // Lua's and/or/not share C++ precedence, so the paren node itself is
+        // redundant in condition position; re-emitting parens would stack with
+        // the caller's if/while parens and trigger -Wparentheses-equality.
         emit_condition(c.as.paren_expr.expr);
-        out << ")";
         return;
     }
     out << "(";
@@ -1336,8 +1338,7 @@ void CodeEmitter::emitCallExpression(const ASTNode &node, uint32_t node_idx) {
 
         if (is_direct) {
             out << "    size_t _ssaved = L->shadow_top;\n";
-            out << "    clx::CFunctionType _gc_self = " << impl_call(fname)
-                << ";\n"; 
+            out << "    clx::CFunctionType _gc_self = " << impl_call(fname) << ";\n";
             out << "    clx::MultiValue _main_ret = _gc_self(L, _dyn_buf, _dyn_count);\n";
             out << "    L->shadow_top = _ssaved;\n";
         } else if (!is_method_call && node.as.call_expr.target < ctx.nodes.size()
@@ -1490,8 +1491,7 @@ void CodeEmitter::emitCallExpression(const ASTNode &node, uint32_t node_idx) {
                 out << "    L->shadow_top = _ssaved;\n";
             } else if (is_direct) {
                 out << "    size_t _ssaved = L->shadow_top;\n";
-                out << "    clx::CFunctionType _gc_self = " << impl_call(fname)
-                    << ";\n";
+                out << "    clx::CFunctionType _gc_self = " << impl_call(fname) << ";\n";
                 out << "    clx::MultiValue _main_ret = _gc_self(L, args, " << node.as.call_expr.arg_count << ");\n";
                 out << "    L->shadow_top = _ssaved;\n";
             } else if (!is_method_call && node.as.call_expr.target < ctx.nodes.size()
@@ -1547,8 +1547,7 @@ void CodeEmitter::emitCallExpression(const ASTNode &node, uint32_t node_idx) {
         } else {
             if (is_direct) {
                 out << "    size_t _ssaved = L->shadow_top;\n";
-                out << "    clx::CFunctionType _gc_self = " << impl_call(fname)
-                    << ";\n";
+                out << "    clx::CFunctionType _gc_self = " << impl_call(fname) << ";\n";
                 out << "    clx::MultiValue _main_ret = _gc_self(L, nullptr, 0);\n";
                 out << "    L->shadow_top = _ssaved;\n";
             } else if (!is_method_call && node.as.call_expr.target < ctx.nodes.size()
@@ -3700,8 +3699,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
                 else if (is_n)
                     out << "l_" << name << " = " << num_str << ";\n";
                 else
-                    out << "l_" << name << " = " << val_str
-                        << ";\n";
+                    out << "l_" << name << " = " << val_str << ";\n";
                 if (is_n && !is_boxed && i < v_count && !tmp_is_native[i] && state.native_integers.count(name) == 0) {
                     uint32_t fv = ctx.block_statements[first_v + i];
                     out << "_intf_l_" << name << " = (" << int_flag_expr(fv, 1) << ");\n";
