@@ -1270,6 +1270,7 @@ bool LState::gc_step() {
                 }
                 t->ext->hash_count = 0;
                 t->ext->hash_tombs = 0;
+                t->ext->hash_size = 0;
                 t->ext->metatable = nullptr;
                 t->ext->meta_next = nullptr;
             }
@@ -1337,7 +1338,7 @@ void LState::collect_garbage() {
         if (!h)
             return;
         ValueType t = v.type;
-        if (t == Table || t == Thread || t == Function)
+        if (t == Table || t == Thread || t == Function || t == UserData)
             wl.push_back(h);
     };
 
@@ -1466,6 +1467,12 @@ void LState::collect_garbage() {
             for (const LUpValue &cell : f->gc_cells)
                 if (cell)
                     push_if_needed(*cell);
+        } else if (curr->type == static_cast<uint8_t>(UserData)) {
+            LUserdata *ud = static_cast<LUserdata *>(curr);
+            if (ud->metatable && ud->metatable->marked == 0) {
+                ud->metatable->marked = 1;
+                wl.push_back(ud->metatable);
+            }
         }
     }
 
@@ -1776,6 +1783,8 @@ LValue LState::create_table(size_t asize, size_t hsize) {
         free_tables = static_cast<LTable *>(free_tables->next);
         t->marked = 0;
         if (t->ext) {
+            if (!t->ext->entries)
+                t->ext->hash_size = 0;
             t->ext->hash_count = 0;
             t->ext->hash_tombs = 0;
             t->ext->hash_version++;
@@ -1846,7 +1855,7 @@ clx::LValue clx::LState::create_closure(CFunctionType func, LTable *env, std::ve
     if (free_functions) {
         f = free_functions;
         free_functions = static_cast<LCFunction *>(free_functions->next);
-        f->func = std::move(func); 
+        f->func = std::move(func);
         f->env = env ? env : _G;
         f->marked = 0;
         f->gc_cells = std::move(gc_cells);
