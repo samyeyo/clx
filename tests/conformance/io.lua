@@ -79,8 +79,9 @@ assert_eq(f3:read(3), "456", "read after seek set")
 f3:close()
 
 print("\n----------------- io.open / close (non-existent)")
-local ok, err = pcall(io.open, "/tmp/_clx_nonexistent_test_file_", "r")
-assert_true(not ok, "open non-existent raises error")
+local f, err = io.open("/tmp/_clx_nonexistent_test_file_", "r")
+assert_true(f == nil, "open non-existent returns nil")
+assert_true(err ~= nil, "open non-existent returns error message")
 
 print("\n----------------- io.input / output default")
 local def_in = io.input()
