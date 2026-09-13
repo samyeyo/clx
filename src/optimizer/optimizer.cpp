@@ -166,7 +166,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
     //------------------ Map every node to its innermost enclosing FunctionDef. Purely structural
     state.node_func_owner.clear();
     {
-        std::vector<std::pair<uint32_t, uint32_t>> stk; 
+        std::vector<std::pair<uint32_t, uint32_t>> stk;
         stk.emplace_back(root_node, 0xFFFFFFFFu);
         while (!stk.empty()) {
             auto [ni, owner] = stk.back();
@@ -1398,7 +1398,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                 return true;
             }
             return false;
-        }; 
+        };
         std::unordered_set<uint32_t> pos_visit;
         auto key_pos_int = [&](auto &self, uint32_t idx) -> bool {
             if (idx == 0xFFFFFFFF || idx >= ctx.nodes.size() || pos_visit.count(idx))
@@ -1697,7 +1697,7 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
         state.pure_numeric_arrays.insert(name);
     }
 
-    //------------------ Safety pass for empty-array promotions 
+    //------------------ Safety pass for empty-array promotions
     {
         std::set<std::string_view> new_names;
         for (const auto &nm : state.pure_numeric_arrays) {
@@ -2110,6 +2110,21 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
     }
 
     state.numeric_table_fields.clear();
+
+    //------------------ Names reassigned after declaration must not carry constructor field typing
+    std::unordered_map<uint32_t, std::set<std::string_view>> reassigned_names;
+    for (uint32_t idx = 0; idx < ctx.nodes.size(); ++idx) {
+        const auto &nn = ctx.nodes[idx];
+        if (nn.type != NodeType::Assignment)
+            continue;
+        uint32_t owner = owner_of_node(state, idx);
+        for (uint32_t ti = 0; ti < nn.as.assign.target_count; ++ti) {
+            uint32_t tgt = ctx.block_statements[nn.as.assign.first_target + ti];
+            if (tgt < ctx.nodes.size() && ctx.nodes[tgt].type == NodeType::Identifier)
+                reassigned_names[owner].insert(
+                    std::string_view(ctx.nodes[tgt].as.ident.name, ctx.nodes[tgt].as.ident.length));
+        }
+    }
     for (const auto &node : ctx.nodes) {
         if (node.type != NodeType::LocalDecl)
             continue;
@@ -2121,6 +2136,9 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
             continue;
         std::string_view nm(ctx.nodes[id_idx].as.ident.name, ctx.nodes[id_idx].as.ident.length);
         if (ctx.nodes[val_idx].type != NodeType::TableConstructor)
+            continue;
+        auto rit_a = reassigned_names.find(owner_of_node(state, id_idx));
+        if (rit_a != reassigned_names.end() && rit_a->second.count(nm))
             continue;
         const auto &tc = ctx.nodes[val_idx].as.table_cons;
         if (tc.count == 0)
@@ -2218,6 +2236,9 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
             continue;
         std::string_view nm(ctx.nodes[id_idx].as.ident.name, ctx.nodes[id_idx].as.ident.length);
         if (ctx.nodes[val_idx].type != NodeType::TableConstructor)
+            continue;
+        auto rit_b = reassigned_names.find(owner_of_node(state, id_idx));
+        if (rit_b != reassigned_names.end() && rit_b->second.count(nm))
             continue;
         if (state.numeric_table_fields.count({ owner_of_node(state, id_idx), nm }))
             continue;
@@ -2394,7 +2415,9 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
             }
         }
         for (auto &[pn, fields] : param_arith_fields) {
-            if (!fields.empty() && !state.numeric_table_fields.count({ nd_idx, pn })) {
+            auto rit_c1 = reassigned_names.find(nd_idx);
+            bool pn_reassigned = rit_c1 != reassigned_names.end() && rit_c1->second.count(pn);
+            if (!fields.empty() && !pn_reassigned && !state.numeric_table_fields.count({ nd_idx, pn })) {
                 state.numeric_table_fields[{ nd_idx, pn }] = fields;
                 for (auto &fld : fields) {
                     if (state.string_pool_index.find(fld) == state.string_pool_index.end()) {
@@ -2407,7 +2430,9 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
         for (auto &[ln, pn] : local_to_param) {
             auto it = param_arith_fields.find(pn);
             if (it != param_arith_fields.end() && !it->second.empty()) {
-                if (!state.numeric_table_fields.count({ nd_idx, ln })) {
+                auto rit_c2 = reassigned_names.find(nd_idx);
+                bool ln_reassigned = rit_c2 != reassigned_names.end() && rit_c2->second.count(ln);
+                if (!ln_reassigned && !state.numeric_table_fields.count({ nd_idx, ln })) {
                     state.numeric_table_fields[{ nd_idx, ln }] = it->second;
                 }
             }
@@ -3353,14 +3378,14 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                                    std::map<std::string_view, uint32_t> &masks, uint32_t arg_idx,
                                    std::set<uint32_t> &visited) -> Req {
                 if (arg_idx == 0xFFFFFFFF || arg_idx >= ctx.nodes.size())
-                    return { 0u, false }; 
+                    return { 0u, false };
                 const auto &an = ctx.nodes[arg_idx];
                 if (an.type == NodeType::ParenExpression)
                     return self(self, fdef_idx, fname, masks, an.as.paren_expr.expr, visited);
                 if (an.type == NodeType::Integer)
                     return { 0u, true };
                 if (an.type == NodeType::Number)
-                    return { 0u, false }; 
+                    return { 0u, false };
                 if (an.type == NodeType::Identifier && !an.as.ident.is_global) {
                     std::string_view nm(an.as.ident.name, an.as.ident.length);
                     const auto &fn = ctx.nodes[fdef_idx].as.func_def;
@@ -3430,7 +3455,6 @@ void Optimizer::run(const ASTContext &ctx, uint32_t root_node) {
                 const auto &fn = ctx.nodes[fdef.second].as.func_def;
                 if (fn.param_count >= 32)
                     continue;
-                // only fast-eligible shapes: single native return, all params numeric
                 if (!state.func_param_counts.count(fdef.first))
                     continue;
                 const auto &pn = state.func_param_native;
