@@ -58,8 +58,10 @@ clx::MultiValue lua_xpcall(clx::LState *L, const clx::LValue *args, size_t count
     size_t arg_count = count - 2;
     const clx::LValue *func_args = (arg_count > 0) ? (args + 2) : nullptr;
 
+    size_t shadow_base = L->shadow_top;
     try {
-        clx::MultiValue ret = clx::call_function(L, func, func_args, arg_count, L->current_file, L->current_line);
+        clx::MultiValue ret
+            = clx::call_function_rooted(L, func, func_args, arg_count, L->current_file, L->current_line);
 
         if (ret.count == 0)
             return clx::MultiValue({ clx::boolean(true) });
@@ -74,13 +76,12 @@ clx::MultiValue lua_xpcall(clx::LState *L, const clx::LValue *args, size_t count
         return clx::MultiValue(results, L);
 
     } catch (const clx::LRuntimeException &e) {
+        L->shadow_top = shadow_base;
         clx::LValue err_obj = e.error_obj;
         clx::MultiValue msgh_ret;
 
         try {
-            L->shadow_stack[L->shadow_top++] = TypedSlot(&err_obj.val, &err_obj.type);
-            msgh_ret = clx::call_function(L, msgh, &err_obj, 1, L->current_file, L->current_line);
-            L->shadow_top--;
+            msgh_ret = clx::call_function_rooted(L, msgh, &err_obj, 1, L->current_file, L->current_line);
         } catch (...) {
             return clx::MultiValue({ clx::boolean(false), clx::string(L, "error in error handling") });
         }
@@ -88,13 +89,12 @@ clx::MultiValue lua_xpcall(clx::LState *L, const clx::LValue *args, size_t count
         return clx::MultiValue({ clx::boolean(false), msgh_ret.count > 0 ? msgh_ret[0] : clx::LValue() });
 
     } catch (const std::exception &e) {
+        L->shadow_top = shadow_base;
         clx::LValue err_obj = clx::string(L, e.what());
         clx::MultiValue msgh_ret;
 
         try {
-            L->shadow_stack[L->shadow_top++] = TypedSlot(&err_obj.val, &err_obj.type);
-            msgh_ret = clx::call_function(L, msgh, &err_obj, 1, L->current_file, L->current_line);
-            L->shadow_top--;
+            msgh_ret = clx::call_function_rooted(L, msgh, &err_obj, 1, L->current_file, L->current_line);
         } catch (...) {
             return clx::MultiValue({ clx::boolean(false), clx::string(L, "error in error handling") });
         }
@@ -136,7 +136,10 @@ MultiValue collectgarbage(LState *L, const LValue *args, size_t arg_count) {
         return MultiValue(clx::number(0.0));
     std::string_view opt(args[0].as_string(), args[0].string_len());
     if (opt == "collect") {
+        bool had_recent = !L->gc_recent.empty();
         L->collect_garbage();
+        if (had_recent)
+            L->collect_garbage();
         return MultiValue(clx::number(0.0));
     }
     if (opt == "count") {
@@ -376,9 +379,7 @@ static MultiValue pairs(LState *L, const LValue *args, size_t count) {
         if (LTable *mt = tbl_metatable(tbl)) {
             LValue mt_pairs = mt->gettable(L->str_pairs);
             if (mt_pairs.type == Function) {
-                L->shadow_stack[L->shadow_top++] = TypedSlot(&t.val, &t.type);
-                MultiValue ret = call_function(L, mt_pairs, &t, 1, __FILE__, __LINE__);
-                L->shadow_top--;
+                MultiValue ret = call_function_rooted(L, mt_pairs, &t, 1, __FILE__, __LINE__);
                 return ret;
             }
         }
@@ -464,9 +465,7 @@ static MultiValue ipairs(LState *L, const LValue *args, size_t count) {
         if (LTable *mt = tbl_metatable(tbl)) {
             LValue mt_ipairs = mt->gettable(LValue(L->intern_string("__ipairs")));
             if (mt_ipairs.type == Function) {
-                L->shadow_stack[L->shadow_top++] = TypedSlot(&t.val, &t.type);
-                MultiValue ret = call_function(L, mt_ipairs, &t, 1, __FILE__, __LINE__);
-                L->shadow_top--;
+                MultiValue ret = call_function_rooted(L, mt_ipairs, &t, 1, __FILE__, __LINE__);
                 return ret;
             }
         }
