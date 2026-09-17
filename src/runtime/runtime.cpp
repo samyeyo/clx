@@ -66,11 +66,7 @@ static void fiber_entry_impl(LThread *t) {
                 args[i] = t->resume_args[i];
             t->resume_args = MultiValue();
 
-            size_t prev_top = L->shadow_top;
-            for (size_t i = 0; i < argc; ++i)
-                L->shadow_stack[L->shadow_top++] = TypedSlot(&args[i].val, &args[i].type);
-            t->yield_args = call_function(L, t->function, args, argc, "coroutine", 0);
-            L->shadow_top = prev_top;
+            t->yield_args = call_function_rooted(L, t->function, args, argc, "coroutine", 0);
             t->status = THREAD_DEAD;
         } catch (const LRuntimeException &e) {
 
@@ -108,7 +104,6 @@ static void fiber_entry_impl(LThread *t) {
 
 #if defined(_WIN32)
 
-// How many completed coroutine fibers to keep alive in the thread pool for reuse.
 static constexpr size_t kMaxPooledFibers = 2048;
 
 static void WINAPI fiber_trampoline(LPVOID param) {
@@ -189,6 +184,7 @@ LValue create_thread(LState *L, const LValue &func, double stack_size) {
 
     t->next = L->allocated_objects;
     L->allocated_objects = t;
+    L->gc_recent.push_back(t);
     if (!recycled)
         L->object_count++;
     L->allocated_bytes += sizeof(LThread) + t->stack_bytes;
@@ -319,9 +315,7 @@ std::string LValue::to_string(LState *L) const {
                 LValue args[1];
                 args[0] = *this;
 
-                L->shadow_stack[L->shadow_top++] = TypedSlot(&args[0].val, &args[0].type);
-                MultiValue ret = call_function(L, meta_func, args, 1, __FILE__, __LINE__);
-                L->shadow_top--;
+                MultiValue ret = call_function_rooted(L, meta_func, args, 1, __FILE__, __LINE__);
 
                 if (ret.count > 0 && ret[0].type == String) {
                     return std::string(ret[0].as_string(), ret[0].string_len());
@@ -487,11 +481,7 @@ LValue table_get_slow(LState *L, const LValue &obj, const LValue &key) {
             return table_get(L, index, key);
         if (index.type == ValueType::Function) {
             LValue args[2] = { obj, key };
-            size_t prev = L->shadow_top;
-            L->shadow_stack[L->shadow_top++] = { &args[0].val, &args[0].type };
-            L->shadow_stack[L->shadow_top++] = { &args[1].val, &args[1].type };
-            MultiValue mv = call_function(L, index, args, 2, "__index", 0);
-            L->shadow_top = prev;
+            MultiValue mv = call_function_rooted(L, index, args, 2, "__index", 0);
             return mv.count > 0 ? mv[0] : LValue();
         }
         return LValue();
@@ -506,11 +496,7 @@ LValue table_get_slow(LState *L, const LValue &obj, const LValue &key) {
         return LValue();
     if (index.type == ValueType::Function) {
         LValue args[2] = { obj, key };
-        size_t prev = L->shadow_top;
-        L->shadow_stack[L->shadow_top++] = { &args[0].val, &args[0].type };
-        L->shadow_stack[L->shadow_top++] = { &args[1].val, &args[1].type };
-        MultiValue mv = call_function(L, index, args, 2, "__index", 0);
-        L->shadow_top = prev;
+        MultiValue mv = call_function_rooted(L, index, args, 2, "__index", 0);
         return mv.count > 0 ? mv[0] : LValue();
     }
     if (index.type == ValueType::Table)
@@ -879,11 +865,7 @@ LValue LTable::get_value(LState *L, const LValue &key) {
                 args[0] = LValue(this);
                 args[1] = key;
 
-                L->shadow_stack[L->shadow_top++] = TypedSlot(&args[0].val, &args[0].type);
-                L->shadow_stack[L->shadow_top++] = TypedSlot(&args[1].val, &args[1].type);
-                MultiValue ret = call_function(L, index_ptr, args, 2, __FILE__, __LINE__);
-                L->shadow_top -= 2;
-
+                MultiValue ret = call_function_rooted(L, index_ptr, args, 2, __FILE__, __LINE__);
                 return ret.count > 0 ? ret[0] : LValue();
             }
         }
@@ -914,11 +896,7 @@ void LTable::set_value(LState *L, const LValue &key, const LValue &val) {
                 args[1] = key;
                 args[2] = val;
 
-                L->shadow_stack[L->shadow_top++] = TypedSlot(&args[0].val, &args[0].type);
-                L->shadow_stack[L->shadow_top++] = TypedSlot(&args[1].val, &args[1].type);
-                L->shadow_stack[L->shadow_top++] = TypedSlot(&args[2].val, &args[2].type);
-                call_function(L, newindex_ptr, args, 3, __FILE__, __LINE__);
-                L->shadow_top -= 3;
+                call_function_rooted(L, newindex_ptr, args, 3, __FILE__, __LINE__);
                 return;
             }
         }
@@ -936,6 +914,7 @@ void LTable::bind(LState *L, const char *name, CFunctionType func) {
     LCFunction *f = new LCFunction(func);
     f->next = L->allocated_objects;
     L->allocated_objects = f;
+    L->gc_recent.push_back(f);
     settable(LValue(L->intern_string(name)), LValue(Function, f));
 }
 
@@ -1112,10 +1091,8 @@ static void clx_trigger_gc(LState *L, LTable *t) {
         return;
 
     LValue args[1] = { LValue(Table, t) };
-    size_t prev_shadow = L->shadow_top;
-    L->shadow_stack[L->shadow_top++] = TypedSlot(&args[0].val, &args[0].type);
     try {
-        call_function(L, gc_func, args, 1, "GC_Finalizer", 0);
+        call_function_rooted(L, gc_func, args, 1, "GC_Finalizer", 0);
     } catch (const LRuntimeException &e) {
         std::cerr << "error in __gc metamethod: " << e.what() << "\n";
     } catch (std::exception &e) {
@@ -1123,7 +1100,6 @@ static void clx_trigger_gc(LState *L, LTable *t) {
     } catch (...) {
         std::cerr << "error in __gc metamethod\n";
     }
-    L->shadow_top = prev_shadow;
 }
 
 //------------------ CloseGuard::~CloseGuard — close guard destructor
@@ -1139,11 +1115,8 @@ CloseGuard::~CloseGuard() {
         return;
 
     LValue args[2] = { val, LValue() };
-    size_t prev_shadow = L->shadow_top;
-    L->shadow_stack[L->shadow_top++] = TypedSlot(&args[0].val, &args[0].type);
-    L->shadow_stack[L->shadow_top++] = TypedSlot(&args[1].val, &args[1].type);
     try {
-        call_function(L, close_func, args, 2, "CloseGuard", 0);
+        call_function_rooted(L, close_func, args, 2, "CloseGuard", 0);
     } catch (const LRuntimeException &e) {
         std::cerr << "error in __close metamethod: " << e.what() << "\n";
     } catch (std::exception &e) {
@@ -1151,8 +1124,15 @@ CloseGuard::~CloseGuard() {
     } catch (...) {
         std::cerr << "error in __close metamethod\n";
     }
-    L->shadow_top = prev_shadow;
 }
+
+#define GC_SUB(TAG, PTR, amt)                                                                                          \
+    do {                                                                                                               \
+        if (static_cast<size_t>(amt) > allocated_bytes)                                                                \
+            allocated_bytes = 0;                                                                                       \
+        else                                                                                                           \
+            allocated_bytes -= (amt);                                                                                  \
+    } while (0)
 
 //------------------ LState::gc_step — incremental GC sweep step
 bool LState::gc_step() {
@@ -1190,9 +1170,7 @@ bool LState::gc_step() {
                     t->next = gc_finalizable;
                     gc_finalizable = t;
                 } else {
-                    if (t->array_cap > 0 && t->array != t->small_array)
-                        allocated_bytes -= sizeof(TValue) * t->array_cap + sizeof(ValueType) * t->array_cap;
-                    allocated_bytes -= sizeof(LTable);
+                    GC_SUB("SWEEP-T", t, sizeof(LTable));
                     if (t->ext) {
                         t->ext->hash_count = 0;
                         t->ext->hash_tombs = 0;
@@ -1209,9 +1187,8 @@ bool LState::gc_step() {
                 free_functions = f;
             } else if (curr->type == static_cast<uint8_t>(Thread)) {
                 LThread *th = static_cast<LThread *>(curr);
-                allocated_bytes -= sizeof(LThread) + th->stack_bytes;
+                GC_SUB("SWEEP-TH", th, sizeof(LThread) + th->stack_bytes);
 #if defined(_WIN32)
-                // Preserve the fiber for reuse
                 if (th->fiber && free_fiber_threads < kMaxPooledFibers) {
                     free_fiber_threads++;
                 } else {
@@ -1228,7 +1205,7 @@ bool LState::gc_step() {
                     ud->next = gc_finalizable_ud;
                     gc_finalizable_ud = ud;
                 } else {
-                    allocated_bytes -= sizeof(LUserdata) + ud->size;
+                    GC_SUB("SWEEP-UD", ud, sizeof(LUserdata) + ud->size);
                     delete[] reinterpret_cast<char *>(ud);
                 }
             }
@@ -1248,13 +1225,14 @@ bool LState::gc_step() {
     gc_prev = prev;
 
     if (!gc_sweep_cursor) {
+        if (gc_draining)
+            return true;
+        gc_draining = true;
         for (LTable *t = static_cast<LTable *>(gc_finalizable); t;) {
             LTable *nx = static_cast<LTable *>(t->next);
             meta_list_remove(this, t);
             clx_trigger_gc(this, t);
-            if (t->array_cap > 0 && t->array != t->small_array)
-                allocated_bytes -= sizeof(TValue) * t->array_cap + sizeof(ValueType) * t->array_cap;
-            allocated_bytes -= sizeof(LTable);
+            GC_SUB("DRAIN-T", t, sizeof(LTable));
             if (t->array && t->array != t->small_array) {
                 delete[] t->array;
                 t->array = nullptr;
@@ -1283,7 +1261,7 @@ bool LState::gc_step() {
         for (LUserdata *ud = static_cast<LUserdata *>(gc_finalizable_ud); ud;) {
             LUserdata *nx = static_cast<LUserdata *>(ud->next);
             invoke_gc_finalizer(ud, "GC_Finalizer");
-            allocated_bytes -= sizeof(LUserdata) + ud->size;
+            GC_SUB("DRAIN-UD", ud, sizeof(LUserdata) + ud->size);
             delete[] reinterpret_cast<char *>(ud);
             ud = nx;
         }
@@ -1300,6 +1278,7 @@ bool LState::gc_step() {
                 headroom = size_t(v);
         }
         gc_bytes_threshold = live + headroom;
+        gc_draining = false;
         return true;
     }
     return false;
@@ -1307,6 +1286,8 @@ bool LState::gc_step() {
 
 //------------------ LState::collect_garbage — mark-sweep collection
 void LState::collect_garbage() {
+    if (gc_draining)
+        return;
     auto &wl = gc_worklist;
     wl.clear();
 
@@ -1354,6 +1335,19 @@ void LState::collect_garbage() {
 
     for (const LValue &r : permanent_roots)
         push_if_needed(r);
+
+    if (!gc_recent.empty()) {
+        for (LHeader *h : gc_recent) {
+            if (h->marked != 0)
+                continue;
+            h->marked = 1;
+            uint8_t ty = h->type;
+            if (ty == static_cast<uint8_t>(Table) || ty == static_cast<uint8_t>(Thread)
+                || ty == static_cast<uint8_t>(Function) || ty == static_cast<uint8_t>(UserData))
+                wl.push_back(h);
+        }
+        gc_recent.clear();
+    }
 
     if (clx_mark_vm_proxies_ptr)
         clx_mark_vm_proxies_ptr(this, wl);
@@ -1603,6 +1597,17 @@ void LState::register_module(const std::string &name, LValue (*func)(LState *)) 
     register_static_preload(this, name.c_str(), func);
 }
 
+//------------------ LState::register_loaded_module — seed package.loaded[name] with an already-built module value
+void LState::register_loaded_module(const std::string &name, const LValue &module) {
+    LValue pack_val = get_global(this, "package");
+    if (pack_val.type != ValueType::Table)
+        return;
+    LValue loaded = static_cast<LTable *>(pack_val.as_pointer())->gettable(LValue(intern_string("loaded")));
+    if (loaded.type != ValueType::Table)
+        return;
+    static_cast<LTable *>(loaded.as_pointer())->settable(LValue(intern_string(name)), module);
+}
+
 //------------------ call_function — call a value as function
 MultiValue call_function(LState *L, const LValue &func, const LValue *args, size_t count, const char *file, int line) {
     L->current_file = file;
@@ -1644,11 +1649,7 @@ MultiValue call_function(LState *L, const LValue &func, const LValue *args, size
                 for (size_t i = 0; i < count; ++i)
                     new_args[i + 1] = args[i];
 
-                size_t prev_inner = L->shadow_top;
-                for (size_t i = 0; i < nargs; ++i)
-                    L->shadow_stack[L->shadow_top++] = TypedSlot(&new_args[i].val, &new_args[i].type);
-                MultiValue ret = call_function(L, m, new_args, nargs, file, line);
-                L->shadow_top = prev_inner;
+                MultiValue ret = call_function_rooted(L, m, new_args, nargs, file, line);
                 if (heap)
                     delete[] new_args;
                 L->shadow_top = prev_shadow;
@@ -1670,6 +1671,7 @@ MultiValue call_function(LState *L, const LValue &func, const LValue *args, size
 
 //------------------ pcall_function — protected call
 MultiValue pcall_function(LState *L, const LValue &func, const LValue *args, size_t count) {
+    size_t shadow_base = L->shadow_top;
     try {
         MultiValue ret = call_function(L, func, args, count, L->current_file, L->current_line);
         if (ret.count == 0)
@@ -1683,15 +1685,15 @@ MultiValue pcall_function(LState *L, const LValue &func, const LValue *args, siz
             results.push_back(ret[i]);
         return MultiValue(results, L);
     } catch (const LRuntimeException &e) {
+        L->shadow_top = shadow_base;
 
         LValue err_val = e.error_obj;
-        // e.error_obj is already interned with correct length (may contain NULs); re-interning via e.what() would truncate
         if (err_val.type != String) {
-            // Ensure string errors are interned correctly if they were somehow non-string
             err_val = LValue(L->intern_string(e.what()));
         }
         return MultiValue({ LValue(false), err_val });
     } catch (const std::exception &e) {
+        L->shadow_top = shadow_base;
         return MultiValue({ LValue(false), LValue(L->intern_string(e.what())) });
     }
 }
@@ -1816,7 +1818,6 @@ LValue LState::create_table(size_t asize, size_t hsize) {
             t->array_size = asize;
             std::fill(t->array_types, t->array_types + asize, ValueType::Nil);
             t->array_cap = asize;
-            allocated_bytes += sizeof(TValue) * asize + sizeof(ValueType) * asize;
         } else {
             if (t->array && t->array != t->small_array)
                 delete[] t->array;
@@ -1826,7 +1827,6 @@ LValue LState::create_table(size_t asize, size_t hsize) {
             t->array_types = new ValueType[asize]();
             t->array_size = asize;
             t->array_cap = asize;
-            allocated_bytes += sizeof(TValue) * asize + sizeof(ValueType) * asize;
         }
     } else {
         t->array_size = 0;
@@ -1836,6 +1836,7 @@ LValue LState::create_table(size_t asize, size_t hsize) {
 
     t->next = allocated_objects;
     allocated_objects = t;
+    gc_recent.push_back(t);
 
     object_count++;
     return LValue(Table, t);
@@ -1873,6 +1874,7 @@ clx::LValue clx::LState::create_closure(CFunctionType func, LTable *env, std::ve
     f->type = static_cast<uint8_t>(Function);
     f->next = allocated_objects;
     allocated_objects = f;
+    gc_recent.push_back(f);
     object_count++;
     return clx::LValue(Function, f);
 }
@@ -1897,6 +1899,7 @@ LValue newuserdata(LState *L, size_t size) {
 
     ud->next = L->allocated_objects;
     L->allocated_objects = ud;
+    L->gc_recent.push_back(ud);
     L->object_count++;
     L->allocated_bytes += sizeof(LUserdata) + size;
     return LValue(UserData, ud);
@@ -1918,10 +1921,7 @@ LValue call_bin_metamethod(LState *L, const LValue &a, const LValue &b, const ch
         LValue method = mt->gettable(LValue(L->intern_string(event)));
         if (method.type != Nil && method.type == Function) {
             LValue args[2] = { a, b };
-            L->shadow_stack[L->shadow_top++] = TypedSlot(&args[0].val, &args[0].type);
-            L->shadow_stack[L->shadow_top++] = TypedSlot(&args[1].val, &args[1].type);
-            MultiValue res = call_function(L, method, args, 2, __FILE__, __LINE__);
-            L->shadow_top -= 2;
+            MultiValue res = call_function_rooted(L, method, args, 2, __FILE__, __LINE__);
             return res[0];
         }
     }
