@@ -15,8 +15,7 @@
 
 namespace clx {
 
-//------------------ pkg_searcher_luafile_vm - package.searchers[2] (--dynamic builds): locate the module file via
-// package.path and compile it in the embedded Lua VM. Only linked into binaries built with --dynamic.
+//------------------ pkg_searcher_luafile_vm - package.searchers[2] for --dynamic builds: locate and VM-load module files
 static MultiValue pkg_searcher_luafile_vm(LState *L, const LValue *args, size_t count) {
     DynamicVM *vm = DynamicVM::acquire(L);
     if (!vm)
@@ -167,7 +166,7 @@ static MultiValue clx_dofile(LState *L, const LValue *args, size_t count) {
         return MultiValue(LValue(false), loaded.count > 1 ? loaded[1] : LValue());
 
     LValue func = loaded[0];
-    return call_function(L, func, nullptr, 0, __FILE__, __LINE__);
+    return call_function_rooted(L, func, nullptr, 0, __FILE__, __LINE__);
 }
 
 }
