@@ -468,7 +468,11 @@ int main(int argc, char *argv[]) {
                 appender << "        L->register_module(\"" << mod << "\", luaopen_" << mod << ");\n";
         }
         for (const auto &mod : precompiled_modules) {
-            appender << "        L->register_module(\"" << mod << "\", luaopen_" << mod << ");\n";
+            appender << "        {\n";
+            appender << "            clx::LValue _m = luaopen_" << mod << "(L);\n";
+            appender << "            L->register_loaded_module(\"" << mod << "\", _m);\n";
+            appender << "            L->register_module(\"" << mod << "\", luaopen_" << mod << ");\n";
+            appender << "        }\n";
         }
 
         appender << "        luaopen_" << main_module << "(L);\n";
@@ -553,7 +557,7 @@ int main(int argc, char *argv[]) {
     include_opt = " -I " + (fs::exists(include_dir) ? include_dir.string() : "include");
 #endif
 
-    // --- Runtime library link line, from the same lib roots.
+    //------------------ Runtime library link line, from the same lib roots
     {
 #ifdef _WIN32
         std::string lib_file = size_mode ? "clx_size.lib" : "clx.lib";
@@ -571,7 +575,6 @@ int main(int argc, char *argv[]) {
                 break;
             }
         }
-        // Portable in-tree layout: build outputs in <project>/lib (from CMAKE_ARCHIVE_OUTPUT_DIRECTORY).
         if (!found) {
             lib_path = build_root / "lib" / lib_file;
             if (fs::exists(lib_path))
