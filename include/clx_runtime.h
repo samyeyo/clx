@@ -535,6 +535,13 @@ struct LCFunction : public LHeader {
 //------------------ Fast path for LCFunction direct calls
 MultiValue call_direct(LState *L, const LValue &func, const LValue *args, size_t count, const char *file, int line);
 
+//------------------ Rooted call wrappers (defined after LState; push args + restore shadow_top around a call)
+MultiValue call_function_rooted(
+    LState *L, const LValue &func, const LValue *args, size_t count, const char *file, int line);
+MultiValue call_direct_rooted(
+    LState *L, const LValue &func, const LValue *args, size_t count, const char *file, int line);
+MultiValue call_cfunc_rooted(LState *L, CFunctionType f, const LValue *args, size_t count);
+
 //------------------ Userdata block
 struct LUserdata : public LHeader {
     LTable *metatable;
@@ -1081,6 +1088,7 @@ struct LState {
 
     std::vector<LHeader *> gc_worklist;
     std::vector<LValue> permanent_roots;
+    std::vector<LHeader *> gc_recent;
 
     void root_value(const LValue &v) {
         if (v.is_gc_obj())
@@ -1095,6 +1103,7 @@ struct LState {
     LHeader *gc_prev = nullptr;
     LHeader *gc_finalizable = nullptr;
     LHeader *gc_finalizable_ud = nullptr;
+    bool gc_draining = false;
     static constexpr size_t GC_STEP_BUDGET = 512;
     bool gc_running = true;
     int gc_pause = 200;
@@ -1125,7 +1134,42 @@ struct LState {
     }
 
     void register_module(const std::string &name, LValue (*func)(LState *));
+    void register_loaded_module(const std::string &name, const LValue &module);
 };
+
+//------------------ Rooted call wrappers: push args on the shadow stack (GC rooting) around a call, then restore
+CLX_INLINE_HOT MultiValue call_function_rooted(
+    LState *L, const LValue &func, const LValue *args, size_t count, const char *file, int line) {
+    size_t base = L->shadow_top;
+    for (size_t i = 0; i < count; ++i)
+        L->shadow_stack[L->shadow_top++]
+            = TypedSlot(const_cast<TValue *>(&args[i].val), const_cast<ValueType *>(&args[i].type));
+    MultiValue ret = call_function(L, func, args, count, file, line);
+    L->shadow_top = base;
+    return ret;
+}
+
+CLX_INLINE_HOT MultiValue call_direct_rooted(
+    LState *L, const LValue &func, const LValue *args, size_t count, const char *file, int line) {
+    size_t base = L->shadow_top;
+    for (size_t i = 0; i < count; ++i)
+        L->shadow_stack[L->shadow_top++]
+            = TypedSlot(const_cast<TValue *>(&args[i].val), const_cast<ValueType *>(&args[i].type));
+    MultiValue ret = call_direct(L, func, args, count, file, line);
+    L->shadow_top = base;
+    return ret;
+}
+
+//------------------ Rooted call wrapper for direct C function pointers (hoisted builtins, direct impls)
+CLX_INLINE_HOT MultiValue call_cfunc_rooted(LState *L, CFunctionType f, const LValue *args, size_t count) {
+    size_t base = L->shadow_top;
+    for (size_t i = 0; i < count; ++i)
+        L->shadow_stack[L->shadow_top++]
+            = TypedSlot(const_cast<TValue *>(&args[i].val), const_cast<ValueType *>(&args[i].type));
+    MultiValue ret = f(L, args, count);
+    L->shadow_top = base;
+    return ret;
+}
 
 //------------------ Metatabled-tables list (protect-pass fast path)
 CLX_INLINE void meta_list_add(LState *L, LTable *t) {
@@ -1647,7 +1691,7 @@ CLX_INLINE_HOT double fmod_floor(double a, double b) {
     return a - std::floor(a / b) * b;
 }
 
-// LValue-returning variants: Lua integer semantics — wrap on overflow, stay Int64.
+//------------------ LValue-returning int arithmetic: Lua integer semantics — wrap on overflow, stay Int64
 CLX_INLINE_HOT LValue int_add_lv(int64_t a, int64_t b) {
     return LValue(static_cast<int64_t>(static_cast<uint64_t>(a) + static_cast<uint64_t>(b)));
 }
@@ -2254,12 +2298,7 @@ CLX_INLINE void table_set(LState *L, const LValue &obj, const LValue &key, const
             return;
         if (newindex.type == ValueType::Function) {
             LValue args[3] = { obj, key, val };
-            size_t prev = L->shadow_top;
-            L->shadow_stack[L->shadow_top++] = { &args[0].val, &args[0].type };
-            L->shadow_stack[L->shadow_top++] = { &args[1].val, &args[1].type };
-            L->shadow_stack[L->shadow_top++] = { &args[2].val, &args[2].type };
-            call_function(L, newindex, args, 3, "__newindex", 0);
-            L->shadow_top = prev;
+            call_function_rooted(L, newindex, args, 3, "__newindex", 0);
         } else if (newindex.type == ValueType::Table) {
             table_set(L, newindex, key, val);
         }
@@ -2296,11 +2335,7 @@ CLX_INLINE LValue table_get_int(LState *L, const LValue &obj, size_t idx) {
         return LValue();
     if (index.type == ValueType::Function) {
         LValue args[2] = { obj, key_val };
-        size_t prev = L->shadow_top;
-        L->shadow_stack[L->shadow_top++] = { &args[0].val, &args[0].type };
-        L->shadow_stack[L->shadow_top++] = { &args[1].val, &args[1].type };
-        MultiValue mv = call_function(L, index, args, 2, "__index", 0);
-        L->shadow_top = prev;
+        MultiValue mv = call_function_rooted(L, index, args, 2, "__index", 0);
         return mv.count > 0 ? mv[0] : LValue();
     }
     if (index.type == ValueType::Table)
@@ -2334,12 +2369,7 @@ CLX_INLINE void table_set_int(LState *L, const LValue &obj, size_t idx, const LV
             return;
         if (newindex.type == ValueType::Function) {
             LValue args[3] = { obj, key_val, val };
-            size_t prev = L->shadow_top;
-            L->shadow_stack[L->shadow_top++] = { &args[0].val, &args[0].type };
-            L->shadow_stack[L->shadow_top++] = { &args[1].val, &args[1].type };
-            L->shadow_stack[L->shadow_top++] = { &args[2].val, &args[2].type };
-            call_function(L, newindex, args, 3, "__newindex", 0);
-            L->shadow_top = prev;
+            call_function_rooted(L, newindex, args, 3, "__newindex", 0);
         } else if (newindex.type == ValueType::Table) {
             table_set(L, newindex, key_val, val);
         }
