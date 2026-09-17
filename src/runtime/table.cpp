@@ -212,12 +212,7 @@ MultiValue table_sort(LState *L, const LValue *args, size_t count) {
         LValue comp_func = args[1];
         auto cmp = [L, comp_func](const LValue &a, const LValue &b) mutable {
             LValue call_args[2] = { a, b };
-            size_t prev_top = L->shadow_top;
-            L->shadow_stack[L->shadow_top++] = TypedSlot(&comp_func.val, &comp_func.type);
-            L->shadow_stack[L->shadow_top++] = TypedSlot(&call_args[0].val, &call_args[0].type);
-            L->shadow_stack[L->shadow_top++] = TypedSlot(&call_args[1].val, &call_args[1].type);
-            MultiValue mr = call_function(L, comp_func, call_args, 2, "table.sort", 0);
-            L->shadow_top = prev_top;
+            MultiValue mr = call_function_rooted(L, comp_func, call_args, 2, "table.sort", 0);
             return mr.count >= 1 && mr[0].as_bool();
         };
         auto elems = extract_elems(list, len);
