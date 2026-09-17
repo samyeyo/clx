@@ -65,8 +65,7 @@ static std::string replace_char(std::string s, char from, char to) {
     return s;
 }
 
-//------------------ package_searchpath: resolve module name through path templates; when tried is non-null it
-// receives one "\n\tno file '<candidate>'" line per probed template. Returns the first readable file or "".
+//------------------ package_searchpath: resolve module name through path templates, returning the first readable file or ""
 std::string package_searchpath(LState *L, const char *name, size_t name_len, const char *path, size_t path_len,
     char sep, char rep, std::string *tried) {
     (void)L;
@@ -126,8 +125,7 @@ static MultiValue pkg_searcher_preload(LState *L, const LValue *args, size_t cou
     return MultiValue(LValue(), LValue(L->intern_string(msg.data(), msg.size())));
 }
 
-//------------------ pkg_searcher_luafile_aot - package.searchers[2] placeholder for AOT builds: locates the file
-// via package.path but loading it requires a --dynamic build (embedded VM). Never returns a loader.
+//------------------ pkg_searcher_luafile_aot - package.searchers[2] placeholder for AOT builds: never returns a loader
 static MultiValue pkg_searcher_luafile_aot(LState *L, const LValue *args, size_t count) {
     if (count < 1 || args[0].type != String)
         return MultiValue(LValue(), LValue());
@@ -192,9 +190,7 @@ static MultiValue pack_require(LState *L, const LValue *args, size_t count) {
 
         //------------------ Searchers run with the real global table (they need package/preload access)
         LValue loader_args[1] = { mod_key };
-        L->shadow_stack[L->shadow_top++] = TypedSlot(&loader_args[0].val, &loader_args[0].type);
-        MultiValue res = call_function(L, loader, loader_args, 1, __FILE__, __LINE__);
-        L->shadow_top -= 1;
+        MultiValue res = call_function_rooted(L, loader, loader_args, 1, __FILE__, __LINE__);
 
         if (res.count > 1 && res[1].type == String)
             msgs.append(res[1].as_string(), res[1].string_len());
@@ -208,7 +204,14 @@ static MultiValue pack_require(LState *L, const LValue *args, size_t count) {
             L->shadow_stack[L->shadow_top++] = TypedSlot(&saved_G_val.val, &saved_G_val.type);
             if (env.type == Table)
                 L->_G = static_cast<LTable *>(env.as_pointer());
-            MultiValue mod = call_function(L, loader_fn, loader_args, 1, __FILE__, __LINE__);
+            MultiValue mod;
+            try {
+                mod = call_function(L, loader_fn, loader_args, 1, __FILE__, __LINE__);
+            } catch (...) {
+                L->_G = saved_G;
+                L->shadow_top -= 2;
+                throw;
+            }
             L->_G = saved_G;
             L->shadow_top -= 2;
 
