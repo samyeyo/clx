@@ -20,7 +20,7 @@ namespace clx {
 
 //------------------ DeferredBlockScope: state emitBlock captures
 struct DeferredBlockScope {
-    size_t prev_locals = 0; 
+    size_t prev_locals = 0;
     size_t prev_native_count = 0;
     std::set<std::string_view> prev_hoisted;
     int close_braces = 0;
@@ -77,8 +77,7 @@ private:
 
     //------------------ int_flag_expr: C++ bool expression for the runtime integer subtype of an expression
     std::string int_flag_expr(uint32_t expr_idx, int depth);
-    //------------------ int_value_expr: C++ int64 expression for the exact integer value of an expression
-    // proven integral by int_flag_expr; "0" when no exact value is knowable (the flag will be false).
+    //------------------ int_value_expr: C++ int64 expression for an expression proven integral by int_flag_expr
     std::string int_value_expr(uint32_t expr_idx, int depth);
     //------------------ fast_call_box_flag: C++ bool expression restoring the return subtype of a fast call
     std::string fast_call_box_flag(std::string_view fname, uint32_t first_arg, uint32_t arg_count);
