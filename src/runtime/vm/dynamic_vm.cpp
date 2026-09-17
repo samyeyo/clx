@@ -32,6 +32,7 @@ void clx_mark_vm_proxies_(LState *clx_L, std::vector<LHeader *> &wl);
 void clx_register_vm_proxy(LState *clx_L, LHeader *proxy, size_t bytes) {
     proxy->next = clx_L->allocated_objects;
     clx_L->allocated_objects = proxy;
+    clx_L->gc_recent.push_back(proxy);
     clx_L->object_count++;
     clx_L->allocated_bytes += bytes;
 
