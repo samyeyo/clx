@@ -533,7 +533,7 @@ CLX_INLINE LValue concat(LState *L, const LValue &a, const LValue &b) {
 
 //------------------ Calls a function
 CLX_INLINE MultiValue call(LState *L, const LValue &func, const LValue *args, size_t count) {
-    return call_function(L, func, args, count, "C API", 0);
+    return call_function_rooted(L, func, args, count, "C API", 0);
 }
 
 template<typename... Args>
@@ -542,7 +542,7 @@ template<typename... Args>
 CLX_INLINE MultiValue call(LState *L, const LValue &func, Args &&...args) {
     constexpr size_t N = sizeof...(Args);
     LValue arr[N ? N : 1] = { LValue(std::forward<Args>(args))... };
-    return call_function(L, func, arr, N, "C API", 0);
+    return call_function_rooted(L, func, arr, N, "C API", 0);
 }
 
 //------------------ Protected function call
