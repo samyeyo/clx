@@ -19,13 +19,13 @@
 #include <vector>
 
 namespace clx {
-void register_static_preload(LState *L, const char *name, LValue(open_func)(LState *));
+void register_static_preload(LState* L, const char* name, LValue(open_func)(LState*));
 }
 
 namespace clx {
 
-void (*clx_mark_vm_proxies_ptr)(LState *clx_L, std::vector<LHeader *> &wl) = nullptr;
-void (*clx_free_vm_proxy_ptr)(LState *clx_L, LHeader *proxy) = nullptr;
+void (*clx_mark_vm_proxies_ptr)(LState* clx_L, LState::GCStack& wl) = nullptr;
+void (*clx_free_vm_proxy_ptr)(LState* clx_L, LHeader* proxy) = nullptr;
 
 //------------------ LThread::LThread — thread constructor
 LThread::LThread()
@@ -34,7 +34,8 @@ LThread::LThread()
     , caller(nullptr)
     , is_main(false)
     , has_error(false)
-    , close_requested(false) {
+    , close_requested(false)
+{
     type = static_cast<uint8_t>(Thread);
     marked = 0;
     next = nullptr;
@@ -46,7 +47,8 @@ LThread::LThread()
 }
 
 //------------------ LThread::~LThread — thread destructor
-LThread::~LThread() {
+LThread::~LThread()
+{
 #if defined(_WIN32)
     if (fiber && !is_main)
         DeleteFiber(fiber);
@@ -56,8 +58,9 @@ LThread::~LThread() {
 #endif
 }
 
-static void fiber_entry_impl(LThread *t) {
-    LState *L = t->state;
+static void fiber_entry_impl(LThread* t)
+{
+    LState* L = t->state;
     for (;;) {
         try {
             clx::LValue args[8];
@@ -68,7 +71,7 @@ static void fiber_entry_impl(LThread *t) {
 
             t->yield_args = call_function_rooted(L, t->function, args, argc, "coroutine", 0);
             t->status = THREAD_DEAD;
-        } catch (const LRuntimeException &e) {
+        } catch (const LRuntimeException& e) {
 
             t->yield_args = MultiValue(e.error_obj);
             t->status = THREAD_DEAD;
@@ -87,7 +90,7 @@ static void fiber_entry_impl(LThread *t) {
         break;
     }
 
-    LThread *caller = t->caller;
+    LThread* caller = t->caller;
     L->running_thread = caller;
     caller->status = THREAD_RUNNING;
 
@@ -106,37 +109,36 @@ static void fiber_entry_impl(LThread *t) {
 
 static constexpr size_t kMaxPooledFibers = 2048;
 
-static void WINAPI fiber_trampoline(LPVOID param) {
-    LThread *t = static_cast<LThread *>(param);
+static void WINAPI fiber_trampoline(LPVOID param)
+{
+    LThread* t = static_cast<LThread*>(param);
     t->fiber_started = true;
     for (;;) {
         fiber_entry_impl(t);
     }
 }
 #else
-static thread_local LThread *g_starting_thread = nullptr;
+static thread_local LThread* g_starting_thread = nullptr;
 
-static void fiber_trampoline() {
+static void fiber_trampoline()
+{
     fiber_entry_impl(g_starting_thread);
 }
 #endif
 
 //------------------ create_thread: creates a new coroutine thread (public API)
-LValue create_thread(LState *L, const LValue &func, double stack_size) {
-    if (L->gc_running) {
-        if (L->gc_phase == LState::GCPhase::Sweeping)
-            L->gc_step();
-        else if (L->allocated_bytes >= L->gc_bytes_threshold)
-            L->collect_garbage();
-    }
+LValue create_thread(LState* L, const LValue& func, double stack_size)
+{
+    L->gc_maybe_collect();
 
-    LThread *t = L->free_threads;
+    LThread* t = L->free_threads;
     bool recycled = (t != nullptr);
+    uint8_t prev_age_th = recycled ? t->age : AGE_YOUNG;
 #if defined(_WIN32)
     bool pooled_suspended = recycled && t->status == THREAD_SUSPENDED && t->fiber_started;
 #endif
     if (t) {
-        L->free_threads = static_cast<LThread *>(t->next);
+        L->free_threads = static_cast<LThread*>(t->next);
     } else {
         t = new LThread();
     }
@@ -149,6 +151,14 @@ LValue create_thread(LState *L, const LValue &func, double stack_size) {
     t->close_requested = false;
     t->caller = nullptr;
     t->status = THREAD_SUSPENDED;
+    t->marked = 0;
+    t->age = AGE_YOUNG;
+    if (recycled && prev_age_th != AGE_YOUNG
+        && (L->gc_phase == LState::GCPhase::Sweeping || L->gc_minor_active)) {
+
+        t->flags |= LFLAG_GC_PIN;
+        L->gc_pinned.push(t);
+    }
 
 #if defined(_WIN32)
     if (recycled) {
@@ -164,12 +174,12 @@ LValue create_thread(LState *L, const LValue &func, double stack_size) {
 #elif (defined(__APPLE__) || defined(__linux__)) && defined(__aarch64__)
     if (!t->stack_memory)
         t->stack_memory = new char[t->stack_bytes];
-    clx_coro_init(&t->ctx, t->stack_memory + t->stack_bytes, (void *)fiber_trampoline);
+    clx_coro_init(&t->ctx, t->stack_memory + t->stack_bytes, (void*)fiber_trampoline);
     g_starting_thread = t;
 #elif defined(__linux__) && defined(__x86_64__)
     if (!t->stack_memory)
         t->stack_memory = new char[t->stack_bytes];
-    clx_coro_init(&t->ctx, t->stack_memory + t->stack_bytes, (void *)fiber_trampoline);
+    clx_coro_init(&t->ctx, t->stack_memory + t->stack_bytes, (void*)fiber_trampoline);
     g_starting_thread = t;
 #else
     getcontext(&t->ctx);
@@ -184,7 +194,7 @@ LValue create_thread(LState *L, const LValue &func, double stack_size) {
 
     t->next = L->allocated_objects;
     L->allocated_objects = t;
-    L->gc_recent.push_back(t);
+    L->gc_recent.push(t);
     if (!recycled)
         L->object_count++;
     L->allocated_bytes += sizeof(LThread) + t->stack_bytes;
@@ -192,9 +202,14 @@ LValue create_thread(LState *L, const LValue &func, double stack_size) {
 }
 
 //------------------ resume: resumes a suspended coroutine (public API)
-MultiValue resume(LState *L, const LValue &thread, const LValue *args, size_t count) {
-    LThread *t = static_cast<LThread *>(thread.as_pointer());
+MultiValue resume(LState* L, const LValue& thread, const LValue* args, size_t count)
+{
+    LThread* t = static_cast<LThread*>(thread.as_pointer());
     t->resume_args = MultiValue(args, count, L);
+    if (L->gc_mode == LState::GCMode::Generational && t->age == AGE_OLD) {
+        for (size_t i = 0; i < t->resume_args.count; ++i)
+            gc_barrier_header(L, t, t->resume_args[i]);
+    }
     t->caller = L->running_thread;
     t->caller->status = THREAD_NORMAL;
     t->status = THREAD_RUNNING;
@@ -211,7 +226,7 @@ MultiValue resume(LState *L, const LValue &thread, const LValue *args, size_t co
 #endif
 
     size_t total = 1 + t->yield_args.count;
-    LValue *buf;
+    LValue* buf;
     LValue inline_buf[3];
     if (total <= 3) {
         buf = inline_buf;
@@ -226,14 +241,19 @@ MultiValue resume(LState *L, const LValue &thread, const LValue *args, size_t co
 }
 
 //------------------ yield: yields from a coroutine (public API)
-MultiValue yield(LState *L, const LValue *args, size_t count) {
-    LThread *t = L->running_thread;
+MultiValue yield(LState* L, const LValue* args, size_t count)
+{
+    LThread* t = L->running_thread;
     if (t->is_main)
         clx::error(L, "attempt to yield from outside a coroutine");
     t->yield_args = MultiValue(args, count, L);
+    if (L->gc_mode == LState::GCMode::Generational && t->age == AGE_OLD) {
+        for (size_t i = 0; i < t->yield_args.count; ++i)
+            gc_barrier_header(L, t, t->yield_args[i]);
+    }
     t->status = THREAD_SUSPENDED;
 
-    LThread *caller = t->caller;
+    LThread* caller = t->caller;
     L->running_thread = caller;
     caller->status = THREAD_RUNNING;
 
@@ -257,8 +277,9 @@ MultiValue yield(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ close_thread: closes a suspended coroutine (public API)
-MultiValue close_thread(LState *L, const LValue &thread) {
-    LThread *t = static_cast<LThread *>(thread.as_pointer());
+MultiValue close_thread(LState* L, const LValue& thread)
+{
+    LThread* t = static_cast<LThread*>(thread.as_pointer());
 
     if (t->status == THREAD_DEAD)
         return MultiValue(clx::boolean(true));
@@ -279,7 +300,8 @@ MultiValue close_thread(LState *L, const LValue &thread) {
 }
 
 //------------------ intern_error_message — interns an error message raised without an LState
-const char *intern_error_message(const char *msg, size_t len) {
+const char* intern_error_message(const char* msg, size_t len)
+{
     static std::mutex pool_mutex;
     static StringPool pool;
     uint64_t h = len <= 8 ? swar_hash_8(msg, len) : wyhash_str(msg, len);
@@ -289,13 +311,16 @@ const char *intern_error_message(const char *msg, size_t len) {
 
 //------------------ LRuntimeException::LRuntimeException — error exception constructor
 LRuntimeException::LRuntimeException(clx::LValue err)
-    : error_obj(err) { }
+    : error_obj(err)
+{
+}
 
 //------------------ LRuntimeException::~LRuntimeException — exception destructor
 LRuntimeException::~LRuntimeException() noexcept { }
 
 //------------------ LRuntimeException::what — get error message
-const char *LRuntimeException::what() const noexcept {
+const char* LRuntimeException::what() const noexcept
+{
     if (cached_msg.empty()) {
         cached_msg = error_obj.to_string(nullptr);
     }
@@ -303,10 +328,11 @@ const char *LRuntimeException::what() const noexcept {
 }
 
 //------------------ LValue::to_string — convert value to string
-std::string LValue::to_string(LState *L) const {
+std::string LValue::to_string(LState* L) const
+{
     if (L && (type == Table || type == UserData)) {
-        LTable *mt = (type == Table) ? tbl_metatable(static_cast<LTable *>(as_pointer()))
-                                     : static_cast<LUserdata *>(as_pointer())->metatable;
+        LTable* mt = (type == Table) ? tbl_metatable(static_cast<LTable*>(as_pointer()))
+                                     : static_cast<LUserdata*>(as_pointer())->metatable;
         if (mt) {
             LValue meta_key = L->str_tostring;
             LValue meta_func = mt->gettable(meta_key);
@@ -339,9 +365,9 @@ std::string LValue::to_string(LState *L) const {
     case String:
         return std::string(as_string(), string_len());
     case Table: {
-        const char *prefix = "table";
+        const char* prefix = "table";
         if (L) {
-            LTable *mt = tbl_metatable(static_cast<LTable *>(as_pointer()));
+            LTable* mt = tbl_metatable(static_cast<LTable*>(as_pointer()));
             if (mt) {
                 LValue n = mt->gettable(LValue(L->intern_string("__name")));
                 if (n.type != Nil && n.type == String)
@@ -363,7 +389,8 @@ std::string LValue::to_string(LState *L) const {
 }
 
 //------------------ LValue::slow_eq — equality comparison
-LValue LValue::slow_eq(const LValue &other) const {
+LValue LValue::slow_eq(const LValue& other) const
+{
     if (type != other.type)
         return LValue(false);
     if (type == String) {
@@ -374,7 +401,8 @@ LValue LValue::slow_eq(const LValue &other) const {
 }
 
 //------------------ LValue::slow_lt — less-than comparison
-LValue LValue::slow_lt(const LValue &other) const {
+LValue LValue::slow_lt(const LValue& other) const
+{
     if ((type == Double || type == Int64) && (other.type == Double || other.type == Int64)) {
         double l = (type == Int64) ? (double)as_integer() : as_number();
         double r = (other.type == Int64) ? (double)other.as_integer() : other.as_number();
@@ -391,7 +419,8 @@ LValue LValue::slow_lt(const LValue &other) const {
 }
 
 //------------------ LValue::slow_le — less-or-equal comparison
-LValue LValue::slow_le(const LValue &other) const {
+LValue LValue::slow_le(const LValue& other) const
+{
     if ((type == Double || type == Int64) && (other.type == Double || other.type == Int64)) {
         double l = (type == Int64) ? (double)as_integer() : as_number();
         double r = (other.type == Int64) ? (double)other.as_integer() : other.as_number();
@@ -409,13 +438,15 @@ LValue LValue::slow_le(const LValue &other) const {
 
 //------------------ LCFunction::LCFunction — C function wrapper constructor
 LCFunction::LCFunction(CFunctionType f)
-    : func(std::move(f)) {
+    : func(std::move(f))
+{
     type = static_cast<uint8_t>(Function);
     marked = 0;
     next = nullptr;
 }
 
-static CLX_INLINE_COLD size_t next_pow2(size_t n) {
+static CLX_INLINE_COLD size_t next_pow2(size_t n)
+{
     if (n < 8)
         return 8;
     n--;
@@ -429,12 +460,13 @@ static CLX_INLINE_COLD size_t next_pow2(size_t n) {
 }
 
 //--------- Slow Path (hash table lookup and metamethods)
-LValue table_get_slow(LState *L, const LValue &obj, const LValue &key) {
-    LTable *mt = nullptr;
+LValue table_get_slow(LState* L, const LValue& obj, const LValue& key)
+{
+    LTable* mt = nullptr;
     LValue direct;
 
     if (obj.type == ValueType::Table) {
-        LTable *t = static_cast<LTable *>(obj.as_pointer());
+        LTable* t = static_cast<LTable*>(obj.as_pointer());
         if (key.type == ValueType::Int64) {
             int64_t idx = key.val.payload.i64;
             if (static_cast<uint64_t>(idx - 1) < t->array_cap) {
@@ -448,16 +480,16 @@ LValue table_get_slow(LState *L, const LValue &obj, const LValue &key) {
             }
         }
         if (direct.type == ValueType::Nil) {
-            LTableExt *ex = t->ext;
+            LTableExt* ex = t->ext;
             if (ex && ex->ic) {
                 uint32_t ic_idx
                     = static_cast<uint32_t>(key.val.payload.u64 ^ (key.val.payload.u64 >> 17)
                           ^ (key.val.payload.u64 >> 33) ^ (key.val.payload.u64 >> 5) ^ (key.val.payload.u64 >> 11))
                     % LTABLE_IC_SIZE;
-                LTableInlineCache &_ic = ex->ic[ic_idx];
+                LTableInlineCache& _ic = ex->ic[ic_idx];
                 if (_ic.key_payload == key.val.payload.u64 && _ic.table_ver == ex->hash_version
                     && _ic.entry_idx < ex->hash_size) {
-                    HashEntry &_e = ex->entries[_ic.entry_idx];
+                    HashEntry& _e = ex->entries[_ic.entry_idx];
                     if (_e.ktype != ValueType::Nil)
                         return LValue(_e.val, _e.vtype);
                 }
@@ -468,7 +500,7 @@ LValue table_get_slow(LState *L, const LValue &obj, const LValue &key) {
             return direct;
         mt = tbl_metatable(t);
     } else if (obj.type == ValueType::UserData) {
-        LUserdata *ud = static_cast<LUserdata *>(obj.as_pointer());
+        LUserdata* ud = static_cast<LUserdata*>(obj.as_pointer());
         mt = ud->metatable;
     } else if (obj.type == ValueType::String) {
         mt = L->string_metatable;
@@ -510,14 +542,16 @@ LTable::LTable()
     , array_types(nullptr)
     , array_size(0)
     , array_cap(0)
-    , ext(nullptr) {
+    , ext(nullptr)
+{
     type = static_cast<uint8_t>(Table);
     marked = 0;
     next = nullptr;
 }
 
 //------------------ LTable::~LTable — table destructor
-LTable::~LTable() {
+LTable::~LTable()
+{
     if (ext) {
         if (ext->ic)
             delete[] ext->ic;
@@ -539,19 +573,20 @@ LTable::~LTable() {
 }
 
 //------------------ LTable::resize_hash — allocate/rehash to new_size (power of 2)
-void LTable::resize_hash(size_t new_size) {
+void LTable::resize_hash(size_t new_size)
+{
     new_size = next_pow2(new_size);
 
-    LTableExt *ex = tbl_ensure_ext(this);
+    LTableExt* ex = tbl_ensure_ext(this);
 
-    HashEntry *new_entries = new HashEntry[new_size];
+    HashEntry* new_entries = new HashEntry[new_size];
     for (size_t i = 0; i < new_size; ++i) {
         new_entries[i].key.payload.u64 = HASH_EMPTY;
         new_entries[i].ktype = Nil;
     }
 
     size_t bm_words = (new_size + 63) / 64;
-    uint64_t *new_bitmap = new uint64_t[bm_words]();
+    uint64_t* new_bitmap = new uint64_t[bm_words]();
 
     uint32_t mask = static_cast<uint32_t>(new_size - 1);
     if (ex->entries) {
@@ -582,7 +617,8 @@ void LTable::resize_hash(size_t new_size) {
 }
 
 //------------------ LTable::gettable — get value by key
-LValue LTable::gettable(const LValue &key) {
+LValue LTable::gettable(const LValue& key)
+{
     if (key.type == Int64) {
         int64_t idx = key.as_integer();
         if (static_cast<uint64_t>(idx - 1) < array_cap)
@@ -593,7 +629,7 @@ LValue LTable::gettable(const LValue &key) {
         if (d == static_cast<double>(idx) && static_cast<uint64_t>(idx - 1) < array_cap)
             return LValue(array[idx - 1], array_types[idx - 1]);
     }
-    LTableExt *ex = ext;
+    LTableExt* ex = ext;
     if (!ex || ex->hash_size == 0)
         return LValue();
 
@@ -603,9 +639,9 @@ LValue LTable::gettable(const LValue &key) {
     uint32_t ic_idx = static_cast<uint32_t>(key.val.payload.u64 ^ (key.val.payload.u64 >> 17)
                           ^ (key.val.payload.u64 >> 33) ^ (key.val.payload.u64 >> 5) ^ (key.val.payload.u64 >> 11))
         % LTABLE_IC_SIZE;
-    auto &_ic = ex->ic[ic_idx];
+    auto& _ic = ex->ic[ic_idx];
     if (_ic.key_payload == key.val.payload.u64 && _ic.table_ver == ex->hash_version && _ic.entry_idx < ex->hash_size) {
-        HashEntry &_e = ex->entries[_ic.entry_idx];
+        HashEntry& _e = ex->entries[_ic.entry_idx];
         if (_e.ktype != Nil)
             return LValue(_e.val, _e.vtype);
     }
@@ -613,7 +649,7 @@ LValue LTable::gettable(const LValue &key) {
     uint32_t mask = static_cast<uint32_t>(ex->hash_size - 1);
     uint64_t h = lvalue_hash(key) & mask;
     for (;;) {
-        HashEntry &e = ex->entries[h];
+        HashEntry& e = ex->entries[h];
         if (e.ktype == Nil) {
             if (e.key.payload.u64 == HASH_EMPTY)
                 return LValue();
@@ -628,7 +664,14 @@ LValue LTable::gettable(const LValue &key) {
 }
 
 //------------------ LTable::settable — set value by key
-void LTable::settable(const LValue &key, const LValue &val) {
+void LTable::settable(const LValue& key, const LValue& val)
+{
+    // Generational barrier for direct users (generated _G stores, runtime
+    // init): table_set/table_set_direct/table_set_int barrier themselves,
+    // but this member cannot rely on callers, so it barriers via the
+    // thread-local state. Null during LState construction (all young).
+    if (clx_current_L)
+        gc_barrier_table(clx_current_L, this, val);
 
     if (key.type == Int64) {
         int64_t idx = key.as_integer();
@@ -641,8 +684,8 @@ void LTable::settable(const LValue &key, const LValue &val) {
         }
         if (idx == static_cast<int64_t>(array_size + 1)) {
             size_t new_cap = (array_cap == 0) ? 8 : array_cap * 2;
-            TValue *new_arr = new TValue[new_cap];
-            ValueType *new_types = new ValueType[new_cap]();
+            TValue* new_arr = new TValue[new_cap];
+            ValueType* new_types = new ValueType[new_cap]();
             if (array_cap) {
                 std::memcpy(new_arr, array, array_cap * sizeof(TValue));
                 std::memcpy(new_types, array_types, array_cap * sizeof(ValueType));
@@ -704,8 +747,8 @@ void LTable::settable(const LValue &key, const LValue &val) {
             }
             if (idx == static_cast<int64_t>(array_size + 1)) {
                 size_t new_cap = (array_cap == 0) ? 8 : array_cap * 2;
-                TValue *new_arr = new TValue[new_cap];
-                ValueType *new_types = new ValueType[new_cap]();
+                TValue* new_arr = new TValue[new_cap];
+                ValueType* new_types = new ValueType[new_cap]();
                 if (array_cap) {
                     std::memcpy(new_arr, array, array_cap * sizeof(TValue));
                     std::memcpy(new_types, array_types, array_cap * sizeof(ValueType));
@@ -758,13 +801,13 @@ void LTable::settable(const LValue &key, const LValue &val) {
     }
 
     if (val.type == Nil) {
-        LTableExt *ex = ext;
+        LTableExt* ex = ext;
         if (!ex || ex->hash_size == 0)
             return;
         uint32_t mask = static_cast<uint32_t>(ex->hash_size - 1);
         uint64_t h = lvalue_hash(key) & mask;
         for (;;) {
-            HashEntry &e = ex->entries[h];
+            HashEntry& e = ex->entries[h];
             if (e.ktype == Nil) {
                 if (e.key.payload.u64 == HASH_EMPTY)
                     return;
@@ -782,7 +825,7 @@ void LTable::settable(const LValue &key, const LValue &val) {
         }
     }
 
-    LTableExt *ex = ext;
+    LTableExt* ex = ext;
     if (!ex || ex->hash_size == 0) {
         resize_hash(8);
         ex = ext;
@@ -795,10 +838,10 @@ void LTable::settable(const LValue &key, const LValue &val) {
         uint32_t ic_idx = static_cast<uint32_t>(key.val.payload.u64 ^ (key.val.payload.u64 >> 17)
                               ^ (key.val.payload.u64 >> 33) ^ (key.val.payload.u64 >> 5) ^ (key.val.payload.u64 >> 11))
             % LTABLE_IC_SIZE;
-        LTableInlineCache &_ic = ex->ic[ic_idx];
+        LTableInlineCache& _ic = ex->ic[ic_idx];
         if (_ic.key_payload == key.val.payload.u64 && _ic.table_ver == ex->hash_version
             && _ic.entry_idx < ex->hash_size) {
-            HashEntry &_e = ex->entries[_ic.entry_idx];
+            HashEntry& _e = ex->entries[_ic.entry_idx];
             if (_e.ktype != Nil && _e.vtype != Nil) {
                 _e.val = val.val;
                 _e.vtype = val.type;
@@ -811,9 +854,9 @@ void LTable::settable(const LValue &key, const LValue &val) {
     uint64_t h = lvalue_hash(key) & mask;
     int32_t tomb = -1;
     for (;;) {
-        HashEntry &e = ex->entries[h];
+        HashEntry& e = ex->entries[h];
         if (e.ktype == Nil) {
-            HashEntry &slot = (tomb != -1) ? ex->entries[tomb] : e;
+            HashEntry& slot = (tomb != -1) ? ex->entries[tomb] : e;
             slot.key = key.val;
             slot.ktype = key.type;
             slot.val = val.val;
@@ -847,7 +890,8 @@ void LTable::settable(const LValue &key, const LValue &val) {
 }
 
 //------------------ LTable::get_value — get with metamethod fallback
-LValue LTable::get_value(LState *L, const LValue &key) {
+LValue LTable::get_value(LState* L, const LValue& key)
+{
     LValue ptr = gettable(key);
     if (ptr.type != Nil)
         return ptr;
@@ -858,7 +902,7 @@ LValue LTable::get_value(LState *L, const LValue &key) {
 
         if (index_ptr.type != Nil) {
             if (index_ptr.type == Table) {
-                LTable *parent = static_cast<LTable *>(index_ptr.as_pointer());
+                LTable* parent = static_cast<LTable*>(index_ptr.as_pointer());
                 return parent->get_value(L, key);
             } else if (index_ptr.type == Function) {
                 LValue args[2];
@@ -874,7 +918,8 @@ LValue LTable::get_value(LState *L, const LValue &key) {
 }
 
 //------------------ LTable::set_value — set with metamethod fallback
-void LTable::set_value(LState *L, const LValue &key, const LValue &val) {
+void LTable::set_value(LState* L, const LValue& key, const LValue& val)
+{
     LValue ptr = gettable(key);
     if (ptr.type != Nil) {
         settable(key, val);
@@ -887,7 +932,7 @@ void LTable::set_value(LState *L, const LValue &key, const LValue &val) {
 
         if (newindex_ptr.type != Nil) {
             if (newindex_ptr.type == Table) {
-                LTable *parent = static_cast<LTable *>(newindex_ptr.as_pointer());
+                LTable* parent = static_cast<LTable*>(newindex_ptr.as_pointer());
                 parent->set_value(L, key, val);
                 return;
             } else if (newindex_ptr.type == Function) {
@@ -905,22 +950,25 @@ void LTable::set_value(LState *L, const LValue &key, const LValue &val) {
 }
 
 //------------------ LTable::bind — bind constant value
-void LTable::bind(const char *name, const LValue &val) {
+void LTable::bind(const char* name, const LValue& val)
+{
     settable(LValue(name), val);
 }
 
 //------------------ LTable::bind — bind C function
-void LTable::bind(LState *L, const char *name, CFunctionType func) {
-    LCFunction *f = new LCFunction(func);
+void LTable::bind(LState* L, const char* name, CFunctionType func)
+{
+    LCFunction* f = new LCFunction(func);
     f->next = L->allocated_objects;
     L->allocated_objects = f;
-    L->gc_recent.push_back(f);
+    L->gc_recent.push(f);
     settable(LValue(L->intern_string(name)), LValue(Function, f));
 }
 
 //------------------ LTable::bind_all — bind multiple C functions
-void LTable::bind_all(LState *L, std::initializer_list<LReg> funcs) {
-    for (const auto &reg : funcs)
+void LTable::bind_all(LState* L, std::initializer_list<LReg> funcs)
+{
+    for (const auto& reg : funcs)
         bind(L, reg.name, reg.func);
 }
 
@@ -934,8 +982,9 @@ LState::LState()
     , current_line(0)
     , object_count(0)
     , gc_bytes_threshold(2 * 1024 * 1024)
-    , string_metatable(nullptr) {
-    _G = new LTable();
+    , string_metatable(nullptr)
+{
+    _G = slab_alloc_table();
     allocated_bytes += sizeof(LTable);
     _G->next = allocated_objects;
     allocated_objects = _G;
@@ -949,9 +998,40 @@ LState::LState()
     str_close = LValue(intern_string("__close"));
     str_pairs = LValue(intern_string("__pairs"));
     str_tostring = LValue(intern_string("__tostring"));
+
+    //------------------ GC work-vector pre-sizing (callgrind: vector growth is
+
+    gc_worklist.reserve(1 << 18);
+    gc_recent.reserve(1 << 18);
+    gc_remembered.reserve(1 << 16);
+    gc_pinned.reserve(1 << 16);
+
+    //------------------ GC mode / tuning knobs (environment override)
+
+    if (const char* e = getenv("CLX_GC_MODE")) {
+        if (strcmp(e, "incremental") == 0 || strcmp(e, "incr") == 0) {
+            gc_mode = GCMode::Incremental;
+        }
+    }
+    if (const char* e = getenv("CLX_GC_MINOR_KB")) {
+        long long v = atoll(e);
+        if (v > 0)
+            gc_minor_threshold = size_t(v) * 1024;
+    }
+    if (const char* e = getenv("CLX_GC_MAJOR_KB")) {
+        long long v = atoll(e);
+        if (v > 0)
+            gc_major_threshold = size_t(v) * 1024;
+    }
+    if (const char* e = getenv("CLX_GC_HEADROOM")) {
+        long long v = atoll(e);
+        if (v > 0)
+            gc_headroom_override = size_t(v);
+    }
 }
 
-static void dtor_free_table(LTable *t) {
+static void dtor_free_table(LTable* t)
+{
     if (t->array && t->array != t->small_array) {
         delete[] t->array;
         t->array = nullptr;
@@ -977,11 +1057,55 @@ static void dtor_free_table(LTable *t) {
         t->ext = nullptr;
     }
     t->array_size = t->array_cap = 0;
+    if (t->flags & LFLAG_SLAB) {
+        //------------------ slab object: storage lives in a slab, released whole by slab_release()
+        t->flags &= ~LFLAG_SLAB;
+        return;
+    }
     delete t;
 }
 
+//------------------ LState::slab_alloc_table — bump-allocate an LTable from the current slab
+LTable* LState::slab_alloc_table()
+{
+    static_assert(alignof(LTable) <= 16, "slab bump assumes 16-byte-aligned table slots");
+    if (slab_current + sizeof(LTable) > slab_end) {
+        constexpr size_t kAlign = 16;
+
+        size_t slab_bytes = sizeof(TableSlab) + kAlign + SLAB_TABLE_COUNT * sizeof(LTable);
+        char* mem = static_cast<char*>(std::malloc(slab_bytes));
+        if (!mem)
+            throw std::bad_alloc();
+        TableSlab* slab = reinterpret_cast<TableSlab*>(mem);
+        slab->next = slab_blocks;
+        slab_blocks = slab;
+        uintptr_t data = reinterpret_cast<uintptr_t>(mem) + sizeof(TableSlab);
+        data = (data + (kAlign - 1)) & ~static_cast<uintptr_t>(kAlign - 1);
+        slab_current = reinterpret_cast<char*>(data);
+        slab_end = mem + slab_bytes;
+    }
+    LTable* t = new (slab_current) LTable();
+    slab_current += sizeof(LTable);
+    t->flags |= LFLAG_SLAB;
+    return t;
+}
+
+//------------------ LState::slab_release — free all table slabs (state close only)
+void LState::slab_release()
+{
+    TableSlab* s = slab_blocks;
+    while (s) {
+        TableSlab* n = s->next;
+        std::free(s);
+        s = n;
+    }
+    slab_blocks = nullptr;
+    slab_current = slab_end = nullptr;
+}
+
 //------------------ LState::invoke_gc_finalizer — call __gc metamethod on userdata
-void LState::invoke_gc_finalizer(LUserdata *ud, const char *tag) {
+void LState::invoke_gc_finalizer(LUserdata* ud, const char* tag)
+{
     if (!ud->metatable)
         return;
     LValue gc_func = ud->metatable->gettable(this->str_gc);
@@ -992,9 +1116,9 @@ void LState::invoke_gc_finalizer(LUserdata *ud, const char *tag) {
     this->shadow_stack[this->shadow_top++] = TypedSlot(&args[0].val, &args[0].type);
     try {
         call_function(this, gc_func, args, 1, tag, 0);
-    } catch (const LRuntimeException &e) {
+    } catch (const LRuntimeException& e) {
         std::cerr << "error in __gc metamethod: " << e.what() << "\n";
-    } catch (std::exception &e) {
+    } catch (std::exception& e) {
         std::cerr << "error in __gc metamethod: " << e.what() << "\n";
     } catch (...) {
         std::cerr << "error in __gc metamethod\n";
@@ -1003,42 +1127,43 @@ void LState::invoke_gc_finalizer(LUserdata *ud, const char *tag) {
 }
 
 //------------------ LState::~LState — state destructor
-LState::~LState() {
+LState::~LState()
+{
     shadow_stack.reset();
     if (gc_phase == GCPhase::Sweeping) {
         while (gc_phase == GCPhase::Sweeping)
             gc_step();
     }
 
-    for (LHeader *h = allocated_objects; h; h = h->next) {
+    for (LHeader* h = allocated_objects; h; h = h->next) {
         if (h->type == static_cast<uint8_t>(UserData)) {
-            LUserdata *ud = static_cast<LUserdata *>(h);
+            LUserdata* ud = static_cast<LUserdata*>(h);
             invoke_gc_finalizer(ud, "StateClose_Finalizer");
         }
     }
 
-    LHeader *curr = allocated_objects;
+    LHeader* curr = allocated_objects;
     while (curr) {
-        LHeader *next = curr->next;
+        LHeader* next = curr->next;
         if (curr->flags & LFLAG_VM_PROXY) {
             if (clx_free_vm_proxy_ptr)
                 clx_free_vm_proxy_ptr(this, curr);
         } else if (curr->type == static_cast<uint8_t>(Table))
-            dtor_free_table(static_cast<LTable *>(curr));
+            dtor_free_table(static_cast<LTable*>(curr));
         else if (curr->type == static_cast<uint8_t>(Function))
-            delete static_cast<LCFunction *>(curr);
+            delete static_cast<LCFunction*>(curr);
         else if (curr->type == static_cast<uint8_t>(UserData))
-            delete[] reinterpret_cast<char *>(curr);
+            delete[] reinterpret_cast<char*>(curr);
         else if (curr->type == static_cast<uint8_t>(Thread))
-            delete static_cast<LThread *>(curr);
+            delete static_cast<LThread*>(curr);
         curr = next;
     }
     allocated_objects = nullptr;
 
     {
-        LTable *t = static_cast<LTable *>(gc_finalizable);
+        LTable* t = static_cast<LTable*>(gc_finalizable);
         while (t) {
-            LTable *nxt = static_cast<LTable *>(t->next);
+            LTable* nxt = static_cast<LTable*>(t->next);
             dtor_free_table(t);
             t = nxt;
         }
@@ -1046,44 +1171,50 @@ LState::~LState() {
     gc_finalizable = nullptr;
 
     {
-        LUserdata *ud = static_cast<LUserdata *>(gc_finalizable_ud);
+        LUserdata* ud = static_cast<LUserdata*>(gc_finalizable_ud);
         while (ud) {
-            LUserdata *nxt = static_cast<LUserdata *>(ud->next);
+            LUserdata* nxt = static_cast<LUserdata*>(ud->next);
             invoke_gc_finalizer(ud, "GC_Finalizer");
-            delete[] reinterpret_cast<char *>(ud);
+            delete[] reinterpret_cast<char*>(ud);
             ud = nxt;
         }
     }
     gc_finalizable_ud = nullptr;
 
-    LTable *ft = free_tables;
+    LTable* ft = free_tables;
     while (ft) {
-        LTable *next = static_cast<LTable *>(ft->next);
-        delete ft;
+        LTable* next = static_cast<LTable*>(ft->next);
+        dtor_free_table(ft);
         ft = next;
     }
     free_tables = nullptr;
 
-    LCFunction *ff = free_functions;
+    slab_release();
+
+    LCFunction* ff = free_functions;
     while (ff) {
-        LCFunction *next = static_cast<LCFunction *>(ff->next);
+        LCFunction* next = static_cast<LCFunction*>(ff->next);
         delete ff;
         ff = next;
     }
     free_functions = nullptr;
 
-    LThread *fth = free_threads;
+    LThread* fth = free_threads;
     while (fth) {
-        LThread *nxt0 = static_cast<LThread *>(fth->next);
+        LThread* nxt0 = static_cast<LThread*>(fth->next);
         delete fth;
         fth = nxt0;
     }
     free_threads = nullptr;
     std::free(overflow_heap);
+    gc_worklist.free();
+    gc_recent.free();
+    gc_pinned.free();
 }
 
-static void clx_trigger_gc(LState *L, LTable *t) {
-    LTable *mt = tbl_metatable(t);
+static void clx_trigger_gc(LState* L, LTable* t)
+{
+    LTable* mt = tbl_metatable(t);
     if (!mt)
         return;
     LValue gc_func = mt->gettable(L->str_gc);
@@ -1093,9 +1224,9 @@ static void clx_trigger_gc(LState *L, LTable *t) {
     LValue args[1] = { LValue(Table, t) };
     try {
         call_function_rooted(L, gc_func, args, 1, "GC_Finalizer", 0);
-    } catch (const LRuntimeException &e) {
+    } catch (const LRuntimeException& e) {
         std::cerr << "error in __gc metamethod: " << e.what() << "\n";
-    } catch (std::exception &e) {
+    } catch (std::exception& e) {
         std::cerr << "error in __gc metamethod: " << e.what() << "\n";
     } catch (...) {
         std::cerr << "error in __gc metamethod\n";
@@ -1103,11 +1234,12 @@ static void clx_trigger_gc(LState *L, LTable *t) {
 }
 
 //------------------ CloseGuard::~CloseGuard — close guard destructor
-CloseGuard::~CloseGuard() {
+CloseGuard::~CloseGuard()
+{
     if (val.type != Table)
         return;
-    LTable *t = static_cast<LTable *>(val.as_pointer());
-    LTable *mt = tbl_metatable(t);
+    LTable* t = static_cast<LTable*>(val.as_pointer());
+    LTable* mt = tbl_metatable(t);
     if (!mt)
         return;
     LValue close_func = mt->gettable(L->str_close);
@@ -1117,40 +1249,648 @@ CloseGuard::~CloseGuard() {
     LValue args[2] = { val, LValue() };
     try {
         call_function_rooted(L, close_func, args, 2, "CloseGuard", 0);
-    } catch (const LRuntimeException &e) {
+    } catch (const LRuntimeException& e) {
         std::cerr << "error in __close metamethod: " << e.what() << "\n";
-    } catch (std::exception &e) {
+    } catch (std::exception& e) {
         std::cerr << "error in __close metamethod: " << e.what() << "\n";
     } catch (...) {
         std::cerr << "error in __close metamethod\n";
     }
 }
 
-#define GC_SUB(TAG, PTR, amt)                                                                                          \
-    do {                                                                                                               \
-        if (static_cast<size_t>(amt) > allocated_bytes)                                                                \
-            allocated_bytes = 0;                                                                                       \
-        else                                                                                                           \
-            allocated_bytes -= (amt);                                                                                  \
+#define GC_SUB(TAG, PTR, amt)                           \
+    do {                                                \
+        if (static_cast<size_t>(amt) > allocated_bytes) \
+            allocated_bytes = 0;                        \
+        else                                            \
+            allocated_bytes -= (amt);                   \
     } while (0)
 
+//------------------ shared sweep helpers — used by both the incremental major sweep (gc_step)
+
+static void gc_dispose_swept(LState* L, LHeader* curr)
+{
+    auto& GC_SUB = L->allocated_bytes;
+    (void)GC_SUB;
+    curr->flags &= ~(LFLAG_REMEMBERED | LFLAG_GC_PIN);
+    // Leaving the OLD generation (freed or parked): drop its old-set
+    // accounting, otherwise gc_old_bytes only grows and every trigger runs
+    // a full collection once it crosses the major threshold.
+    L->gc_update_old_bytes(curr, curr->age, AGE_YOUNG);
+    if (curr->flags & LFLAG_VM_PROXY) {
+        if (clx_free_vm_proxy_ptr)
+            clx_free_vm_proxy_ptr(L, curr);
+    } else if (curr->type == static_cast<uint8_t>(Table)) {
+        LTable* t = static_cast<LTable*>(curr);
+        if (tbl_metatable(t)) {
+            t->next = L->gc_finalizable;
+            L->gc_finalizable = t;
+        } else {
+            if (static_cast<size_t>(sizeof(LTable)) > L->allocated_bytes)
+                L->allocated_bytes = 0;
+            else
+                L->allocated_bytes -= sizeof(LTable);
+            if (t->ext) {
+                t->ext->hash_count = 0;
+                t->ext->hash_tombs = 0;
+            }
+            t->array_size = 0;
+            t->next = L->free_tables;
+            L->free_tables = t;
+        }
+    } else if (curr->type == static_cast<uint8_t>(Function)) {
+        LCFunction* f = static_cast<LCFunction*>(curr);
+        f->func = nullptr;
+        f->gc_cells.clear();
+        f->next = L->free_functions;
+        L->free_functions = f;
+    } else if (curr->type == static_cast<uint8_t>(Thread)) {
+        LThread* th = static_cast<LThread*>(curr);
+        size_t th_bytes = sizeof(LThread) + th->stack_bytes;
+        if (th_bytes > L->allocated_bytes)
+            L->allocated_bytes = 0;
+        else
+            L->allocated_bytes -= th_bytes;
+#if defined(_WIN32)
+        if (th->fiber && L->free_fiber_threads < LState::kMaxPooledFibers) {
+            L->free_fiber_threads++;
+        } else {
+            if (th->fiber)
+                DeleteFiber(th->fiber);
+            th->fiber = nullptr;
+        }
+#endif
+        th->next = L->free_threads;
+        L->free_threads = th;
+    } else if (curr->type == static_cast<uint8_t>(UserData)) {
+        LUserdata* ud = static_cast<LUserdata*>(curr);
+        if (ud->metatable) {
+            ud->next = L->gc_finalizable_ud;
+            L->gc_finalizable_ud = ud;
+        } else {
+            size_t ud_bytes = sizeof(LUserdata) + ud->size;
+            if (ud_bytes > L->allocated_bytes)
+                L->allocated_bytes = 0;
+            else
+                L->allocated_bytes -= ud_bytes;
+            delete[] reinterpret_cast<char*>(ud);
+        }
+    }
+}
+
+static void gc_drain_finalizables(LState* L)
+{
+    for (LTable* t = static_cast<LTable*>(L->gc_finalizable); t;) {
+        LTable* nx = static_cast<LTable*>(t->next);
+        meta_list_remove(L, t);
+        clx_trigger_gc(L, t);
+        size_t t_bytes = sizeof(LTable);
+        if (t_bytes > L->allocated_bytes)
+            L->allocated_bytes = 0;
+        else
+            L->allocated_bytes -= t_bytes;
+        if (t->array && t->array != t->small_array) {
+            delete[] t->array;
+            t->array = nullptr;
+        }
+        if (t->array_types && t->array_types != t->small_array_types) {
+            delete[] t->array_types;
+            t->array_types = nullptr;
+        }
+        if (t->ext) {
+            if (t->ext->entries) {
+                delete[] t->ext->entries;
+                t->ext->entries = nullptr;
+            }
+            t->ext->hash_count = 0;
+            t->ext->hash_tombs = 0;
+            t->ext->hash_size = 0;
+            t->ext->metatable = nullptr;
+            t->ext->meta_next = nullptr;
+        }
+        t->array_size = t->array_cap = 0;
+        t->next = L->free_tables;
+        L->free_tables = t;
+        t = nx;
+    }
+    L->gc_finalizable = nullptr;
+    for (LUserdata* ud = static_cast<LUserdata*>(L->gc_finalizable_ud); ud;) {
+        LUserdata* nx = static_cast<LUserdata*>(ud->next);
+        L->invoke_gc_finalizer(ud, "GC_Finalizer");
+        size_t ud_bytes = sizeof(LUserdata) + ud->size;
+        if (ud_bytes > L->allocated_bytes)
+            L->allocated_bytes = 0;
+        else
+            L->allocated_bytes -= ud_bytes;
+        delete[] reinterpret_cast<char*>(ud);
+        ud = nx;
+    }
+    L->gc_finalizable_ud = nullptr;
+}
+
+//------------------ LState::gc_maybe_collect — shared allocation-site trigger
+void LState::gc_maybe_collect()
+{
+    if (!gc_running)
+        return;
+    if (gc_phase == GCPhase::Sweeping) {
+        gc_step();
+        return;
+    }
+    if (gc_mode == GCMode::Generational) {
+        if (allocated_bytes - gc_bytes_at_minor >= gc_minor_threshold)
+            gc_minor();
+        if (gc_mode == GCMode::Generational && gc_old_bytes >= gc_major_threshold
+            && allocated_bytes >= gc_bytes_threshold)
+            collect_garbage();
+    } else if (allocated_bytes >= gc_bytes_threshold) {
+        collect_garbage();
+    }
+}
+
+//------------------ LState::gc_remember — record an old-generation owner for the next minor
+void LState::gc_remember(LHeader* owner)
+{
+    if (owner->flags & LFLAG_REMEMBERED)
+        return;
+    owner->flags |= LFLAG_REMEMBERED;
+    gc_remembered.push_back(owner);
+}
+
+//------------------ GCStack growth (cold) + reserve/free
+void LState::gc_stack_grow(LState::GCStack* s)
+{
+    size_t ncap = s->cap ? s->cap * 2 : 1024;
+    LHeader** nd = static_cast<LHeader**>(std::realloc(s->data, ncap * sizeof(LHeader*)));
+    if (!nd)
+        throw std::bad_alloc();
+    s->data = nd;
+    s->cap = ncap;
+}
+
+void LState::GCStack::reserve(size_t n)
+{
+    if (n <= cap)
+        return;
+    LHeader** nd = static_cast<LHeader**>(std::realloc(data, n * sizeof(LHeader*)));
+    if (!nd)
+        throw std::bad_alloc();
+    data = nd;
+    cap = n;
+}
+
+void LState::GCStack::free()
+{
+    std::free(data);
+    data = nullptr;
+    top = cap = 0;
+}
+
+//------------------ LState::gc_remember_cell — record an upvalue cell for the next minor
+void LState::gc_remember_cell(const LUpValue& cell)
+{
+    if (!cell || cell->is_gc_obj())
+        return;
+    if (!gc_remembered_cell_set.insert(cell.get()).second)
+        return;
+    gc_remembered_cells.push_back(cell);
+}
+
+//------------------ gc_barrier_header — slow path of the write barrier
+void gc_barrier_header(LState* L, LHeader* owner, const LValue& newval)
+{
+    if (!newval.is_gc_obj())
+        return;
+    LHeader* nv = static_cast<LHeader*>(newval.as_pointer());
+    if (!nv || nv->age != AGE_YOUNG)
+        return;
+    if (owner->age == AGE_OLD)
+        L->gc_remember(owner);
+}
+
+//------------------ gc_barrier_cell — upvalue cell write barrier
+void gc_barrier_cell(LState* L, const LUpValue& cell, const LValue& newval)
+{
+    (void)L;
+    if (!newval.is_gc_obj())
+        return;
+    LHeader* nv = static_cast<LHeader*>(newval.as_pointer());
+    if (!nv || nv->age != AGE_YOUNG)
+        return;
+    L->gc_remember_cell(cell);
+}
+
+//------------------ mark helpers shared by major and minor marking
+
+static CLX_INLINE_HOT LHeader* gc_mark_value(LState* L, const LValue& v, uint8_t markval)
+{
+    if (!v.is_gc_obj())
+        return nullptr;
+    LHeader* h = v.as_pointer();
+    if (!h)
+        return nullptr;
+    if (h->type != static_cast<uint8_t>(v.type))
+        return nullptr;
+    if (v.type == ValueType::UserData) {
+
+        bool real = false;
+        for (LHeader* o = L->allocated_objects; o; o = o->next)
+            if (o == h) {
+                real = true;
+                break;
+            }
+        if (!real)
+            return nullptr;
+    }
+    if (h->marked != 0)
+        return nullptr;
+    h->marked = markval;
+    return h;
+}
+
+static CLX_INLINE_HOT void gc_push_for_trace(LState::GCStack& wl, LHeader* h, LValue v)
+{
+    ValueType t = v.type;
+    if (t == Table || t == Thread || t == Function || t == UserData)
+        wl.push(h);
+}
+
+static bool gc_trace_table_young(LState* L, LTable* t, LState::GCStack& wl)
+{
+    bool has_nonold = false;
+    for (size_t i = 0; i < t->array_size; ++i) {
+        if (t->array_types[i] == Nil)
+            continue;
+        LValue v(t->array[i], t->array_types[i]);
+        if (!v.is_gc_obj())
+            continue;
+        LHeader* h = v.as_pointer();
+        if (!h || h->type != static_cast<uint8_t>(v.type))
+            continue;
+        if (h->age == AGE_OLD)
+            continue;
+        has_nonold = true;
+        if (h->marked != 0)
+            continue;
+        if (v.type == ValueType::UserData && !L->is_allocated_userdata(h))
+            continue;
+        h->marked = 1;
+        gc_push_for_trace(wl, h, v);
+    }
+    LTableExt* ex = t->ext;
+    if (!ex)
+        return has_nonold;
+    for (size_t _i = 0; _i < ex->hash_size; ++_i) {
+        HashEntry& e = ex->entries[_i];
+        if (e.ktype == Nil)
+            continue;
+        for (int which = 0; which < 2; ++which) {
+            LValue v(which == 0 ? e.key : e.val, which == 0 ? e.ktype : e.vtype);
+            if (!v.is_gc_obj())
+                continue;
+            LHeader* h = v.as_pointer();
+            if (!h || h->type != static_cast<uint8_t>(v.type))
+                continue;
+            if (h->age == AGE_OLD)
+                continue;
+            has_nonold = true;
+            if (h->marked != 0)
+                continue;
+            if (v.type == ValueType::UserData && !L->is_allocated_userdata(h))
+                continue;
+            h->marked = 1;
+            gc_push_for_trace(wl, h, v);
+        }
+    }
+    if (ex->metatable && ex->metatable->age != AGE_OLD && ex->metatable->marked == 0) {
+        has_nonold = true;
+        ex->metatable->marked = 1;
+        wl.push(ex->metatable);
+    } else if (ex->metatable && ex->metatable->age != AGE_OLD) {
+        has_nonold = true;
+    }
+    return has_nonold;
+}
+
+static CLX_INLINE_HOT bool gc_mark_young(LState* L, const LValue& v, LState::GCStack& wl)
+{
+    if (!v.is_gc_obj())
+        return false;
+    LHeader* h = v.as_pointer();
+    if (!h || h->type != static_cast<uint8_t>(v.type) || h->age == AGE_OLD)
+        return false;
+    if (h->marked != 0)
+        return true;
+    if (v.type == ValueType::UserData && !L->is_allocated_userdata(h))
+        return true;
+    h->marked = 1;
+    gc_push_for_trace(wl, h, v);
+    return true;
+}
+
+static bool gc_trace_thread_young(LState* L, LThread* th, LState::GCStack& wl)
+{
+    bool has_nonold = false;
+    auto one = [&](const LValue& v) {
+        if (gc_mark_young(L, v, wl))
+            has_nonold = true;
+    };
+    one(th->function);
+    if (th->caller)
+        one(LValue(Thread, th->caller));
+    for (size_t i = 0; i < th->yield_args.count; ++i)
+        one(th->yield_args[i]);
+    for (size_t i = 0; i < th->resume_args.count; ++i)
+        one(th->resume_args[i]);
+    return has_nonold;
+}
+
+static bool gc_trace_function_young(LState* L, LCFunction* f, LState::GCStack& wl)
+{
+    bool has_nonold = false;
+    for (const LUpValue& c : f->gc_cells)
+        if (c && gc_mark_young(L, *c, wl))
+            has_nonold = true;
+    return has_nonold;
+}
+
+//------------------ LState::is_allocated_userdata — membership check on allocated_objects
+bool LState::is_allocated_userdata(const LHeader* h) const
+{
+    for (LHeader* o = allocated_objects; o; o = o->next)
+        if (o == h)
+            return true;
+    return false;
+}
+
+//------------------ gc_trace_remember_nonold_children — write-barrier catch-up for
+
+static void gc_trace_remember_nonold_children(LTable* t)
+{
+    LState* L = clx_current_L;
+    if (!L)
+        return;
+    for (size_t i = 0; i < t->array_size; ++i) {
+        if (t->array_types[i] == Nil)
+            continue;
+        LValue v(t->array[i], t->array_types[i]);
+        if (!v.is_gc_obj())
+            continue;
+        LHeader* h = v.as_pointer();
+        if (h && h->type == static_cast<uint8_t>(v.type) && h->age != AGE_OLD)
+            L->gc_remember(t);
+    }
+    if (t->ext) {
+        for (size_t i = 0; i < t->ext->hash_size; ++i) {
+            HashEntry& e = t->ext->entries[i];
+            if (e.ktype == Nil)
+                continue;
+            for (int which = 0; which < 2; ++which) {
+                LValue v(which == 0 ? e.key : e.val, which == 0 ? e.ktype : e.vtype);
+                if (!v.is_gc_obj())
+                    continue;
+                LHeader* h = v.as_pointer();
+                if (h && h->type == static_cast<uint8_t>(v.type) && h->age != AGE_OLD) {
+                    L->gc_remember(t);
+                    return;
+                }
+            }
+        }
+        if (t->ext->metatable && t->ext->metatable->age != AGE_OLD)
+            L->gc_remember(t);
+    }
+}
+
+//------------------ LState::gc_minor — young-generation collection (generational mode)
+
+void LState::gc_minor()
+{
+    ++gc_stats_minors;
+    gc_minor_active = true;
+    if (gc_stats_remembered_high < gc_remembered.size())
+        gc_stats_remembered_high = gc_remembered.size();
+    auto& wl = gc_worklist;
+    wl.clear();
+
+    auto push_if_needed = [&](const LValue& v) {
+        if (!v.is_gc_obj())
+            return;
+        LHeader* h = v.as_pointer();
+        if (!h || h->type != static_cast<uint8_t>(v.type) || h->age == AGE_OLD || h->marked != 0)
+            return;
+        if (v.type == ValueType::UserData && !is_allocated_userdata(h))
+            return;
+        h->marked = 1;
+        gc_push_for_trace(wl, h, v);
+    };
+
+    //------------------ roots: shadow stack, state threads, permanent roots
+    if (_G)
+        push_if_needed(LValue(Table, _G));
+    if (main_thread)
+        push_if_needed(LValue(Thread, main_thread));
+    if (running_thread && running_thread != main_thread)
+        push_if_needed(LValue(Thread, running_thread));
+    for (size_t i = 0; i < shadow_top; ++i)
+        if (shadow_stack[i].val)
+            push_if_needed(LValue(*shadow_stack[i].val, *shadow_stack[i].type));
+    for (const LValue& r : permanent_roots)
+        push_if_needed(r);
+
+    //------------------ roots: gc_recent (every object allocated since the last collection)
+
+    for (size_t _ri = 0; _ri < gc_recent.top; ++_ri) {
+        LHeader* h = gc_recent.data[_ri];
+        if (h->marked != 0 || h->age != AGE_YOUNG)
+            continue;
+        if (h->type == static_cast<uint8_t>(UserData) && !is_allocated_userdata(h))
+            continue;
+        h->marked = 1;
+        if (h->type == static_cast<uint8_t>(Table)) {
+            wl.push(h);
+        } else if (h->type == static_cast<uint8_t>(Thread) || h->type == static_cast<uint8_t>(Function)
+            || h->type == static_cast<uint8_t>(UserData)) {
+            wl.push(h);
+        }
+    }
+
+    //------------------ roots: remembered old-generation owners and upvalue cells.
+
+    for (LHeader* owner : gc_remembered) {
+        if (!(owner->flags & LFLAG_REMEMBERED))
+            continue;
+        if (owner->flags & LFLAG_VM_PROXY)
+            continue;
+        if (owner->age != AGE_OLD) {
+            if (owner->marked == 0) {
+                owner->marked = 1;
+                if (owner->type == static_cast<uint8_t>(Table) || owner->type == static_cast<uint8_t>(Thread)
+                    || owner->type == static_cast<uint8_t>(Function) || owner->type == static_cast<uint8_t>(UserData))
+                    wl.push(owner);
+            }
+        } else if (owner->type == static_cast<uint8_t>(Table)) {
+
+            if (!gc_trace_table_young(this, static_cast<LTable*>(owner), wl))
+                owner->flags &= ~LFLAG_REMEMBERED;
+        } else if (owner->type == static_cast<uint8_t>(UserData)) {
+            LUserdata* ud = static_cast<LUserdata*>(owner);
+            if (ud->metatable && ud->metatable->age != AGE_OLD) {
+                if (ud->metatable->marked == 0) {
+                    ud->metatable->marked = 1;
+                    wl.push(ud->metatable);
+                }
+            } else {
+                owner->flags &= ~LFLAG_REMEMBERED;
+            }
+        } else if (owner->type == static_cast<uint8_t>(Thread)) {
+
+            if (!gc_trace_thread_young(this, static_cast<LThread*>(owner), wl))
+                owner->flags &= ~LFLAG_REMEMBERED;
+        } else if (owner->type == static_cast<uint8_t>(Function)) {
+
+            if (!gc_trace_function_young(this, static_cast<LCFunction*>(owner), wl))
+                owner->flags &= ~LFLAG_REMEMBERED;
+        } else {
+            owner->flags &= ~LFLAG_REMEMBERED;
+        }
+    }
+    for (const LUpValue& cell : gc_remembered_cells)
+        if (cell)
+            push_if_needed(*cell);
+
+    //------------------ trace: descend only into YOUNG children
+    while (!wl.empty()) {
+        LHeader* curr = wl.back();
+        wl.pop_back();
+        if (curr->flags & LFLAG_VM_PROXY)
+            continue;
+        if (curr->type == static_cast<uint8_t>(Table)) {
+            gc_trace_table_young(this, static_cast<LTable*>(curr), wl);
+        } else if (curr->type == static_cast<uint8_t>(Thread)) {
+            gc_trace_thread_young(this, static_cast<LThread*>(curr), wl);
+        } else if (curr->type == static_cast<uint8_t>(Function)) {
+            gc_trace_function_young(this, static_cast<LCFunction*>(curr), wl);
+        }
+
+        else if (curr->type == static_cast<uint8_t>(UserData)) {
+            LUserdata* ud = static_cast<LUserdata*>(curr);
+            if (ud->metatable && ud->metatable->age == AGE_YOUNG && ud->metatable->marked == 0) {
+                ud->metatable->marked = 1;
+                wl.push(ud->metatable);
+            }
+        }
+    }
+
+    //------------------ single walk over the allocation chain: age/promote, then free.
+
+    auto age_and_promote = [&](LHeader* h) {
+        uint8_t from = h->age;
+        uint8_t to = (from == AGE_YOUNG) ? AGE_SURVIVOR : AGE_OLD;
+        gc_update_old_bytes(h, from, to);
+        h->age = to;
+
+        if (to == AGE_OLD && h->marked == 1 && !(h->flags & LFLAG_VM_PROXY)) {
+            if (h->type == static_cast<uint8_t>(Table)) {
+                gc_trace_remember_nonold_children(static_cast<LTable*>(h));
+            } else if (h->type == static_cast<uint8_t>(UserData)) {
+                LUserdata* ud = static_cast<LUserdata*>(h);
+                if (ud->metatable && ud->metatable->age != AGE_OLD)
+                    gc_remember(ud);
+            }
+        }
+    };
+
+    //------------------ single walk over the allocation chain: age/promote,
+
+    size_t before_sweep = allocated_bytes;
+    LHeader** link = &allocated_objects;
+    while (*link) {
+        LHeader* o = *link;
+        if (o->age == AGE_OLD) {
+            link = &o->next;
+            continue;
+        }
+        if (o->marked == 1) {
+            age_and_promote(o);
+
+            o->marked = (o->age == AGE_SURVIVOR) ? 2 : 0;
+            link = &o->next;
+        } else if (o->age == AGE_SURVIVOR) {
+            if (o->marked == 2) {
+                o->marked = 0;
+                link = &o->next;
+            } else {
+                LHeader* next_obj = o->next;
+                gc_dispose_swept(this, o);
+                *link = next_obj;
+                object_count--;
+            }
+        } else {
+            link = &o->next;
+        }
+    }
+    gc_stats_minor_freed += (before_sweep > allocated_bytes) ? (before_sweep - allocated_bytes) : 0;
+
+    //------------------ drop stale remembered entries and pins (mark bits were
+
+    {
+        size_t w = 0;
+        for (size_t i = 0; i < gc_remembered.size(); ++i) {
+            LHeader* h = gc_remembered[i];
+            if (h->flags & LFLAG_REMEMBERED) {
+                gc_remembered[w++] = h;
+            } else {
+                h->flags &= ~LFLAG_REMEMBERED;
+            }
+        }
+        gc_remembered.resize(w);
+        w = 0;
+        for (size_t i = 0; i < gc_remembered_cells.size(); ++i) {
+            const LUpValue& cell = gc_remembered_cells[i];
+            if (cell && !cell->is_gc_obj()) {
+                gc_remembered_cells[w++] = cell;
+            }
+        }
+        gc_remembered_cells.resize(w);
+        gc_remembered_cell_set.clear();
+        for (const LUpValue& cell : gc_remembered_cells)
+            gc_remembered_cell_set.insert(cell.get());
+        for (size_t _pi = 0; _pi < gc_pinned.top; ++_pi)
+            gc_pinned.data[_pi]->flags &= ~LFLAG_GC_PIN;
+        gc_pinned.clear();
+    }
+
+    //------------------ rebuild pacing state
+    gc_recent.clear();
+    gc_bytes_at_minor = allocated_bytes;
+    gc_minor_active = false;
+
+    //------------------ major scheduling: if the old set outgrew its budget, the next
+
+    gc_major_pending = (gc_old_bytes >= gc_major_threshold);
+
+    wl.clear();
+}
+
 //------------------ LState::gc_step — incremental GC sweep step
-bool LState::gc_step() {
+bool LState::gc_step()
+{
     if (gc_phase != GCPhase::Sweeping)
         return true;
 
     size_t budget = GC_STEP_BUDGET;
-    LHeader *curr = gc_sweep_cursor;
-    LHeader *prev = gc_prev;
+    LHeader* curr = gc_sweep_cursor;
+    LHeader* prev = gc_prev;
 
     while (curr && budget--) {
-        LHeader *next_obj = curr->next;
-        if (curr->marked == 0) {
+        LHeader* next_obj = curr->next;
+
+        if (curr->marked == 0 && !(curr->flags & (LFLAG_REMEMBERED | LFLAG_GC_PIN))) {
             if (prev) {
                 prev->next = next_obj;
             } else {
                 if (curr != allocated_objects) {
-                    LHeader *h = allocated_objects;
+                    LHeader* h = allocated_objects;
                     while (h && h->next != curr)
                         h = h->next;
                     if (h) {
@@ -1161,60 +1901,13 @@ bool LState::gc_step() {
                     allocated_objects = next_obj;
                 }
             }
-            if (curr->flags & LFLAG_VM_PROXY) {
-                if (clx_free_vm_proxy_ptr)
-                    clx_free_vm_proxy_ptr(this, curr);
-            } else if (curr->type == static_cast<uint8_t>(Table)) {
-                LTable *t = static_cast<LTable *>(curr);
-                if (tbl_metatable(t)) {
-                    t->next = gc_finalizable;
-                    gc_finalizable = t;
-                } else {
-                    GC_SUB("SWEEP-T", t, sizeof(LTable));
-                    if (t->ext) {
-                        t->ext->hash_count = 0;
-                        t->ext->hash_tombs = 0;
-                    }
-                    t->array_size = 0;
-                    t->next = free_tables;
-                    free_tables = t;
-                }
-            } else if (curr->type == static_cast<uint8_t>(Function)) {
-                LCFunction *f = static_cast<LCFunction *>(curr);
-                f->func = nullptr;
-                f->gc_cells.clear();
-                f->next = free_functions;
-                free_functions = f;
-            } else if (curr->type == static_cast<uint8_t>(Thread)) {
-                LThread *th = static_cast<LThread *>(curr);
-                GC_SUB("SWEEP-TH", th, sizeof(LThread) + th->stack_bytes);
-#if defined(_WIN32)
-                if (th->fiber && free_fiber_threads < kMaxPooledFibers) {
-                    free_fiber_threads++;
-                } else {
-                    if (th->fiber)
-                        DeleteFiber(th->fiber);
-                    th->fiber = nullptr;
-                }
-#endif
-                th->next = free_threads;
-                free_threads = th;
-            } else if (curr->type == static_cast<uint8_t>(UserData)) {
-                LUserdata *ud = static_cast<LUserdata *>(curr);
-                if (ud->metatable) {
-                    ud->next = gc_finalizable_ud;
-                    gc_finalizable_ud = ud;
-                } else {
-                    GC_SUB("SWEEP-UD", ud, sizeof(LUserdata) + ud->size);
-                    delete[] reinterpret_cast<char *>(ud);
-                }
-            }
+            gc_dispose_swept(this, curr);
             curr = next_obj;
         } else {
-            if (curr->marked == 2)
-                curr->marked = 0;
-            else
-                curr->marked = 0;
+            if (gc_mode == GCMode::Generational && curr->age != AGE_OLD
+                && !(curr->flags & LFLAG_REMEMBERED) && !(curr->flags & LFLAG_GC_PIN))
+                gc_update_old_bytes(curr, curr->age, AGE_OLD), curr->age = AGE_OLD;
+            curr->marked = 0;
             object_count++;
             prev = curr;
             curr = next_obj;
@@ -1228,55 +1921,22 @@ bool LState::gc_step() {
         if (gc_draining)
             return true;
         gc_draining = true;
-        for (LTable *t = static_cast<LTable *>(gc_finalizable); t;) {
-            LTable *nx = static_cast<LTable *>(t->next);
-            meta_list_remove(this, t);
-            clx_trigger_gc(this, t);
-            GC_SUB("DRAIN-T", t, sizeof(LTable));
-            if (t->array && t->array != t->small_array) {
-                delete[] t->array;
-                t->array = nullptr;
-            }
-            if (t->array_types && t->array_types != t->small_array_types) {
-                delete[] t->array_types;
-                t->array_types = nullptr;
-            }
-            if (t->ext) {
-                if (t->ext->entries) {
-                    delete[] t->ext->entries;
-                    t->ext->entries = nullptr;
-                }
-                t->ext->hash_count = 0;
-                t->ext->hash_tombs = 0;
-                t->ext->hash_size = 0;
-                t->ext->metatable = nullptr;
-                t->ext->meta_next = nullptr;
-            }
-            t->array_size = t->array_cap = 0;
-            t->next = free_tables;
-            free_tables = t;
-            t = nx;
-        }
-        gc_finalizable = nullptr;
-        for (LUserdata *ud = static_cast<LUserdata *>(gc_finalizable_ud); ud;) {
-            LUserdata *nx = static_cast<LUserdata *>(ud->next);
-            invoke_gc_finalizer(ud, "GC_Finalizer");
-            GC_SUB("DRAIN-UD", ud, sizeof(LUserdata) + ud->size);
-            delete[] reinterpret_cast<char *>(ud);
-            ud = nx;
-        }
-        gc_finalizable_ud = nullptr;
+        gc_drain_finalizables(this);
         gc_prev = nullptr;
         gc_phase = GCPhase::Idle;
         overflow_heap_used = 0;
 
-        size_t live = allocated_bytes;
-        size_t headroom = std::clamp(live / 2, size_t(64 * 1024 * 1024), size_t(256 * 1024 * 1024));
-        if (const char *e = getenv("CLX_GC_HEADROOM")) {
-            long long v = atoll(e);
-            if (v > 0)
-                headroom = size_t(v);
+        if (gc_mode == GCMode::Generational) {
+
+            gc_bytes_at_minor = allocated_bytes;
         }
+
+        size_t live = allocated_bytes;
+        //------------------ Pacing: one collection is a synchronous mark+sweep of O(heap), so
+
+        size_t headroom = std::clamp(live / 2, size_t(1 * 1024 * 1024), size_t(256 * 1024 * 1024));
+        if (gc_headroom_override > 0)
+            headroom = gc_headroom_override;
         gc_bytes_threshold = live + headroom;
         gc_draining = false;
         return true;
@@ -1284,43 +1944,36 @@ bool LState::gc_step() {
     return false;
 }
 
-//------------------ LState::collect_garbage — mark-sweep collection
-void LState::collect_garbage() {
+//------------------ LState::collect_garbage — full mark-sweep collection (entry point)
+
+void LState::collect_garbage()
+{
+    ++gc_stats_collects;
+    if (gc_mode == GCMode::Generational && !gc_draining && gc_phase == GCPhase::Idle)
+        gc_minor();
+    size_t before = allocated_bytes;
+    collect_garbage_full();
+    gc_stats_major_freed += (before > allocated_bytes) ? (before - allocated_bytes) : 0;
+    if (gc_mode == GCMode::Generational)
+        gc_major_pending = false;
+}
+
+//------------------ LState::collect_garbage_full — mark-sweep collection
+void LState::collect_garbage_full()
+{
     if (gc_draining)
         return;
-    auto &wl = gc_worklist;
+    auto& wl = gc_worklist;
     wl.clear();
 
-    auto mark_gc = [&](LValue v, uint8_t mark) -> LHeader * {
-        if (!v.is_gc_obj())
-            return nullptr;
-        LHeader *h = v.as_pointer();
-        if (!h)
-            return nullptr;
-        if (h->type != static_cast<uint8_t>(v.type))
-            return nullptr;
-        if (v.type == ValueType::UserData) {
-            bool real = false;
-            for (LHeader *o = allocated_objects; o; o = o->next)
-                if (o == h) {
-                    real = true;
-                    break;
-                }
-            if (!real)
-                return nullptr;
-        }
-        if (h->marked != 0)
-            return nullptr;
-        h->marked = mark;
-        return h;
-    };
+    auto mark_gc = [&](LValue v, uint8_t mark) -> LHeader* { return gc_mark_value(this, v, mark); };
     auto push_if_needed = [&](LValue v) {
-        LHeader *h = mark_gc(v, 1);
+        LHeader* h = mark_gc(v, 1);
         if (!h)
             return;
         ValueType t = v.type;
         if (t == Table || t == Thread || t == Function || t == UserData)
-            wl.push_back(h);
+            wl.push(h);
     };
 
     if (_G)
@@ -1333,18 +1986,19 @@ void LState::collect_garbage() {
         if (shadow_stack[i].val)
             push_if_needed(LValue(*shadow_stack[i].val, *shadow_stack[i].type));
 
-    for (const LValue &r : permanent_roots)
+    for (const LValue& r : permanent_roots)
         push_if_needed(r);
 
     if (!gc_recent.empty()) {
-        for (LHeader *h : gc_recent) {
+        for (size_t _ri = 0; _ri < gc_recent.top; ++_ri) {
+            LHeader* h = gc_recent.data[_ri];
             if (h->marked != 0)
                 continue;
             h->marked = 1;
             uint8_t ty = h->type;
             if (ty == static_cast<uint8_t>(Table) || ty == static_cast<uint8_t>(Thread)
                 || ty == static_cast<uint8_t>(Function) || ty == static_cast<uint8_t>(UserData))
-                wl.push_back(h);
+                wl.push(h);
         }
         gc_recent.clear();
     }
@@ -1353,7 +2007,7 @@ void LState::collect_garbage() {
         clx_mark_vm_proxies_ptr(this, wl);
 
     while (!wl.empty()) {
-        LHeader *curr = wl.back();
+        LHeader* curr = wl.back();
         wl.pop_back();
 
         if (curr->flags & LFLAG_VM_PROXY) {
@@ -1361,14 +2015,14 @@ void LState::collect_garbage() {
         }
 
         if (curr->type == static_cast<uint8_t>(Table)) {
-            LTable *t = static_cast<LTable *>(curr);
+            LTable* t = static_cast<LTable*>(curr);
             {
-                const uint8_t *types_raw = reinterpret_cast<const uint8_t *>(t->array_types);
+                const uint8_t* types_raw = reinterpret_cast<const uint8_t*>(t->array_types);
                 size_t i = 0;
 #if defined(CLX_HAS_AVX2)
                 const __m256i zero256 = _mm256_setzero_si256();
                 for (; i + 32 <= t->array_size; i += 32) {
-                    __m256i types = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(types_raw + i));
+                    __m256i types = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(types_raw + i));
                     __m256i cmp = _mm256_cmpeq_epi8(types, zero256);
                     uint32_t mask = ~_mm256_movemask_epi8(cmp);
                     while (mask) {
@@ -1378,7 +2032,7 @@ void LState::collect_garbage() {
                     }
                 }
                 for (; i + 16 <= t->array_size; i += 16) {
-                    __m128i types = _mm_loadu_si128(reinterpret_cast<const __m128i *>(types_raw + i));
+                    __m128i types = _mm_loadu_si128(reinterpret_cast<const __m128i*>(types_raw + i));
                     __m128i cmp = _mm_cmpeq_epi8(types, _mm_setzero_si128());
                     uint32_t mask = static_cast<uint32_t>(~_mm_movemask_epi8(cmp)) & 0xFFFF;
                     while (mask) {
@@ -1390,7 +2044,7 @@ void LState::collect_garbage() {
 #elif defined(CLX_HAS_SSE2)
                 const __m128i zero = _mm_setzero_si128();
                 for (; i + 16 <= t->array_size; i += 16) {
-                    __m128i types = _mm_loadu_si128(reinterpret_cast<const __m128i *>(types_raw + i));
+                    __m128i types = _mm_loadu_si128(reinterpret_cast<const __m128i*>(types_raw + i));
                     __m128i cmp = _mm_cmpeq_epi8(types, zero);
                     uint32_t mask = static_cast<uint32_t>(~_mm_movemask_epi8(cmp)) & 0xFFFF;
                     while (mask) {
@@ -1415,7 +2069,7 @@ void LState::collect_garbage() {
                 for (; i < t->array_size; ++i)
                     push_if_needed(LValue(t->array[i], t->array_types[i]));
             }
-            LTableExt *ex = t->ext;
+            LTableExt* ex = t->ext;
             if (ex) {
                 if (ex->hash_bitmap) {
                     size_t bm_words = (ex->hash_size + 63) / 64;
@@ -1442,11 +2096,11 @@ void LState::collect_garbage() {
                 }
                 if (ex->metatable && ex->metatable->marked == 0) {
                     ex->metatable->marked = 1;
-                    wl.push_back(ex->metatable);
+                    wl.push(ex->metatable);
                 }
             }
         } else if (curr->type == static_cast<uint8_t>(Thread)) {
-            LThread *th = static_cast<LThread *>(curr);
+            LThread* th = static_cast<LThread*>(curr);
             push_if_needed(th->function);
             if (th->caller)
                 push_if_needed(LValue(Thread, th->caller));
@@ -1455,25 +2109,25 @@ void LState::collect_garbage() {
             for (size_t i = 0; i < th->resume_args.count; ++i)
                 push_if_needed(th->resume_args[i]);
         } else if (curr->type == static_cast<uint8_t>(Function)) {
-            LCFunction *f = static_cast<LCFunction *>(curr);
+            LCFunction* f = static_cast<LCFunction*>(curr);
             if (f->env)
                 push_if_needed(LValue(Table, f->env));
-            for (const LUpValue &cell : f->gc_cells)
+            for (const LUpValue& cell : f->gc_cells)
                 if (cell)
                     push_if_needed(*cell);
         } else if (curr->type == static_cast<uint8_t>(UserData)) {
-            LUserdata *ud = static_cast<LUserdata *>(curr);
+            LUserdata* ud = static_cast<LUserdata*>(curr);
             if (ud->metatable && ud->metatable->marked == 0) {
                 ud->metatable->marked = 1;
-                wl.push_back(ud->metatable);
+                wl.push(ud->metatable);
             }
         }
     }
 
-    std::vector<LHeader *> protect_wl;
-    for (LTable *obj = metatabled_tables; obj; obj = obj->ext->meta_next) {
+    std::vector<LHeader*> protect_wl;
+    for (LTable* obj = metatabled_tables; obj; obj = obj->ext->meta_next) {
         if (obj->marked == 0 && !(obj->flags & LFLAG_VM_PROXY)) {
-            LTable *mt = obj->ext ? obj->ext->metatable : nullptr;
+            LTable* mt = obj->ext ? obj->ext->metatable : nullptr;
             if (mt && mt->marked == 0) {
                 mt->marked = 2;
                 protect_wl.push_back(mt);
@@ -1481,35 +2135,35 @@ void LState::collect_garbage() {
         }
     }
     while (!protect_wl.empty()) {
-        LHeader *curr = protect_wl.back();
+        LHeader* curr = protect_wl.back();
         protect_wl.pop_back();
         if (curr->type == static_cast<uint8_t>(Table)) {
-            LTable *tt = static_cast<LTable *>(curr);
+            LTable* tt = static_cast<LTable*>(curr);
             {
-                const uint8_t *types_raw = reinterpret_cast<const uint8_t *>(tt->array_types);
+                const uint8_t* types_raw = reinterpret_cast<const uint8_t*>(tt->array_types);
                 size_t i = 0;
 #if defined(CLX_HAS_AVX2)
                 const __m256i zero256 = _mm256_setzero_si256();
                 for (; i + 32 <= tt->array_size; i += 32) {
-                    __m256i types = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(types_raw + i));
+                    __m256i types = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(types_raw + i));
                     __m256i cmp = _mm256_cmpeq_epi8(types, zero256);
                     uint32_t mask = ~_mm256_movemask_epi8(cmp);
                     while (mask) {
                         int bit = clx_ctz(mask);
                         LValue v = LValue(tt->array[i + bit], tt->array_types[i + bit]);
-                        if (LHeader *h = mark_gc(v, 2))
+                        if (LHeader* h = mark_gc(v, 2))
                             protect_wl.push_back(h);
                         mask &= mask - 1;
                     }
                 }
                 for (; i + 16 <= tt->array_size; i += 16) {
-                    __m128i types = _mm_loadu_si128(reinterpret_cast<const __m128i *>(types_raw + i));
+                    __m128i types = _mm_loadu_si128(reinterpret_cast<const __m128i*>(types_raw + i));
                     __m128i cmp = _mm_cmpeq_epi8(types, _mm_setzero_si128());
                     uint32_t mask = static_cast<uint32_t>(~_mm_movemask_epi8(cmp)) & 0xFFFF;
                     while (mask) {
                         int bit = clx_ctz(mask);
                         LValue v = LValue(tt->array[i + bit], tt->array_types[i + bit]);
-                        if (LHeader *h = mark_gc(v, 2))
+                        if (LHeader* h = mark_gc(v, 2))
                             protect_wl.push_back(h);
                         mask &= mask - 1;
                     }
@@ -1517,13 +2171,13 @@ void LState::collect_garbage() {
 #elif defined(CLX_HAS_SSE2)
                 const __m128i zero = _mm_setzero_si128();
                 for (; i + 16 <= tt->array_size; i += 16) {
-                    __m128i types = _mm_loadu_si128(reinterpret_cast<const __m128i *>(types_raw + i));
+                    __m128i types = _mm_loadu_si128(reinterpret_cast<const __m128i*>(types_raw + i));
                     __m128i cmp = _mm_cmpeq_epi8(types, zero);
                     uint32_t mask = static_cast<uint32_t>(~_mm_movemask_epi8(cmp)) & 0xFFFF;
                     while (mask) {
                         int bit = clx_ctz(mask);
                         LValue v = LValue(tt->array[i + bit], tt->array_types[i + bit]);
-                        if (LHeader *h = mark_gc(v, 2))
+                        if (LHeader* h = mark_gc(v, 2))
                             protect_wl.push_back(h);
                         mask &= mask - 1;
                     }
@@ -1538,7 +2192,7 @@ void LState::collect_garbage() {
                     for (int k = 0; k < 16; ++k) {
                         if (lane_vals[k]) {
                             LValue v = LValue(tt->array[i + k], tt->array_types[i + k]);
-                            if (LHeader *h = mark_gc(v, 2))
+                            if (LHeader* h = mark_gc(v, 2))
                                 protect_wl.push_back(h);
                         }
                     }
@@ -1546,11 +2200,11 @@ void LState::collect_garbage() {
 #endif
                 for (; i < tt->array_size; ++i) {
                     LValue v = LValue(tt->array[i], tt->array_types[i]);
-                    if (LHeader *h = mark_gc(v, 2))
+                    if (LHeader* h = mark_gc(v, 2))
                         protect_wl.push_back(h);
                 }
             }
-            LTableExt *tt_ex = tt->ext;
+            LTableExt* tt_ex = tt->ext;
             if (tt_ex) {
                 if (tt_ex->hash_bitmap) {
                     size_t bm_words = (tt_ex->hash_size + 63) / 64;
@@ -1562,7 +2216,7 @@ void LState::collect_garbage() {
                                 break;
                             LValue kv(tt_ex->entries[idx].key, tt_ex->entries[idx].ktype);
                             for (LValue v : { kv, LValue(tt_ex->entries[idx].val, tt_ex->entries[idx].vtype) }) {
-                                if (LHeader *h = mark_gc(v, 2))
+                                if (LHeader* h = mark_gc(v, 2))
                                     protect_wl.push_back(h);
                             }
                             bits &= bits - 1;
@@ -1574,7 +2228,7 @@ void LState::collect_garbage() {
                             continue;
                         LValue kv(tt_ex->entries[_pi].key, tt_ex->entries[_pi].ktype);
                         for (LValue v : { kv, LValue(tt_ex->entries[_pi].val, tt_ex->entries[_pi].vtype) }) {
-                            if (LHeader *h = mark_gc(v, 2))
+                            if (LHeader* h = mark_gc(v, 2))
                                 protect_wl.push_back(h);
                         }
                     }
@@ -1590,35 +2244,44 @@ void LState::collect_garbage() {
     object_count = 0;
     while (!gc_step())
         ;
+
+    //------------------ generational bookkeeping: the remembered set is NOT cleared here —
+
+    if (gc_mode == GCMode::Generational) {
+        gc_bytes_at_minor = allocated_bytes;
+    }
 }
 
 //------------------ LState::register_module — register module loader
-void LState::register_module(const std::string &name, LValue (*func)(LState *)) {
+void LState::register_module(const std::string& name, LValue (*func)(LState*))
+{
     register_static_preload(this, name.c_str(), func);
 }
 
 //------------------ LState::register_loaded_module — seed package.loaded[name] with an already-built module value
-void LState::register_loaded_module(const std::string &name, const LValue &module) {
+void LState::register_loaded_module(const std::string& name, const LValue& module)
+{
     LValue pack_val = get_global(this, "package");
     if (pack_val.type != ValueType::Table)
         return;
-    LValue loaded = static_cast<LTable *>(pack_val.as_pointer())->gettable(LValue(intern_string("loaded")));
+    LValue loaded = static_cast<LTable*>(pack_val.as_pointer())->gettable(LValue(intern_string("loaded")));
     if (loaded.type != ValueType::Table)
         return;
-    static_cast<LTable *>(loaded.as_pointer())->settable(LValue(intern_string(name)), module);
+    static_cast<LTable*>(loaded.as_pointer())->settable(LValue(intern_string(name)), module);
 }
 
 //------------------ call_function — call a value as function
-MultiValue call_function(LState *L, const LValue &func, const LValue *args, size_t count, const char *file, int line) {
+MultiValue call_function(LState* L, const LValue& func, const LValue* args, size_t count, const char* file, int line)
+{
     L->current_file = file;
     L->current_line = line;
 
     size_t prev_shadow = L->shadow_top;
-    L->shadow_stack[L->shadow_top++] = TypedSlot(const_cast<TValue *>(&func.val), const_cast<ValueType *>(&func.type));
+    L->shadow_stack[L->shadow_top++] = TypedSlot(const_cast<TValue*>(&func.val), const_cast<ValueType*>(&func.type));
 
     if (func.type == Function) {
-        LCFunction *f = static_cast<LCFunction *>(func.as_pointer());
-        LCFunction *saved_func = L->current_func;
+        LCFunction* f = static_cast<LCFunction*>(func.as_pointer());
+        LCFunction* saved_func = L->current_func;
         L->current_func = f;
         if (f->direct) {
             MultiValue ret = f->direct(L, args, count);
@@ -1633,12 +2296,12 @@ MultiValue call_function(LState *L, const LValue &func, const LValue *args, size
     }
 
     if (func.type == Table) {
-        LTable *mt = tbl_metatable(static_cast<LTable *>(func.as_pointer()));
+        LTable* mt = tbl_metatable(static_cast<LTable*>(func.as_pointer()));
         if (mt) {
             LValue m = mt->gettable(L->str_call);
             if (m.type != Nil) {
                 size_t nargs = count + 1;
-                LValue *new_args;
+                LValue* new_args;
                 LValue stack_buf[16];
                 bool heap = nargs > 16;
                 if (heap)
@@ -1670,7 +2333,8 @@ MultiValue call_function(LState *L, const LValue &func, const LValue *args, size
 }
 
 //------------------ pcall_function — protected call
-MultiValue pcall_function(LState *L, const LValue &func, const LValue *args, size_t count) {
+MultiValue pcall_function(LState* L, const LValue& func, const LValue* args, size_t count)
+{
     size_t shadow_base = L->shadow_top;
     try {
         MultiValue ret = call_function(L, func, args, count, L->current_file, L->current_line);
@@ -1684,7 +2348,7 @@ MultiValue pcall_function(LState *L, const LValue &func, const LValue *args, siz
         for (size_t i = 0; i < ret.count; ++i)
             results.push_back(ret[i]);
         return MultiValue(results, L);
-    } catch (const LRuntimeException &e) {
+    } catch (const LRuntimeException& e) {
         L->shadow_top = shadow_base;
 
         LValue err_val = e.error_obj;
@@ -1692,18 +2356,19 @@ MultiValue pcall_function(LState *L, const LValue &func, const LValue *args, siz
             err_val = LValue(L->intern_string(e.what()));
         }
         return MultiValue({ LValue(false), err_val });
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         L->shadow_top = shadow_base;
         return MultiValue({ LValue(false), LValue(L->intern_string(e.what())) });
     }
 }
 
 //------------------ call_direct — fast path for LCFunction direct calls
-MultiValue call_direct(LState *L, const LValue &func, const LValue *args, size_t count, const char *file, int line) {
+MultiValue call_direct(LState* L, const LValue& func, const LValue* args, size_t count, const char* file, int line)
+{
     if (func.type == ValueType::Function) {
-        LCFunction *f = static_cast<LCFunction *>(func.as_pointer());
+        LCFunction* f = static_cast<LCFunction*>(func.as_pointer());
         if (f->direct) {
-            LCFunction *saved = L->current_func;
+            LCFunction* saved = L->current_func;
             L->current_func = f;
             MultiValue ret = f->direct(L, args, count);
             L->current_func = saved;
@@ -1714,13 +2379,14 @@ MultiValue call_direct(LState *L, const LValue &func, const LValue *args, size_t
 }
 
 //------------------ callmeta — call metamethod
-static MultiValue lazy_funcs_index(LState *L, const LValue *args, size_t n) {
+static MultiValue lazy_funcs_index(LState* L, const LValue* args, size_t n)
+{
     if (n < 2 || args[1].type != String)
         return MultiValue();
 
-    const char *name = args[1].as_string();
-    LTable *t = static_cast<LTable *>(args[0].as_pointer());
-    LTable *mt = tbl_metatable(t);
+    const char* name = args[1].as_string();
+    LTable* t = static_cast<LTable*>(args[0].as_pointer());
+    LTable* mt = tbl_metatable(t);
     if (!mt)
         return MultiValue();
 
@@ -1732,13 +2398,15 @@ static MultiValue lazy_funcs_index(LState *L, const LValue *args, size_t n) {
     if (regs_val.type != UserData || regs_val.type == Nil || count_val.type == Nil || count_val.type != Int64)
         return MultiValue();
 
-    const LazyReg *regs = reinterpret_cast<const LazyReg *>(regs_val.as_pointer());
+    const LazyReg* regs = reinterpret_cast<const LazyReg*>(regs_val.as_pointer());
     int64_t count = count_val.as_integer();
 
     for (int64_t i = 0; i < count; i++) {
         if (std::strcmp(regs[i].name, name) == 0) {
             LValue func = L->create_closure(CFunctionType(regs[i].func));
             t->settable(args[1], func);
+            if (t->age == AGE_OLD && func.is_gc_obj())
+                gc_barrier_header(L, t, func);
             return MultiValue(func);
         }
     }
@@ -1747,19 +2415,22 @@ static MultiValue lazy_funcs_index(LState *L, const LValue *args, size_t n) {
 }
 
 //------------------ set_lazy_funcs — set lazy function registrations
-void set_lazy_funcs(LState *L, const LValue &table, const LazyReg *regs, size_t count) {
+void set_lazy_funcs(LState* L, const LValue& table, const LazyReg* regs, size_t count)
+{
     if (table.type != Table)
         return;
-    LTable *t = static_cast<LTable *>(table.as_pointer());
+    LTable* t = static_cast<LTable*>(table.as_pointer());
 
-    LTable *mt = tbl_metatable(t);
+    LTable* mt = tbl_metatable(t);
     if (!mt) {
-        mt = static_cast<LTable *>(L->create_table().as_pointer());
+        mt = static_cast<LTable*>(L->create_table().as_pointer());
         tbl_set_metatable(t, mt);
+        if (t->age == AGE_OLD)
+            gc_barrier_header(L, t, LValue(Table, mt));
     }
     meta_list_add(L, t);
     mt->settable(LValue(L->intern_string("__lazy_regs")),
-        LValue(UserData, reinterpret_cast<LHeader *>(const_cast<LazyReg *>(regs))));
+        LValue(UserData, reinterpret_cast<LHeader*>(const_cast<LazyReg*>(regs))));
     mt->settable(LValue(L->intern_string("__lazy_count")), LValue(static_cast<int64_t>(count)));
 
     LValue existing = mt->gettable(L->str_index);
@@ -1770,20 +2441,16 @@ void set_lazy_funcs(LState *L, const LValue &table, const LazyReg *regs, size_t 
 }
 
 //------------------ LState::create_table — allocate a table
-LValue LState::create_table(size_t asize, size_t hsize) {
-    if (gc_running) {
-        if (gc_phase == GCPhase::Sweeping) {
-            gc_step();
-        } else if (allocated_bytes >= gc_bytes_threshold) {
-            collect_garbage();
-        }
-    }
+LValue LState::create_table(size_t asize, size_t hsize)
+{
+    gc_maybe_collect();
 
-    LTable *t;
+    LTable* t;
+    bool recycled_tbl = (free_tables != nullptr);
+    uint8_t prev_age_tbl = recycled_tbl ? free_tables->age : AGE_YOUNG;
     if (free_tables) {
         t = free_tables;
-        free_tables = static_cast<LTable *>(free_tables->next);
-        t->marked = 0;
+        free_tables = static_cast<LTable*>(free_tables->next);
         if (t->ext) {
             if (!t->ext->entries)
                 t->ext->hash_size = 0;
@@ -1802,12 +2469,21 @@ LValue LState::create_table(size_t asize, size_t hsize) {
         }
         allocated_bytes += sizeof(LTable);
     } else {
-        t = new LTable();
+        t = slab_alloc_table();
         allocated_bytes += sizeof(LTable);
     }
 
     if (asize > 0) {
         if (asize <= 2) {
+
+            if (t->array && t->array != t->small_array) {
+                delete[] t->array;
+                t->array = nullptr;
+            }
+            if (t->array_types && t->array_types != t->small_array_types) {
+                delete[] t->array_types;
+                t->array_types = nullptr;
+            }
             t->array = t->small_array;
             t->array_types = t->small_array_types;
             t->array_size = asize;
@@ -1833,29 +2509,34 @@ LValue LState::create_table(size_t asize, size_t hsize) {
     }
 
     t->type = static_cast<uint8_t>(Table);
+    t->marked = 0;
+    t->age = AGE_YOUNG;
+    if (recycled_tbl && prev_age_tbl != AGE_YOUNG
+        && (gc_phase == GCPhase::Sweeping || gc_minor_active)) {
+
+        t->flags |= LFLAG_GC_PIN;
+        gc_pinned.push(t);
+    }
 
     t->next = allocated_objects;
     allocated_objects = t;
-    gc_recent.push_back(t);
+    gc_recent.push(t);
 
     object_count++;
     return LValue(Table, t);
 }
 
 //------------------ LState::create_closure — allocate a closure
-clx::LValue clx::LState::create_closure(CFunctionType func, LTable *env, std::vector<LUpValue> gc_cells) {
-    if (gc_running) {
-        if (gc_phase == GCPhase::Sweeping) {
-            gc_step();
-        } else if (allocated_bytes >= gc_bytes_threshold) {
-            collect_garbage();
-        }
-    }
+clx::LValue clx::LState::create_closure(CFunctionType func, LTable* env, std::vector<LUpValue> gc_cells)
+{
+    gc_maybe_collect();
 
-    LCFunction *f;
+    LCFunction* f;
+    bool recycled_fn = (free_functions != nullptr);
+    uint8_t prev_age_fn = recycled_fn ? free_functions->age : AGE_YOUNG;
     if (free_functions) {
         f = free_functions;
-        free_functions = static_cast<LCFunction *>(free_functions->next);
+        free_functions = static_cast<LCFunction*>(free_functions->next);
         f->func = std::move(func);
         f->env = env ? env : _G;
         f->marked = 0;
@@ -1867,55 +2548,60 @@ clx::LValue clx::LState::create_closure(CFunctionType func, LTable *env, std::ve
         allocated_bytes += sizeof(LCFunction);
     }
 
-    auto *fnptr = f->func.target<MultiValue (*)(LState *, const LValue *, size_t)>();
+    auto* fnptr = f->func.target<MultiValue (*)(LState*, const LValue*, size_t)>();
     if (fnptr) {
         f->direct = *fnptr;
     }
     f->type = static_cast<uint8_t>(Function);
+    f->marked = 0;
+    f->age = AGE_YOUNG;
+    if (recycled_fn && prev_age_fn != AGE_YOUNG
+        && (gc_phase == GCPhase::Sweeping || gc_minor_active)) {
+
+        f->flags |= LFLAG_GC_PIN;
+        gc_pinned.push(f);
+    }
     f->next = allocated_objects;
     allocated_objects = f;
-    gc_recent.push_back(f);
+    gc_recent.push(f);
     object_count++;
     return clx::LValue(Function, f);
 }
 
 //------------------ newuserdata — allocate userdata
-LValue newuserdata(LState *L, size_t size) {
-    if (L->gc_running) {
-        if (L->gc_phase == LState::GCPhase::Sweeping) {
-            L->gc_step();
-        } else if (L->allocated_bytes >= L->gc_bytes_threshold) {
-            L->collect_garbage();
-        }
-    }
+LValue newuserdata(LState* L, size_t size)
+{
+    L->gc_maybe_collect();
 
-    char *mem = new char[sizeof(LUserdata) + size];
-    LUserdata *ud = reinterpret_cast<LUserdata *>(mem);
+    char* mem = new char[sizeof(LUserdata) + size];
+    LUserdata* ud = reinterpret_cast<LUserdata*>(mem);
     ud->type = static_cast<uint8_t>(UserData);
     ud->marked = 0;
     ud->flags = 0;
+    ud->age = AGE_YOUNG;
     ud->metatable = nullptr;
     ud->size = size;
 
     ud->next = L->allocated_objects;
     L->allocated_objects = ud;
-    L->gc_recent.push_back(ud);
+    L->gc_recent.push(ud);
     L->object_count++;
     L->allocated_bytes += sizeof(LUserdata) + size;
     return LValue(UserData, ud);
 }
 
 //------------------ call_bin_metamethod — call binary op metamethod
-LValue call_bin_metamethod(LState *L, const LValue &a, const LValue &b, const char *event) {
-    LTable *mt = nullptr;
+LValue call_bin_metamethod(LState* L, const LValue& a, const LValue& b, const char* event)
+{
+    LTable* mt = nullptr;
     if (a.type == Table)
-        mt = tbl_metatable(static_cast<LTable *>(a.as_pointer()));
+        mt = tbl_metatable(static_cast<LTable*>(a.as_pointer()));
     else if (a.type == UserData)
-        mt = static_cast<LUserdata *>(a.as_pointer())->metatable;
+        mt = static_cast<LUserdata*>(a.as_pointer())->metatable;
     if (!mt && b.type == Table)
-        mt = tbl_metatable(static_cast<LTable *>(b.as_pointer()));
+        mt = tbl_metatable(static_cast<LTable*>(b.as_pointer()));
     else if (!mt && b.type == UserData)
-        mt = static_cast<LUserdata *>(b.as_pointer())->metatable;
+        mt = static_cast<LUserdata*>(b.as_pointer())->metatable;
 
     if (mt) {
         LValue method = mt->gettable(LValue(L->intern_string(event)));
@@ -1945,21 +2631,28 @@ LValue call_bin_metamethod(LState *L, const LValue &a, const LValue &b, const ch
 }
 
 //------------------ get_global — get global variable
-LValue get_global(LState *L, const char *name) {
+LValue get_global(LState* L, const char* name)
+{
     LValue val = L->_G->gettable(LValue(L->intern_string(name)));
     return val.type != Nil ? val : LValue();
 }
 
 //------------------ set_global — set global variable
-void set_global(LState *L, const char *name, const LValue &val) {
+void set_global(LState* L, const char* name, const LValue& val)
+{
     L->_G->settable(LValue(L->intern_string(name)), val);
 }
 
 //------------------ open — create Lua state
-LState *open(int argc, char *argv[]) {
-    LState *L = new LState();
+extern thread_local LState* clx_current_L;
+thread_local LState* clx_current_L = nullptr;
 
-    LThread *main_th = new LThread();
+LState* open(int argc, char* argv[])
+{
+    LState* L = new LState();
+    clx_current_L = L;
+
+    LThread* main_th = new LThread();
     main_th->state = L;
     main_th->is_main = true;
     main_th->status = THREAD_RUNNING;
@@ -1975,7 +2668,7 @@ LState *open(int argc, char *argv[]) {
 
     if (argc > 0 && argv) {
         LValue arg_table = L->create_table(argc);
-        LTable *t = static_cast<LTable *>(arg_table.as_pointer());
+        LTable* t = static_cast<LTable*>(arg_table.as_pointer());
         for (int i = 0; i < argc; ++i) {
             t->settable(LValue(static_cast<int64_t>(i)), LValue(L->intern_string(argv[i])));
         }
@@ -1989,7 +2682,10 @@ LState *open(int argc, char *argv[]) {
 }
 
 //------------------ close — close Lua state
-void close(LState *L) {
+void close(LState* L)
+{
+    if (clx_current_L == L)
+        clx_current_L = nullptr;
 #if defined(_WIN32)
     ConvertFiberToThread();
 #endif
