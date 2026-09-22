@@ -16,44 +16,49 @@ namespace clx {
 using enum TokenType;
 using enum NodeType;
 
-static constexpr const char *std_libs[] = { "print", "require", "error", "assert", "tostring", "tonumber", "type",
+static constexpr const char* std_libs[] = { "print", "require", "error", "assert", "tostring", "tonumber", "type",
     "pairs", "ipairs", "next", "pcall", "xpcall", "setmetatable", "getmetatable", "rawget", "rawset", "rawlen",
     "rawequal", "collectgarbage", "load", "loadfile", "_G", "_VERSION", "warn", "math", "table", "string", "os",
     "coroutine", "package", "debug", "io", "utf8" };
 
 //------------------ PARSER: constructor - initializes parser with lexer and AST context, seeds std lib symbols
-Parser::Parser(const char *source, const char *filename, ASTContext &context)
+Parser::Parser(const char* source, const char* filename, ASTContext& context)
     : lexer(source, filename)
-    , ctx(context) {
+    , ctx(context)
+{
     ctx.filename = filename ? filename : "";
     current_token = lexer.current();
     implicit_globals.push_back(ImplicitGlobalMode::Default);
 
-    for (const char *lib : std_libs) {
+    for (const char* lib : std_libs) {
         active_symbols.push_back({ lib, SymbolType::ExplicitGlobal, 0, 0, 0xFFFFFFFF });
     }
 }
 
 //------------------ PARSER: advance - advances lexer and updates current token
-void Parser::advance() {
+void Parser::advance()
+{
     lexer.advance();
     current_token = lexer.current();
 }
 
 //------------------ PARSER: add_node - appends an AST node and returns its index
-uint32_t Parser::add_node(const ASTNode &node) {
+uint32_t Parser::add_node(const ASTNode& node)
+{
     ctx.nodes.push_back(node);
     return static_cast<uint32_t>(ctx.nodes.size() - 1);
 }
 
 //------------------ PARSER: enter_scope - increments depth, pushes inherited implicit_globals
-void Parser::enter_scope() {
+void Parser::enter_scope()
+{
     current_depth++;
     implicit_globals.push_back(implicit_globals.back());
 }
 
 //------------------ PARSER: leave_scope - pops symbols for current depth and decrements depth
-void Parser::leave_scope() {
+void Parser::leave_scope()
+{
     while (!active_symbols.empty() && active_symbols.back().depth == current_depth) {
         active_symbols.pop_back();
     }
@@ -62,12 +67,14 @@ void Parser::leave_scope() {
 }
 
 //------------------ PARSER: add_symbol - registers a symbol in the active scope
-void Parser::add_symbol(std::string_view name, SymbolType type, uint32_t decl_idx) {
+void Parser::add_symbol(std::string_view name, SymbolType type, uint32_t decl_idx)
+{
     active_symbols.push_back({ name, type, current_depth, current_function_depth, decl_idx });
 }
 
 //------------------ PARSER: resolve_symbol - looks up a symbol in scope chain, returns its type and flags
-SymbolType Parser::resolve_symbol(std::string_view name, int line, bool &out_is_captured, bool &out_is_global) {
+SymbolType Parser::resolve_symbol(std::string_view name, int line, bool& out_is_captured, bool& out_is_global)
+{
     out_is_captured = false;
     out_is_global = false;
     for (auto it = active_symbols.rbegin(); it != active_symbols.rend(); ++it) {
@@ -95,7 +102,8 @@ SymbolType Parser::resolve_symbol(std::string_view name, int line, bool &out_is_
 }
 
 //------------------ PARSER: parse_primary - parses primary expressions (literals, identifiers, table/paren/func)
-uint32_t Parser::parse_primary() {
+uint32_t Parser::parse_primary()
+{
     if (current_token.type == TokLBrace) {
         int line = current_token.line;
         advance();
@@ -196,10 +204,10 @@ uint32_t Parser::parse_primary() {
         } else {
             node.type = NodeType::Integer;
             int64_t ival = 0;
-            const char *nstart = current_token.text.data();
-            const char *nstop = nstart + current_token.text.size();
+            const char* nstart = current_token.text.data();
+            const char* nstop = nstart + current_token.text.size();
             bool is_hex = (current_token.text.size() > 2 && nstart[0] == '0' && (nstart[1] == 'x' || nstart[1] == 'X'));
-            const char *digits = is_hex ? nstart + 2 : nstart;
+            const char* digits = is_hex ? nstart + 2 : nstart;
             auto [p, ec] = std::from_chars(digits, nstop, ival, is_hex ? 16 : 10);
             node.as.integer.val = ival;
         }
@@ -254,7 +262,8 @@ uint32_t Parser::parse_primary() {
 }
 
 //------------------ PARSER: parse_postfix_expression - parses method calls, index access, function calls
-uint32_t Parser::parse_postfix_expression() {
+uint32_t Parser::parse_postfix_expression()
+{
     uint32_t expr = parse_primary();
     while (true) {
         if (current_token.type == TokString || current_token.type == TokLBrace) {
@@ -287,7 +296,7 @@ uint32_t Parser::parse_postfix_expression() {
             for (uint32_t arg : args)
                 ctx.block_statements.push_back(arg);
 
-            const char *intrinsic_cname = nullptr;
+            const char* intrinsic_cname = nullptr;
             if (ctx.nodes[expr].type == NodeType::TableAccess) {
                 uint32_t t_idx = ctx.nodes[expr].as.table_access.table;
                 uint32_t k_idx = ctx.nodes[expr].as.table_access.key;
@@ -295,7 +304,7 @@ uint32_t Parser::parse_postfix_expression() {
                     std::string_view tname(ctx.nodes[t_idx].as.ident.name, ctx.nodes[t_idx].as.ident.length);
                     std::string_view kname(ctx.nodes[k_idx].as.string.text, ctx.nodes[k_idx].as.string.length);
                     if (tname == "math") {
-                        static const std::unordered_map<std::string_view, const char *> _m = { { "sin", "std::sin" },
+                        static const std::unordered_map<std::string_view, const char*> _m = { { "sin", "std::sin" },
                             { "cos", "std::cos" }, { "sqrt", "std::sqrt" }, { "exp", "std::exp" },
                             { "tan", "std::tan" }, { "atan", "std::atan" }, { "asin", "std::asin" },
                             { "acos", "std::acos" }, { "sinh", "std::sinh" }, { "cosh", "std::cosh" },
@@ -424,7 +433,8 @@ uint32_t Parser::parse_postfix_expression() {
 }
 
 //------------------ PARSER: parse_unary - parses unary operators (-, #, ~, not)
-uint32_t Parser::parse_unary() {
+uint32_t Parser::parse_unary()
+{
     if (current_token.type == TokMinus || current_token.type == TokLen || current_token.type == TokBitXor
         || current_token.type == TokNot) {
         int op_code = static_cast<int>(UnaryOp::Len);
@@ -448,7 +458,8 @@ uint32_t Parser::parse_unary() {
 }
 
 //------------------ PARSER: parse_pow - parses power operator (^)
-uint32_t Parser::parse_pow() {
+uint32_t Parser::parse_pow()
+{
     uint32_t left = parse_postfix_expression();
     if (current_token.type == TokPow) {
         int line = current_token.line;
@@ -466,7 +477,8 @@ uint32_t Parser::parse_pow() {
 }
 
 //------------------ PARSER: parse_factor - parses multiplicative operators (*, /, %, //)
-uint32_t Parser::parse_factor() {
+uint32_t Parser::parse_factor()
+{
     uint32_t left = parse_unary();
     while (current_token.type == TokStar || current_token.type == TokSlash || current_token.type == TokMod
         || current_token.type == TokFloorDiv) {
@@ -492,7 +504,8 @@ uint32_t Parser::parse_factor() {
 }
 
 //------------------ PARSER: parse_term - parses additive operators (+, -)
-uint32_t Parser::parse_term() {
+uint32_t Parser::parse_term()
+{
     uint32_t left = parse_factor();
     while (current_token.type == TokPlus || current_token.type == TokMinus) {
         int line = current_token.line;
@@ -512,7 +525,8 @@ uint32_t Parser::parse_term() {
 }
 
 //------------------ PARSER: parse_bitwise_or - parses bitwise OR operator (|)
-uint32_t Parser::parse_bitwise_or() {
+uint32_t Parser::parse_bitwise_or()
+{
     uint32_t left = parse_bitwise_xor();
     while (current_token.type == TokBitOr) {
         int line = current_token.line;
@@ -530,7 +544,8 @@ uint32_t Parser::parse_bitwise_or() {
 }
 
 //------------------ PARSER: parse_bitwise_xor - parses bitwise XOR operator (~)
-uint32_t Parser::parse_bitwise_xor() {
+uint32_t Parser::parse_bitwise_xor()
+{
     uint32_t left = parse_bitwise_and();
     while (current_token.type == TokBitXor) {
         int line = current_token.line;
@@ -548,7 +563,8 @@ uint32_t Parser::parse_bitwise_xor() {
 }
 
 //------------------ PARSER: parse_bitwise_and - parses bitwise AND operator (&)
-uint32_t Parser::parse_bitwise_and() {
+uint32_t Parser::parse_bitwise_and()
+{
     uint32_t left = parse_shift();
     while (current_token.type == TokBitAnd) {
         int line = current_token.line;
@@ -566,7 +582,8 @@ uint32_t Parser::parse_bitwise_and() {
 }
 
 //------------------ PARSER: parse_shift - parses shift operators (<<, >>)
-uint32_t Parser::parse_shift() {
+uint32_t Parser::parse_shift()
+{
     uint32_t left = parse_concat();
     while (current_token.type == TokShl || current_token.type == TokShr) {
         int line = current_token.line;
@@ -585,7 +602,8 @@ uint32_t Parser::parse_shift() {
 }
 
 //------------------ PARSER: parse_concat - parses string concatenation operator (..)
-uint32_t Parser::parse_concat() {
+uint32_t Parser::parse_concat()
+{
     uint32_t left = parse_term();
     if (current_token.type == TokConcat) {
         int line = current_token.line;
@@ -603,7 +621,8 @@ uint32_t Parser::parse_concat() {
 }
 
 //------------------ PARSER: parse_relational - parses comparison operators (==, <, >, <=, >=, ~=)
-uint32_t Parser::parse_relational() {
+uint32_t Parser::parse_relational()
+{
     uint32_t left = parse_bitwise_or();
     while (current_token.type == TokEqEq || current_token.type == TokNotEq || current_token.type == TokLess
         || current_token.type == TokGreater || current_token.type == TokLessEq || current_token.type == TokGreaterEq) {
@@ -635,7 +654,8 @@ uint32_t Parser::parse_relational() {
 }
 
 //------------------ PARSER: parse_logical_and - parses logical AND operator
-uint32_t Parser::parse_logical_and() {
+uint32_t Parser::parse_logical_and()
+{
     uint32_t left = parse_relational();
     while (current_token.type == TokAnd) {
         int line = current_token.line;
@@ -653,7 +673,8 @@ uint32_t Parser::parse_logical_and() {
 }
 
 //------------------ PARSER: parse_expression - parses logical OR (lowest precedence operator)
-uint32_t Parser::parse_expression() {
+uint32_t Parser::parse_expression()
+{
     uint32_t left = parse_logical_and();
     while (current_token.type == TokOr) {
         int line = current_token.line;
@@ -671,7 +692,8 @@ uint32_t Parser::parse_expression() {
 }
 
 //------------------ PARSER: parse_statement - dispatches on current token to parse a single statement
-uint32_t Parser::parse_statement() {
+uint32_t Parser::parse_statement()
+{
     //------------------ PARSE: stmt - end of file, return invalid
     if (current_token.type == TokEof)
         return INVALID_NODE;
@@ -1021,7 +1043,7 @@ uint32_t Parser::parse_statement() {
     if (current_token.type == TokRepeat) {
         int line = current_token.line;
         advance();
-        uint32_t body_block = parse_block(false, /*keep_scope_open=*/true);
+        uint32_t body_block = parse_block(false, true);
         uint32_t condition = INVALID_NODE;
         if (current_token.type == TokUntil) {
             advance();
@@ -1344,7 +1366,8 @@ uint32_t Parser::parse_statement() {
 }
 
 //------------------ PARSER: parse_block - parses a sequence of statements, manages scope entry/exit
-uint32_t Parser::parse_block(bool is_main, bool keep_scope_open) {
+uint32_t Parser::parse_block(bool is_main, bool keep_scope_open)
+{
     int line = current_token.line;
     std::vector<uint32_t> statements;
 
@@ -1380,7 +1403,8 @@ uint32_t Parser::parse_block(bool is_main, bool keep_scope_open) {
 }
 
 //------------------ PARSER: parse_funcbody - parses function parameters and body block
-uint32_t Parser::parse_funcbody(bool is_method) {
+uint32_t Parser::parse_funcbody(bool is_method)
+{
     int line = current_token.line;
     if (current_token.type != TokLParen)
         throw std::runtime_error("Expected '(' for function parameters");
@@ -1489,7 +1513,8 @@ uint32_t Parser::parse_funcbody(bool is_method) {
 }
 
 //------------------ PARSER: parse - entry point, parses the entire source as a main block
-uint32_t Parser::parse() {
+uint32_t Parser::parse()
+{
     return parse_block(true);
 }
 

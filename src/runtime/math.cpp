@@ -12,13 +12,15 @@
 namespace clx {
 
 //------------------ rng: returns thread-local 64-bit Mersenne Twister RNG
-static std::mt19937_64 &rng() {
-    static std::mt19937_64 gen(std::random_device { }());
+static std::mt19937_64& rng()
+{
+    static std::mt19937_64 gen(std::random_device {}());
     return gen;
 }
 
 //------------------ math_abs: returns absolute value of a number
-static MultiValue math_abs(LState *L, const LValue *args, size_t count) {
+static MultiValue math_abs(LState* L, const LValue* args, size_t count)
+{
     if (count == 0)
         clx::error(L, "bad argument #1 to 'abs' (number expected, got no value)");
     if (clx::is_integer(args[0])) {
@@ -32,21 +34,24 @@ static MultiValue math_abs(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ math_acos: returns arc cosine of a number
-static MultiValue math_acos(LState *L, const LValue *args, size_t count) {
+static MultiValue math_acos(LState* L, const LValue* args, size_t count)
+{
     if (count == 0)
         clx::error(L, "bad argument #1 to 'acos' (number expected, got no value)");
     return MultiValue(clx::number(std::acos(clx::check_number(L, args[0]))));
 }
 
 //------------------ math_asin: returns arc sine of a number
-static MultiValue math_asin(LState *L, const LValue *args, size_t count) {
+static MultiValue math_asin(LState* L, const LValue* args, size_t count)
+{
     if (count == 0)
         clx::error(L, "bad argument #1 to 'asin' (number expected, got no value)");
     return MultiValue(clx::number(std::asin(clx::check_number(L, args[0]))));
 }
 
 //------------------ math_atan: returns arc tangent (or atan2 if 2 args)
-static MultiValue math_atan(LState *L, const LValue *args, size_t count) {
+static MultiValue math_atan(LState* L, const LValue* args, size_t count)
+{
     if (count == 0)
         clx::error(L, "bad argument #1 to 'atan' (number expected, got no value)");
     double y = clx::check_number(L, args[0]);
@@ -58,7 +63,8 @@ static MultiValue math_atan(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ math_ceil: returns smallest integer >= x
-static MultiValue math_ceil(LState *L, const LValue *args, size_t count) {
+static MultiValue math_ceil(LState* L, const LValue* args, size_t count)
+{
     if (count == 0)
         clx::error(L, "bad argument #1 to 'ceil' (number expected, got no value)");
     if (clx::is_integer(args[0]))
@@ -71,28 +77,32 @@ static MultiValue math_ceil(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ math_cos: returns cosine of a number
-static MultiValue math_cos(LState *L, const LValue *args, size_t count) {
+static MultiValue math_cos(LState* L, const LValue* args, size_t count)
+{
     if (count == 0)
         clx::error(L, "bad argument #1 to 'cos' (number expected, got no value)");
     return MultiValue(clx::number(std::cos(clx::check_number(L, args[0]))));
 }
 
 //------------------ math_deg: converts radians to degrees
-static MultiValue math_deg(LState *L, const LValue *args, size_t count) {
+static MultiValue math_deg(LState* L, const LValue* args, size_t count)
+{
     if (count == 0)
         clx::error(L, "bad argument #1 to 'deg' (number expected, got no value)");
     return MultiValue(clx::number(clx::check_number(L, args[0]) * (180.0 / 3.14159265358979323846)));
 }
 
 //------------------ math_exp: returns e^x
-static MultiValue math_exp(LState *L, const LValue *args, size_t count) {
+static MultiValue math_exp(LState* L, const LValue* args, size_t count)
+{
     if (count == 0)
         clx::error(L, "bad argument #1 to 'exp' (number expected, got no value)");
     return MultiValue(clx::number(std::exp(clx::check_number(L, args[0]))));
 }
 
 //------------------ math_floor: returns largest integer <= x
-static MultiValue math_floor(LState *L, const LValue *args, size_t count) {
+static MultiValue math_floor(LState* L, const LValue* args, size_t count)
+{
     if (count == 0)
         clx::error(L, "bad argument #1 to 'floor' (number expected, got no value)");
     if (clx::is_integer(args[0]))
@@ -105,16 +115,17 @@ static MultiValue math_floor(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ math_fmod: returns remainder of x/y
-static MultiValue math_fmod(LState *L, const LValue *args, size_t count) {
+static MultiValue math_fmod(LState* L, const LValue* args, size_t count)
+{
     if (count < 2)
         clx::error(L, "bad argument #2 to 'fmod' (number expected, got no value)");
     if (clx::is_integer(args[0]) && clx::is_integer(args[1])) {
         int64_t d;
         clx::to_integer(args[1], d);
-        if (static_cast<uint64_t>(d) + 1u <= 1u) { /* special cases: -1 or 0 */
+        if (static_cast<uint64_t>(d) + 1u <= 1u) {
             if (d == 0)
                 clx::error(L, "bad argument #2 to 'fmod' (zero)");
-            return MultiValue(clx::integer(0)); /* avoid overflow with INT64_MIN % -1 */
+            return MultiValue(clx::integer(0));
         }
         int64_t a;
         clx::to_integer(args[0], a);
@@ -124,7 +135,8 @@ static MultiValue math_fmod(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ math_max: returns the maximum of its arguments
-static MultiValue math_max(LState *L, const LValue *args, size_t count) {
+static MultiValue math_max(LState* L, const LValue* args, size_t count)
+{
     if (count == 0)
         clx::error(L, "bad argument #1 to 'max' (number expected, got no value)");
     LValue m = args[0];
@@ -135,7 +147,8 @@ static MultiValue math_max(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ math_min: returns the minimum of its arguments
-static MultiValue math_min(LState *L, const LValue *args, size_t count) {
+static MultiValue math_min(LState* L, const LValue* args, size_t count)
+{
     if (count == 0)
         clx::error(L, "bad argument #1 to 'min' (number expected, got no value)");
     LValue m = args[0];
@@ -146,35 +159,40 @@ static MultiValue math_min(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ math_rad: converts degrees to radians
-static MultiValue math_rad(LState *L, const LValue *args, size_t count) {
+static MultiValue math_rad(LState* L, const LValue* args, size_t count)
+{
     if (count == 0)
         clx::error(L, "bad argument #1 to 'rad' (number expected, got no value)");
     return MultiValue(clx::number(clx::check_number(L, args[0]) * (3.14159265358979323846 / 180.0)));
 }
 
 //------------------ math_sin: returns sine of a number
-static MultiValue math_sin(LState *L, const LValue *args, size_t count) {
+static MultiValue math_sin(LState* L, const LValue* args, size_t count)
+{
     if (count == 0)
         clx::error(L, "bad argument #1 to 'sin' (number expected, got no value)");
     return MultiValue(clx::number(std::sin(clx::check_number(L, args[0]))));
 }
 
 //------------------ math_sqrt: returns square root of a number
-static MultiValue math_sqrt(LState *L, const LValue *args, size_t count) {
+static MultiValue math_sqrt(LState* L, const LValue* args, size_t count)
+{
     if (count == 0)
         clx::error(L, "bad argument #1 to 'sqrt' (number expected, got no value)");
     return MultiValue(clx::number(std::sqrt(clx::check_number(L, args[0]))));
 }
 
 //------------------ math_tan: returns tangent of a number
-static MultiValue math_tan(LState *L, const LValue *args, size_t count) {
+static MultiValue math_tan(LState* L, const LValue* args, size_t count)
+{
     if (count == 0)
         clx::error(L, "bad argument #1 to 'tan' (number expected, got no value)");
     return MultiValue(clx::number(std::tan(clx::check_number(L, args[0]))));
 }
 
 //------------------ math_frexp: breaks float into mantissa and exponent
-static MultiValue math_frexp(LState *L, const LValue *args, size_t count) {
+static MultiValue math_frexp(LState* L, const LValue* args, size_t count)
+{
     if (count == 0)
         clx::error(L, "bad argument #1 to 'frexp' (number expected, got no value)");
     double x = clx::check_number(L, args[0]);
@@ -184,7 +202,8 @@ static MultiValue math_frexp(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ math_ldexp: computes m * 2^e
-static MultiValue math_ldexp(LState *L, const LValue *args, size_t count) {
+static MultiValue math_ldexp(LState* L, const LValue* args, size_t count)
+{
     if (count < 2)
         clx::error(L, "bad argument #2 to 'ldexp' (number expected, got no value)");
     double m = clx::check_number(L, args[0]);
@@ -193,7 +212,8 @@ static MultiValue math_ldexp(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ math_log: returns log(x) or log(x, base)
-static MultiValue math_log(LState *L, const LValue *args, size_t count) {
+static MultiValue math_log(LState* L, const LValue* args, size_t count)
+{
     if (count == 0)
         clx::error(L, "bad argument #1 to 'log' (number expected, got no value)");
     double x = clx::check_number(L, args[0]);
@@ -205,7 +225,8 @@ static MultiValue math_log(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ math_modf: splits number into integer and fractional parts
-static MultiValue math_modf(LState *L, const LValue *args, size_t count) {
+static MultiValue math_modf(LState* L, const LValue* args, size_t count)
+{
     if (count == 0)
         clx::error(L, "bad argument #1 to 'modf' (number expected, got no value)");
     if (clx::is_integer(args[0]))
@@ -217,7 +238,8 @@ static MultiValue math_modf(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ math_tointeger: converts number to integer if possible
-static MultiValue math_tointeger(LState *L, const LValue *args, size_t count) {
+static MultiValue math_tointeger(LState* L, const LValue* args, size_t count)
+{
     if (count == 0)
         clx::error(L, "bad argument #1 to 'tointeger' (value expected)");
     int64_t i;
@@ -227,8 +249,9 @@ static MultiValue math_tointeger(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ math_random: returns pseudo-random number
-static MultiValue math_random(LState *L, const LValue *args, size_t count) {
-    auto &gen = rng();
+static MultiValue math_random(LState* L, const LValue* args, size_t count)
+{
+    auto& gen = rng();
     if (count == 0) {
         std::uniform_real_distribution<double> dist(0.0, 1.0);
         return MultiValue(clx::number(dist(gen)));
@@ -254,8 +277,9 @@ static MultiValue math_random(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ math_randomseed: seeds the random number generator
-static MultiValue math_randomseed(LState *L, const LValue *args, size_t count) {
-    auto &gen = rng();
+static MultiValue math_randomseed(LState* L, const LValue* args, size_t count)
+{
+    auto& gen = rng();
     if (count == 0) {
         std::random_device rd;
         uint64_t seed = (static_cast<uint64_t>(rd()) << 32) ^ rd();
@@ -271,7 +295,8 @@ static MultiValue math_randomseed(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ math_type: returns "integer" or "float" for a number
-static MultiValue math_type(LState *L, const LValue *args, size_t count) {
+static MultiValue math_type(LState* L, const LValue* args, size_t count)
+{
     if (count == 0)
         return MultiValue();
     ValueType t = args[0].type;
@@ -283,7 +308,8 @@ static MultiValue math_type(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ math_ult: unsigned less-than comparison of integers
-static MultiValue math_ult(LState *L, const LValue *args, size_t count) {
+static MultiValue math_ult(LState* L, const LValue* args, size_t count)
+{
     if (count < 2)
         clx::error(L, "bad argument #2 to 'ult' (number expected, got no value)");
     uint64_t a = static_cast<uint64_t>(clx::check_integer(L, args[0]));
@@ -321,7 +347,8 @@ static constexpr LazyReg math_funcs[] = {
 };
 
 //------------------ luastd_math: registers the math library into the global state
-void luastd_math(LState *L) {
+void luastd_math(LState* L)
+{
     LValue math_table = clx::table(L);
     clx::set_value(L, math_table, "pi", clx::number(3.14159265358979323846));
     clx::set_value(L, math_table, "huge", clx::number(INFINITY));
