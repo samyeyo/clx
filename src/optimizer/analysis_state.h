@@ -39,6 +39,7 @@ struct AnalysisState {
     std::set<std::string_view> int_returning_funcs;
     std::map<std::string_view, uint32_t> int_preserving_masks;
     std::set<std::string, std::less<>> int_typed_locals;
+    std::set<std::string, std::less<>> table_typed_locals;
 
     //------------------ Arena analysis data
     std::set<std::string_view> escaping_vars;
@@ -49,9 +50,11 @@ struct AnalysisState {
     std::map<std::pair<uint32_t, std::string_view>, std::set<std::string_view>> numeric_table_fields;
     std::set<std::string_view> direct_callables;
     std::set<std::string_view> fast_callables;
+    std::set<std::string_view> native_direct_funcs;
     std::map<std::string_view, uint32_t> func_param_counts;
     std::map<std::string_view, std::vector<bool>> func_param_native;
     std::set<std::string_view> reassigned_vars;
+    std::set<std::string_view> assigned_targets;
     std::set<std::string_view> int_numeric_arrays;
     //------------------ for_counter_names: numeric-for loop counter identifiers. Codegen emits
     std::set<std::string_view> for_counter_names;
@@ -72,23 +75,30 @@ struct AnalysisState {
     bool skip_block_braces = false;
     bool emit_raw_lambda = false;
     bool emit_fast_lambda = false;
+    bool emit_native_impl = false;
     bool in_function_def = false;
     bool in_fast_function = false;
     bool expect_multivalue = false;
+    bool in_native_impl = false;
+    std::string_view current_native_func;
+    std::set<std::string_view> native_emitted;
+    std::unordered_map<std::string_view, std::string> hoisted_tables;
     std::string_view current_fast_func;
     std::string ref_capture;
     std::string raw_lambda_cell;
     std::set<std::string_view> holder_cell_callables;
+    std::map<std::pair<uint32_t, std::string_view>, bool> register_friendly_locals;
     uint32_t current_func_body = 0xFFFFFFFF;
     uint32_t current_arena_func = 0xFFFFFFFF;
     uint32_t current_func_idx = 0xFFFFFFFF;
 };
 
 //------------------ is_purely_integer_expr: returns true if a node always evaluates to an integer
-inline bool is_purely_integer_expr(const ASTContext &ctx, const AnalysisState &state, uint32_t node_idx) {
+inline bool is_purely_integer_expr(const ASTContext& ctx, const AnalysisState& state, uint32_t node_idx)
+{
     if (node_idx == 0xFFFFFFFF || node_idx >= ctx.nodes.size())
         return false;
-    const auto &n = ctx.nodes[node_idx];
+    const auto& n = ctx.nodes[node_idx];
     if (n.type == NodeType::Integer)
         return true;
     if (n.type == NodeType::Identifier) {
@@ -117,11 +127,12 @@ inline bool is_purely_integer_expr(const ASTContext &ctx, const AnalysisState &s
 }
 
 //------------------ reassigned_with_non_int: true if the variable is assigned a value that is not
-// statically integer at any assignment site other than `decl_idx` (the site being considered)
+
 inline bool reassigned_with_non_int(
-    const ASTContext &ctx, const AnalysisState &state, std::string_view nm, uint32_t decl_idx) {
+    const ASTContext& ctx, const AnalysisState& state, std::string_view nm, uint32_t decl_idx)
+{
     for (uint32_t ni = 0; ni < ctx.nodes.size(); ++ni) {
-        const auto &n = ctx.nodes[ni];
+        const auto& n = ctx.nodes[ni];
         if (n.type != NodeType::Assignment)
             continue;
         for (uint32_t ti = 0; ti < n.as.assign.target_count; ++ti) {
@@ -141,10 +152,11 @@ inline bool reassigned_with_non_int(
 }
 
 //------------------ is_integer_typed_expr: stricter than is_purely_integer_expr
-inline bool is_integer_typed_expr(const ASTContext &ctx, const AnalysisState &state, uint32_t node_idx) {
+inline bool is_integer_typed_expr(const ASTContext& ctx, const AnalysisState& state, uint32_t node_idx)
+{
     if (node_idx == 0xFFFFFFFF || node_idx >= ctx.nodes.size())
         return false;
-    const auto &n = ctx.nodes[node_idx];
+    const auto& n = ctx.nodes[node_idx];
     if (n.type == NodeType::Integer)
         return true;
     if (n.type == NodeType::Identifier) {
@@ -173,7 +185,8 @@ inline bool is_integer_typed_expr(const ASTContext &ctx, const AnalysisState &st
 }
 
 //------------------ owner_of_node: node index of the innermost enclosing FunctionDef (0xFFFFFFFF = file scope)
-inline uint32_t owner_of_node(const AnalysisState &state, uint32_t node_idx) {
+inline uint32_t owner_of_node(const AnalysisState& state, uint32_t node_idx)
+{
     auto it = state.node_func_owner.find(node_idx);
     return it != state.node_func_owner.end() ? it->second : 0xFFFFFFFFu;
 }
