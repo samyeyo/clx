@@ -5,8 +5,8 @@
 // │  base.cpp · Base module (print, type, etc)  │
 // └─────────────────────────────────────────────┘
 
-#include "clx.h"
 #include "../include/clx_simd.h"
+#include "clx.h"
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
@@ -17,7 +17,8 @@
 namespace clx {
 
 //------------------ clx_error: raises an error (global error function)
-clx::MultiValue lua_error(clx::LState *L, const clx::LValue *args, size_t count) {
+clx::MultiValue lua_error(clx::LState* L, const clx::LValue* args, size_t count)
+{
     clx::LValue err_val = (count > 0) ? args[0] : clx::LValue();
 
     int level = 1;
@@ -35,7 +36,8 @@ clx::MultiValue lua_error(clx::LState *L, const clx::LValue *args, size_t count)
 }
 
 //------------------ clx_pcall: protected call (global pcall function)
-clx::MultiValue lua_pcall(clx::LState *L, const clx::LValue *args, size_t count) {
+clx::MultiValue lua_pcall(clx::LState* L, const clx::LValue* args, size_t count)
+{
     if (count == 0) {
         throw clx::LRuntimeException(clx::string(L, "bad argument #1 to 'pcall' (value expected)"));
     }
@@ -44,7 +46,8 @@ clx::MultiValue lua_pcall(clx::LState *L, const clx::LValue *args, size_t count)
 }
 
 //------------------ clx_xpcall: protected call with error handler (global xpcall function)
-clx::MultiValue lua_xpcall(clx::LState *L, const clx::LValue *args, size_t count) {
+clx::MultiValue lua_xpcall(clx::LState* L, const clx::LValue* args, size_t count)
+{
     if (count < 2) {
         throw clx::LRuntimeException(clx::string(L, "bad argument to 'xpcall' (2 arguments expected)"));
     }
@@ -56,7 +59,7 @@ clx::MultiValue lua_xpcall(clx::LState *L, const clx::LValue *args, size_t count
         clx::error(L, "bad argument #2 to 'xpcall' (function expected, got no value)");
 
     size_t arg_count = count - 2;
-    const clx::LValue *func_args = (arg_count > 0) ? (args + 2) : nullptr;
+    const clx::LValue* func_args = (arg_count > 0) ? (args + 2) : nullptr;
 
     size_t shadow_base = L->shadow_top;
     try {
@@ -75,7 +78,7 @@ clx::MultiValue lua_xpcall(clx::LState *L, const clx::LValue *args, size_t count
             results.push_back(ret[i]);
         return clx::MultiValue(results, L);
 
-    } catch (const clx::LRuntimeException &e) {
+    } catch (const clx::LRuntimeException& e) {
         L->shadow_top = shadow_base;
         clx::LValue err_obj = e.error_obj;
         clx::MultiValue msgh_ret;
@@ -88,7 +91,7 @@ clx::MultiValue lua_xpcall(clx::LState *L, const clx::LValue *args, size_t count
 
         return clx::MultiValue({ clx::boolean(false), msgh_ret.count > 0 ? msgh_ret[0] : clx::LValue() });
 
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         L->shadow_top = shadow_base;
         clx::LValue err_obj = clx::string(L, e.what());
         clx::MultiValue msgh_ret;
@@ -104,14 +107,16 @@ clx::MultiValue lua_xpcall(clx::LState *L, const clx::LValue *args, size_t count
 }
 
 //------------------ clx_getmetatable: returns the metatable of a value
-static MultiValue lua_getmetatable(LState *L, const LValue *args, size_t count) {
+static MultiValue lua_getmetatable(LState* L, const LValue* args, size_t count)
+{
     if (count < 1)
         return MultiValue();
     return MultiValue(clx::getmetatable(L, args[0]));
 }
 
 //------------------ clx_setmetatable: sets the metatable of a table
-static MultiValue lua_setmetatable(LState *L, const LValue *args, size_t count) {
+static MultiValue lua_setmetatable(LState* L, const LValue* args, size_t count)
+{
     if (count < 2)
         clx::error(L, "bad argument to 'setmetatable' (table expected)");
     clx::check_table(L, args[0]);
@@ -120,7 +125,8 @@ static MultiValue lua_setmetatable(LState *L, const LValue *args, size_t count) 
 }
 
 //------------------ clx_print: prints values to stdout (global print function)
-static MultiValue print(LState *L, const LValue *args, size_t count) {
+static MultiValue print(LState* L, const LValue* args, size_t count)
+{
     for (size_t i = 0; i < count; ++i) {
         std::cout << args[i].to_string(L);
         if (i < count - 1)
@@ -131,7 +137,8 @@ static MultiValue print(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ clx_collectgarbage: controls the garbage collector
-MultiValue collectgarbage(LState *L, const LValue *args, size_t arg_count) {
+MultiValue collectgarbage(LState* L, const LValue* args, size_t arg_count)
+{
     if (arg_count == 0 || !clx::is_string(args[0]))
         return MultiValue(clx::number(0.0));
     std::string_view opt(args[0].as_string(), args[0].string_len());
@@ -172,14 +179,33 @@ MultiValue collectgarbage(LState *L, const LValue *args, size_t arg_count) {
         return MultiValue(clx::string(L, "incremental"));
     }
     if (opt == "generational") {
-        L->gc_mode = LState::GCMode::Incremental; /* incremental-only collector */
+        L->gc_mode = LState::GCMode::Generational;
         return MultiValue(clx::string(L, "generational"));
+    }
+    if (opt == "mode") {
+        return MultiValue(clx::string(L, L->gc_mode == LState::GCMode::Generational ? "generational" : "incremental"));
+    }
+    if (opt == "stats") {
+        LTable* st = static_cast<LTable*>(L->create_table(0, 8).as_pointer());
+        st->settable(LValue(L->intern_string("mode")),
+            clx::string(L, L->gc_mode == LState::GCMode::Generational ? "generational" : "incremental"));
+        st->settable(LValue(L->intern_string("collects")), LValue(static_cast<int64_t>(L->gc_stats_collects)));
+        st->settable(LValue(L->intern_string("minors")), LValue(static_cast<int64_t>(L->gc_stats_minors)));
+        st->settable(LValue(L->intern_string("minor_freed_kb")),
+            LValue(static_cast<double>(L->gc_stats_minor_freed) / 1024.0));
+        st->settable(LValue(L->intern_string("major_freed_kb")),
+            LValue(static_cast<double>(L->gc_stats_major_freed) / 1024.0));
+        st->settable(LValue(L->intern_string("old_kb")),
+            LValue(static_cast<double>(L->gc_old_bytes) / 1024.0));
+        st->settable(LValue(L->intern_string("remembered_high")),
+            LValue(static_cast<int64_t>(L->gc_stats_remembered_high)));
+        return MultiValue(LValue(Table, st));
     }
     if (opt == "param") {
         if (arg_count < 2)
             clx::error(L, "bad argument #2 to 'collectgarbage' (option expected)");
         std::string_view param = clx::check_string(L, args[1]);
-        int *target = nullptr;
+        int* target = nullptr;
         int old_val;
         if (param == "pause")
             target = &L->gc_pause;
@@ -207,18 +233,20 @@ MultiValue collectgarbage(LState *L, const LValue *args, size_t arg_count) {
 }
 
 //------------------ clx_type: returns the type name of a value (global type function)
-static MultiValue type(LState *L, const LValue *args, size_t count) {
+static MultiValue type(LState* L, const LValue* args, size_t count)
+{
     if (count == 0) {
         clx::error(L, "bad argument #1 to 'type' (value expected)");
     }
-    const char *name = VALUE_TYPE_NAMES[static_cast<uint8_t>(args[0].type)];
+    const char* name = VALUE_TYPE_NAMES[static_cast<uint8_t>(args[0].type)];
     if (args[0].type == ValueType::Int64)
         name = "number";
     return MultiValue(clx::string(L, name));
 }
 
 //------------------ clx_assert: asserts a condition (global assert function)
-static MultiValue assert(LState *L, const LValue *args, size_t count) {
+static MultiValue assert(LState* L, const LValue* args, size_t count)
+{
     if (count == 0 || !clx::to_boolean(args[0])) {
         if (count > 1)
             throw LRuntimeException(args[1]);
@@ -228,10 +256,11 @@ static MultiValue assert(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ clx_tostring: converts value to string (global tostring function)
-static MultiValue tostring(LState *L, const LValue *args, size_t count) {
+static MultiValue tostring(LState* L, const LValue* args, size_t count)
+{
     if (count == 0)
         return MultiValue(LValue::istr("", 0));
-    const LValue &v = args[0];
+    const LValue& v = args[0];
     switch (v.type) {
     case String:
         return MultiValue(v);
@@ -257,16 +286,17 @@ static MultiValue tostring(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ clx_tonumber: converts value to number (global tonumber function)
-static MultiValue tonumber(LState *L, const LValue *args, size_t count) {
+static MultiValue tonumber(LState* L, const LValue* args, size_t count)
+{
     if (count == 0)
         return MultiValue();
-    const LValue &v = args[0];
+    const LValue& v = args[0];
     if (count >= 2 && args[1].type != Nil) {
         int64_t base = clx::check_integer(L, args[1]);
         if (base < 2 || base > 36)
             clx::error(L, "bad argument #2 to 'tonumber' (base out of range)");
-        const char *s = clx::check_string(L, v);
-        char *end;
+        const char* s = clx::check_string(L, v);
+        char* end;
         errno = 0;
         long long n = std::strtoll(s, &end, static_cast<int>(base));
         if (end == s || errno == ERANGE)
@@ -288,14 +318,16 @@ static MultiValue tonumber(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ clx_rawequal: compares two values without metamethods
-static MultiValue lua_rawequal(LState *L, const LValue *args, size_t count) {
+static MultiValue lua_rawequal(LState* L, const LValue* args, size_t count)
+{
     if (count < 2)
         clx::error(L, "bad argument to 'rawequal' (2 values expected)");
     return MultiValue(clx::boolean(clx::rawequal(args[0], args[1])));
 }
 
 //------------------ clx_rawget: gets table value without metamethods
-static MultiValue rawget(LState *L, const LValue *args, size_t count) {
+static MultiValue rawget(LState* L, const LValue* args, size_t count)
+{
     if (count < 2)
         clx::error(L, "bad argument #1 to 'rawget' (table expected)");
     clx::check_table(L, args[0]);
@@ -303,7 +335,8 @@ static MultiValue rawget(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ clx_rawset: sets table value without metamethods
-static MultiValue rawset(LState *L, const LValue *args, size_t count) {
+static MultiValue rawset(LState* L, const LValue* args, size_t count)
+{
     if (count < 3)
         clx::error(L, "bad argument #1 to 'rawset' (table expected)");
     clx::check_table(L, args[0]);
@@ -312,7 +345,8 @@ static MultiValue rawset(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ clx_rawlen: returns raw length of string or table without __len
-static MultiValue lua_rawlen(LState *L, const LValue *args, size_t count) {
+static MultiValue lua_rawlen(LState* L, const LValue* args, size_t count)
+{
     if (count < 1) {
         clx::error(L, "bad argument #1 to 'rawlen' (value expected)");
     }
@@ -325,7 +359,8 @@ static MultiValue lua_rawlen(LState *L, const LValue *args, size_t count) {
 static bool warnings_enabled = true;
 
 //------------------ clx_warn: issues a warning to stderr (global warn function)
-static MultiValue warn(LState *L, const LValue *args, size_t count) {
+static MultiValue warn(LState* L, const LValue* args, size_t count)
+{
     if (count == 0)
         return MultiValue();
 
@@ -354,12 +389,14 @@ static MultiValue warn(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ clx_require: stub require function (global require)
-static MultiValue require(LState *L, const LValue *args, size_t count) {
+static MultiValue require(LState* L, const LValue* args, size_t count)
+{
     return MultiValue();
 }
 
 //------------------ clx_next: returns next key-value pair from a table (global next function)
-static MultiValue lua_next(LState *L, const LValue *args, size_t count) {
+static MultiValue lua_next(LState* L, const LValue* args, size_t count)
+{
     if (count == 0)
         clx::error(L, "bad argument #1 to 'next' (table expected)");
     clx::check_table(L, args[0]);
@@ -368,15 +405,16 @@ static MultiValue lua_next(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ clx_pairs: returns iterator for key-value traversal (global pairs function)
-static MultiValue pairs(LState *L, const LValue *args, size_t count) {
+static MultiValue pairs(LState* L, const LValue* args, size_t count)
+{
     if (count == 0) {
         clx::error(L, "bad argument #1 to 'pairs' (value expected)");
     }
     LValue t = args[0];
 
     if (clx::is_table(t)) {
-        LTable *tbl = static_cast<LTable *>(t.as_pointer());
-        if (LTable *mt = tbl_metatable(tbl)) {
+        LTable* tbl = static_cast<LTable*>(t.as_pointer());
+        if (LTable* mt = tbl_metatable(tbl)) {
             LValue mt_pairs = mt->gettable(L->str_pairs);
             if (mt_pairs.type == Function) {
                 MultiValue ret = call_function_rooted(L, mt_pairs, &t, 1, __FILE__, __LINE__);
@@ -389,12 +427,13 @@ static MultiValue pairs(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ clx_select: selects a range of arguments (global select function)
-static clx::MultiValue select(clx::LState *L, const clx::LValue *args, size_t arg_count) {
+static clx::MultiValue select(clx::LState* L, const clx::LValue* args, size_t arg_count)
+{
     if (arg_count < 1) {
         clx::error(L, "bad argument #1 to 'select' (number expected, got no value)");
     }
 
-    const clx::LValue &arg1 = args[0];
+    const clx::LValue& arg1 = args[0];
 
     if (clx::is_string(arg1)) {
         if (arg1.string_len() == 1 && arg1.as_string()[0] == '#') {
@@ -431,11 +470,12 @@ static clx::MultiValue select(clx::LState *L, const clx::LValue *args, size_t ar
 }
 
 //------------------ clx_ipairs_iter: iterator function for ipairs traversal
-static MultiValue ipairs_iter(LState *L, const LValue *args, size_t count) {
+static MultiValue ipairs_iter(LState* L, const LValue* args, size_t count)
+{
     if (count < 2 || !clx::is_table(args[0]))
         return MultiValue();
 
-    LTable *t = static_cast<LTable *>(args[0].as_pointer());
+    LTable* t = static_cast<LTable*>(args[0].as_pointer());
     int64_t idx = args[1].type == Int64 ? args[1].as_integer() : static_cast<int64_t>(args[1].as_number());
     idx++;
 
@@ -454,15 +494,16 @@ static MultiValue ipairs_iter(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ clx_ipairs: returns iterator for array traversal (global ipairs function)
-static MultiValue ipairs(LState *L, const LValue *args, size_t count) {
+static MultiValue ipairs(LState* L, const LValue* args, size_t count)
+{
     if (count == 0) {
         clx::error(L, "bad argument #1 to 'ipairs' (value expected)");
     }
     LValue t = args[0];
 
     if (clx::is_table(t)) {
-        LTable *tbl = static_cast<LTable *>(t.as_pointer());
-        if (LTable *mt = tbl_metatable(tbl)) {
+        LTable* tbl = static_cast<LTable*>(t.as_pointer());
+        if (LTable* mt = tbl_metatable(tbl)) {
             LValue mt_ipairs = mt->gettable(LValue(L->intern_string("__ipairs")));
             if (mt_ipairs.type == Function) {
                 MultiValue ret = call_function_rooted(L, mt_ipairs, &t, 1, __FILE__, __LINE__);
@@ -482,7 +523,8 @@ static MultiValue ipairs(LState *L, const LValue *args, size_t count) {
 }
 
 //------------------ luastd_base: registers all base library functions into the global table
-void luastd_base(LState *L) {
+void luastd_base(LState* L)
+{
     LValue g = LValue(Table, L->_G);
     clx::set_functions(L, g,
         { { "print", print }, { "require", require }, { "error", lua_error }, { "assert", assert },
