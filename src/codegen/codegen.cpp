@@ -1769,8 +1769,7 @@ void CodeEmitter::emitCallExpression(const ASTNode& node, uint32_t node_idx)
             out << ", _dyn_buf, _dyn_count, \"" << ctx.filename << "\", " << node.line << ");\n";
         }
 
-        if (is_method_call)
-            out << "    L->shadow_top -= 2;\n";
+        out << "    L->shadow_top = _ssave_call;\n";
 
         if (want_multi)
             out << "    return _main_ret;\n";
@@ -5721,9 +5720,8 @@ void CodeEmitter::emitGenericForStatement(const ASTNode& node, uint32_t node_idx
     out << "    clx::LValue _var_" << node_idx << " = (_triplet_" << node_idx << ".count > 2) ? _triplet_" << node_idx
         << "[2] : clx::LValue();\n";
 
-    //------------------ Root the iterator triplet for the whole loop: _f/_s/_var live in plain
+    //------------------ Root the iterator triplet for the whole loop: _f/_s/_var live in plain locals
 
-    out << "    size_t _gf_base_" << node_idx << " = L->shadow_top;\n";
     out << "    L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&_f_" << node_idx << ".val, &_f_" << node_idx
         << ".type);\n";
     out << "    L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&_s_" << node_idx << ".val, &_s_" << node_idx
