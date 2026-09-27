@@ -123,7 +123,11 @@ computations, and `--size` when binary size matters more.
 
 | Variable | What it means |
 |----------|---------------|
-| `CXX` | Not used — the C++ compiler is chosen when clx is built, not at runtime. |
+| `CLX_CXX` | C++ compiler used to build your programs (falls back to the compiler that built clx). |
+| `CLX_ARCH` | Target CPU for clx's own build (`sse2`, `avx`, `avx2`, `avx512`, `native` on x64). Opting into AVX2 or newer enables faster SIMD paths in the runtime. |
+| `CLX_GC_MODE` | Collector for compiled programs: `generational` (default) or `incremental` (the legacy collector). |
+| `CLX_GC_MINOR_KB` | Kilobytes allocated between minor collections (default 8192). Lower values collect young garbage sooner. |
+| `CLX_GC_MAJOR_KB` | Old-generation budget in kilobytes that triggers a full collection (default 32768). |
 
 ## Exit codes
 
