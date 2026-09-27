@@ -200,8 +200,10 @@ static constexpr uint8_t LFLAG_META_LIST = 0x04;
 static constexpr uint8_t LFLAG_SLAB = 0x08;
 static constexpr uint8_t LFLAG_REMEMBERED = 0x10;
 static constexpr uint8_t LFLAG_GC_PIN = 0x20;
+static constexpr uint8_t LFLAG_FINALIZABLE = 0x40;
 
 struct LState;
+struct FuncArena;
 struct TValue;
 struct LValue;
 
@@ -635,14 +637,18 @@ struct LReg {
 //------------------ Raw C function pointer type
 using RawCFunction = MultiValue (*)(LState*, const LValue*, size_t);
 
+MultiValue call_cfunc_rooted(LState* L, RawCFunction f, const LValue* args, size_t count);
+
 //------------------ C function registration (lazy init)
 struct LazyReg {
     const char* name;
     RawCFunction func;
 };
 
-//------------------ Hash/array hybrid table
-static constexpr uint64_t HASH_EMPTY = 0xFFFFFFFFFFFFFFFFULL;
+//------------------ Hash/array hybrid table. EMPTY = 0 so a calloc'd entries array is
+// immediately a valid empty table (ktype 0 = Nil + payload 0 = EMPTY); TOMBSTONE
+// stays distinct so array-evacuation slots remain probe-continuation markers.
+static constexpr uint64_t HASH_EMPTY = 0;
 static constexpr uint64_t HASH_TOMBSTONE = 0xFFFFFFFFFFFFFFFEULL;
 
 struct alignas(8) HashEntry {
@@ -693,6 +699,11 @@ struct LTable : public LHeader {
 
     LValue gettable(const LValue& key);
     void settable(const LValue& key, const LValue& val);
+    //------------------ op_direct: single-walk fused t[k] = t[k] <op> amount. A raw
+    // miss stores the nil-case arithmetic only when nil_ok (zero-index-proven);
+    // otherwise it runs the full generic get/compute/set path so plain tables
+    // still raise arithmetic-on-nil and unknown metatables are consulted.
+    void op_direct(LState* L, const LValue& obj, const LValue& key, double amount, int op_kind, bool nil_ok);
 
     LValue get_value(LState* L, const LValue& key);
     void set_value(LState* L, const LValue& key, const LValue& val);
@@ -700,6 +711,10 @@ struct LTable : public LHeader {
     void bind(const char* name, const LValue& val);
     void bind(LState* L, const char* name, CFunctionType func);
     void bind_all(LState* L, std::initializer_list<LReg> funcs);
+
+    //------------------ presize_hash: pre-allocate hash storage for `expected`
+    //------------------ entries at 1/2 load; no-op when storage is already large enough.
+    void presize_hash(size_t expected);
 
 private:
     void resize_hash(size_t new_size);
@@ -821,9 +836,9 @@ static CLX_INLINE_HOT uint64_t lvalue_hash(const LValue& key)
         if (key.val.payload.u64 == 0)
             return swar_hash_8("", 0);
         const char* ptr = static_cast<const char*>(key.val.payload.ptr);
-        uint64_t h;
-        clx_memcpy(&h, ptr - 16, 8);
-        return h;
+        uint32_t h_low;
+        clx_memcpy(&h_low, ptr - 16, 4);
+        return h_low;
     }
     if (key.type == ValueType::Int64) {
         double vd = static_cast<double>(key.val.payload.i64);
@@ -870,7 +885,7 @@ struct StringArena {
         Block* next;
 
         Block(size_t cap)
-            : base(new char[cap]())
+            : base(new char[cap])
             , used(0)
             , capacity(cap)
             , next(nullptr)
@@ -919,12 +934,12 @@ struct StringArena {
     }
 };
 
-//------------------ String interning pool
+//------------------ String interning pool. Slots hold only the baked pointer; the cached
+// hash-low and length live in the string header (baked-16 / baked-8), keeping slots at
+// 8 bytes so rehash traffic stays 3x smaller than pointer+hash+len entries.
 struct StringPool {
     struct Slot {
         char* baked;
-        uint64_t hash;
-        uint32_t len;
 
         bool empty() const { return baked == nullptr; }
     };
@@ -960,7 +975,7 @@ struct StringPool {
                 count++;
                 return s.baked;
             }
-            if (s.hash == h && s.len == static_cast<uint32_t>(len) && clx_memcmp(s.baked, str, len) == 0)
+            if (slot_matches(s.baked, str, len, h))
                 return s.baked;
             idx = (idx + 1) & mask;
         }
@@ -980,7 +995,7 @@ struct StringPool {
                 count++;
                 return s.baked;
             }
-            if (s.hash == h && s.len == static_cast<uint32_t>(len) && clx_memcmp(s.baked, prealloc, len) == 0) {
+            if (slot_matches(s.baked, prealloc, len, h)) {
                 delete[] (prealloc - 16);
                 return s.baked;
             }
@@ -998,7 +1013,7 @@ struct StringPool {
             const Slot& s = slots[idx];
             if (s.empty())
                 return nullptr;
-            if (s.hash == h && s.len == static_cast<uint32_t>(len) && clx_memcmp(s.baked, str, len) == 0)
+            if (slot_matches(s.baked, str, len, h))
                 return s.baked;
             idx = (idx + 1) & mask;
         }
@@ -1038,8 +1053,6 @@ struct StringPool {
 
             Slot& s = slots[entries[i].slot];
             s.baked = arena_ptr + 16;
-            s.hash = entries[i].hash;
-            s.len = len32;
 
             size_t entry_size = 16 + entries[i].len + 1;
             arena_ptr += (entry_size + 15) & ~size_t(15);
@@ -1048,6 +1061,26 @@ struct StringPool {
     }
 
 private:
+    //------------------ slot_matches: probe compare via the baked header (h_low at -16, len at -8)
+    static bool slot_matches(const char* baked, const char* str, size_t len, uint64_t h)
+    {
+        uint32_t s_low;
+        uint32_t s_len;
+        clx_memcpy(&s_low, baked - 16, 4);
+        clx_memcpy(&s_len, baked - 8, 4);
+        return s_low == static_cast<uint32_t>(h) && s_len == static_cast<uint32_t>(len)
+            && clx_memcmp(baked, str, len) == 0;
+    }
+
+    //------------------ slot_hash: cached header hash (low 32 bits; index bits are identical
+    // to the original full-hash index for any capacity below 2^31)
+    static uint64_t slot_hash(const char* baked)
+    {
+        uint32_t s_low;
+        clx_memcpy(&s_low, baked - 16, 4);
+        return s_low;
+    }
+
     Slot make_slot(const char* str, size_t len, uint64_t h)
     {
         size_t total = 16 + len + 1;
@@ -1059,7 +1092,7 @@ private:
         clx_memcpy(mem + 8, &len32, 4);
         clx_memcpy(mem + 16, str, len);
         mem[16 + len] = '\0';
-        return Slot { mem + 16, h, len32 };
+        return Slot { mem + 16 };
     }
 
     void rehash(size_t new_cap)
@@ -1071,7 +1104,7 @@ private:
         size_t mask = new_cap - 1;
         for (size_t i = 0; i < old_cap; ++i) {
             if (!old[i].empty()) {
-                size_t idx = old[i].hash & mask;
+                size_t idx = slot_hash(old[i].baked) & mask;
                 while (!slots[idx].empty())
                     idx = (idx + 1) & mask;
                 slots[idx] = old[i];
@@ -1185,7 +1218,6 @@ struct LState {
     size_t object_count;
     size_t gc_bytes_threshold;
     size_t allocated_bytes = 0;
-    size_t gc_headroom_override = 0;
 
     size_t get_memory_usage() const { return allocated_bytes; }
 
@@ -1291,6 +1323,11 @@ struct LState {
     std::vector<LUpValue> gc_remembered_cells;
     std::unordered_set<const LValue*> gc_remembered_cell_set;
 
+    //------------------ Registered per-function arenas (arena tables live outside
+    //------------------ allocated_objects, so each mark phase must clear their marks)
+
+    FuncArena* active_arenas = nullptr;
+
     //------------------ GC instrumentation (generational.md step 1)
     size_t gc_stats_collects = 0;
     size_t gc_stats_minors = 0;
@@ -1367,11 +1404,13 @@ struct LState {
     void register_loaded_module(const std::string& name, const LValue& module);
 };
 
-//------------------ Rooted call wrappers: push args on the shadow stack (GC rooting) around a call, then restore
+//------------------ Rooted call wrappers: push func + args on the shadow stack (GC rooting) around a call, then restore
 CLX_INLINE_HOT MultiValue call_function_rooted(
     LState* L, const LValue& func, const LValue* args, size_t count, const char* file, int line)
 {
     size_t base = L->shadow_top;
+    L->shadow_stack[L->shadow_top++]
+        = TypedSlot(const_cast<TValue*>(&func.val), const_cast<ValueType*>(&func.type));
     for (size_t i = 0; i < count; ++i)
         L->shadow_stack[L->shadow_top++]
             = TypedSlot(const_cast<TValue*>(&args[i].val), const_cast<ValueType*>(&args[i].type));
@@ -1384,6 +1423,8 @@ CLX_INLINE_HOT MultiValue call_direct_rooted(
     LState* L, const LValue& func, const LValue* args, size_t count, const char* file, int line)
 {
     size_t base = L->shadow_top;
+    L->shadow_stack[L->shadow_top++]
+        = TypedSlot(const_cast<TValue*>(&func.val), const_cast<ValueType*>(&func.type));
     for (size_t i = 0; i < count; ++i)
         L->shadow_stack[L->shadow_top++] = TypedSlot(const_cast<TValue*>(&args[i].val), const_cast<ValueType*>(&args[i].type));
     MultiValue ret = call_direct(L, func, args, count, file, line);
@@ -1393,6 +1434,33 @@ CLX_INLINE_HOT MultiValue call_direct_rooted(
 
 //------------------ Rooted call wrapper for direct C function pointers (hoisted builtins, direct impls)
 CLX_INLINE_HOT MultiValue call_cfunc_rooted(LState* L, CFunctionType f, const LValue* args, size_t count)
+{
+    size_t base = L->shadow_top;
+    for (size_t i = 0; i < count; ++i)
+        L->shadow_stack[L->shadow_top++]
+            = TypedSlot(const_cast<TValue*>(&args[i].val), const_cast<ValueType*>(&args[i].type));
+    MultiValue ret = f(L, args, count);
+    L->shadow_top = base;
+    return ret;
+}
+
+//------------------ Raw pointer overload: skips std::function construction on hot builtin calls
+CLX_INLINE_HOT MultiValue call_cfunc_rooted(LState* L, RawCFunction f, const LValue* args, size_t count)
+{
+    size_t base = L->shadow_top;
+    for (size_t i = 0; i < count; ++i)
+        L->shadow_stack[L->shadow_top++]
+            = TypedSlot(const_cast<TValue*>(&args[i].val), const_cast<ValueType*>(&args[i].type));
+    MultiValue ret = f(L, args, count);
+    L->shadow_top = base;
+    return ret;
+}
+
+//------------------ Rooted direct closure invocation: roots args[] across a
+// direct std::function call (the is_direct/self-call fast path), which would
+// otherwise leave survivor-aged arguments invisible to collections running
+// inside the callee. Same discipline as the *_rooted wrappers above.
+CLX_INLINE_HOT MultiValue call_cfunc_direct(LState* L, const CFunctionType& f, const LValue* args, size_t count)
 {
     size_t base = L->shadow_top;
     for (size_t i = 0; i < count; ++i)
@@ -1787,16 +1855,41 @@ struct FuncArenaBlock {
 };
 
 struct FuncArena {
-    FuncArenaBlock* blocks;
-    char* ptr;
-    char* end;
-    size_t block_size;
+    FuncArenaBlock* blocks = nullptr;
+    char* ptr = nullptr;
+    char* end = nullptr;
+    size_t block_size = 0;
+    LState* owner = nullptr;
+    FuncArena* next_active = nullptr;
+    LTable* tables = nullptr;
+
+    FuncArena() = default;
+    FuncArena(const FuncArena&) = delete;
+    FuncArena& operator=(const FuncArena&) = delete;
+    ~FuncArena();
 };
+
+//------------------ Unlink an arena from the state's active-arena registry.
+CLX_INLINE void arena_unregister(FuncArena* a)
+{
+    LState* L = a->owner;
+    if (!L)
+        return;
+    FuncArena** pp = &L->active_arenas;
+    while (*pp && *pp != a)
+        pp = &(*pp)->next_active;
+    if (*pp == a)
+        *pp = a->next_active;
+    a->owner = nullptr;
+    a->next_active = nullptr;
+    a->tables = nullptr;
+}
 
 CLX_INLINE_HOT void arena_init(FuncArena* a, size_t size)
 {
     if (size < 64)
         size = 64;
+    arena_unregister(a);
     a->blocks = nullptr;
     a->ptr = nullptr;
     a->end = nullptr;
@@ -1823,6 +1916,7 @@ CLX_INLINE_HOT void* arena_alloc(FuncArena* a, size_t bytes, size_t align = 8)
 
 CLX_INLINE_HOT void arena_reset(FuncArena* a)
 {
+    arena_unregister(a);
     FuncArenaBlock* b = a->blocks;
     while (b) {
         FuncArenaBlock* n = b->next;
@@ -1832,6 +1926,13 @@ CLX_INLINE_HOT void arena_reset(FuncArena* a)
     a->blocks = nullptr;
     a->ptr = nullptr;
     a->end = nullptr;
+}
+
+//------------------ Runs on scope exit too, so C++ unwinding from a Lua error
+//------------------ unregisters the arena instead of leaving a dangling entry.
+CLX_INLINE FuncArena::~FuncArena()
+{
+    arena_reset(this);
 }
 
 CLX_INLINE_HOT LValue arena_create_table(LState* L, FuncArena* a, size_t asize, size_t hsize)
@@ -1850,6 +1951,15 @@ CLX_INLINE_HOT LValue arena_create_table(LState* L, FuncArena* a, size_t asize, 
     char* mem = static_cast<char*>(arena_alloc(a, total));
     LTable* t = new (mem) LTable();
     t->flags |= LFLAG_ARENA;
+    //------------------ Per-arena table list (via LHeader::next, which arena
+    //------------------ tables never use for heap chains) + registry for mark clearing
+    t->next = a->tables;
+    a->tables = t;
+    if (!a->owner) {
+        a->owner = L;
+        a->next_active = L->active_arenas;
+        L->active_arenas = a;
+    }
     if (asize > 0) {
         t->array = reinterpret_cast<TValue*>(mem + header_sz);
         t->array_types = reinterpret_cast<ValueType*>(mem + header_sz + array_sz);
@@ -2159,12 +2269,12 @@ CLX_INLINE_HOT LValue eq(LState* L, const LValue& a, const LValue& b)
             if (mt && mt == mt_b) {
                 LValue mm = mt->gettable(LValue(L->intern_string("__eq")));
                 if (mm.type != ValueType::Nil)
-                    return call_bin_metamethod(L, a, b, "__eq");
+                    return LValue(call_bin_metamethod(L, a, b, "__eq").as_bool());
             }
         }
         return LValue(a.val.payload.ptr == b.val.payload.ptr);
     }
-    return call_bin_metamethod(L, a, b, "__eq");
+    return LValue(false);
 }
 
 //------------------ Float to integer conversion (integral + in int64 range)
@@ -2274,7 +2384,7 @@ CLX_INLINE LValue lt(LState* L, const LValue& a, const LValue& b)
     }
     if (a.type == ValueType::String && b.type == ValueType::String)
         return a < b;
-    return call_bin_metamethod(L, a, b, "__lt");
+    return LValue(call_bin_metamethod(L, a, b, "__lt").as_bool());
 }
 
 CLX_INLINE LValue le(LState* L, const LValue& a, const LValue& b)
@@ -2289,7 +2399,7 @@ CLX_INLINE LValue le(LState* L, const LValue& a, const LValue& b)
     }
     if (a.type == ValueType::String && b.type == ValueType::String)
         return a <= b;
-    return call_bin_metamethod(L, a, b, "__le");
+    return LValue(call_bin_metamethod(L, a, b, "__le").as_bool());
 }
 
 //------------------ Length operator with metamethod fallback
@@ -2540,7 +2650,7 @@ CLX_INLINE_HOT LValue table_get(LState* L, const LValue& obj, const LValue& key)
 
         if (key.type == ValueType::Int64) {
             int64_t idx = key.val.payload.i64;
-            if (static_cast<uint64_t>(idx - 1) < t->array_cap) {
+            if (static_cast<uint64_t>(idx - 1) < t->array_size) {
                 LValue direct(t->array[idx - 1], t->array_types[idx - 1]);
                 if (direct.type != ValueType::Nil)
                     return direct;
@@ -2548,7 +2658,7 @@ CLX_INLINE_HOT LValue table_get(LState* L, const LValue& obj, const LValue& key)
         } else if (key.type == ValueType::Double) {
             double d = key.val.payload.f64;
             int64_t idx = static_cast<int64_t>(d);
-            if (d == static_cast<double>(idx) && static_cast<uint64_t>(idx - 1) < t->array_cap) {
+            if (d == static_cast<double>(idx) && static_cast<uint64_t>(idx - 1) < t->array_size) {
                 LValue direct(t->array[idx - 1], t->array_types[idx - 1]);
                 if (direct.type != ValueType::Nil)
                     return direct;
@@ -2577,14 +2687,25 @@ CLX_INLINE_HOT LValue table_get(LState* L, const LValue& obj, const LValue& key)
 
 extern thread_local LState* clx_current_L;
 
+//------------------ Fill array gaps with nil so recycled buffers never expose
+// stale slots: a sparse append (t[5] = x on a smaller table) must read back
+// nil in the gap, and the collector must never see stale GC references there.
+CLX_INLINE void table_fill_gap(LTable* t, size_t from, size_t to)
+{
+    for (size_t j = from; j < to; ++j) {
+        t->array[j] = TValue();
+        t->array_types[j] = Nil;
+    }
+}
+
 //------------------ Generational write barrier for stores into an LTable without an
 
 CLX_INLINE_HOT void gc_barrier_table(LTable* owner, const LValue& newval)
 {
-    if (owner->age != AGE_OLD || !newval.is_gc_obj())
+    if (owner->age == AGE_YOUNG || !newval.is_gc_obj())
         return;
     LHeader* nv = static_cast<LHeader*>(newval.as_pointer());
-    if (!nv || nv->age != AGE_YOUNG)
+    if (!nv || nv->age == AGE_OLD)
         return;
     if (clx_current_L)
         clx_current_L->gc_remember(static_cast<LHeader*>(owner));
@@ -2597,7 +2718,7 @@ CLX_INLINE_HOT void gc_barrier_cell(const LUpValue& cell, const LValue& newval)
     if (!clx_current_L || !newval.is_gc_obj() || !cell)
         return;
     LHeader* nv = static_cast<LHeader*>(newval.as_pointer());
-    if (nv && nv->age == AGE_YOUNG)
+    if (nv && nv->age != AGE_OLD)
         clx_current_L->gc_remember_cell(cell);
 }
 
@@ -2619,6 +2740,9 @@ CLX_INLINE void table_set(LState* L, const LValue& obj, const LValue& key, const
         if (key.type == ValueType::Int64) {
             int64_t k = key.val.payload.i64;
             if (static_cast<uint64_t>(k - 1) < t->array_cap) {
+                gc_barrier_table(L, t, val);
+                if (static_cast<uint64_t>(k - 1) > t->array_size)
+                    table_fill_gap(t, t->array_size, static_cast<size_t>(k) - 1);
                 t->array[k - 1] = val.val;
                 t->array_types[k - 1] = val.type;
                 if (static_cast<size_t>(k) > t->array_size)
@@ -2629,6 +2753,9 @@ CLX_INLINE void table_set(LState* L, const LValue& obj, const LValue& key, const
             double d = key.val.payload.f64;
             int64_t idx = static_cast<int64_t>(d);
             if (d == static_cast<double>(idx) && static_cast<uint64_t>(idx - 1) < t->array_cap) {
+                gc_barrier_table(L, t, val);
+                if (static_cast<uint64_t>(idx - 1) > t->array_size)
+                    table_fill_gap(t, t->array_size, static_cast<size_t>(idx) - 1);
                 t->array[idx - 1] = val.val;
                 t->array_types[idx - 1] = val.type;
                 if (static_cast<size_t>(idx) > t->array_size)
@@ -2636,6 +2763,9 @@ CLX_INLINE void table_set(LState* L, const LValue& obj, const LValue& key, const
                 return;
             }
         }
+        gc_barrier_table(L, t, val);
+        if (key.is_gc_obj())
+            gc_barrier_table(L, t, key);
         t->set_value(L, key, val);
         return;
     } else if (obj.type == ValueType::UserData) {
@@ -2666,7 +2796,7 @@ CLX_INLINE LValue table_get_int(LState* L, const LValue& obj, size_t idx)
 
     if (obj.type == ValueType::Table) {
         LTable* t = static_cast<LTable*>(obj.as_pointer());
-        if (idx - 1 < t->array_cap)
+        if (idx - 1 < t->array_size)
             return LValue(t->array[idx - 1], t->array_types[idx - 1]);
         LValue result = t->get_value(L, key_val);
         if (result.type != ValueType::Nil)
@@ -2703,6 +2833,8 @@ CLX_INLINE void table_set_int(LState* L, const LValue& obj, size_t idx, const LV
         LTable* t = static_cast<LTable*>(obj.as_pointer());
         if (idx - 1 < t->array_cap) {
             gc_barrier_table(L, t, val);
+            if (idx - 1 > t->array_size)
+                table_fill_gap(t, t->array_size, idx - 1);
             t->array[idx - 1] = val.val;
             t->array_types[idx - 1] = val.type;
             if (static_cast<size_t>(idx) > t->array_size)
@@ -2760,49 +2892,61 @@ CLX_INLINE_HOT void table_set_direct(LState* L, const LValue& obj, const LValue&
     table_set(L, obj, key, val);
 }
 
+//------------------ table_op_amount: fused-op constant as LValue with int fidelity
+// for integral doubles (mirrors the clx::integer const the unfused path emits)
+CLX_INLINE_HOT LValue table_op_amount(double amount)
+{
+    if (amount >= -9007199254740992.0 && amount <= 9007199254740992.0
+        && static_cast<double>(static_cast<int64_t>(amount)) == amount)
+        return LValue(static_cast<int64_t>(amount));
+    return LValue(amount);
+}
+
+//------------------ table_op_apply: fused-op arithmetic identical to clx add/sub/mul/div
+CLX_INLINE_HOT LValue table_op_apply(LState* L, const LValue& a, const LValue& b, int op_kind)
+{
+    if (op_kind == 0)
+        return add(L, a, b);
+    if (op_kind == 1)
+        return sub(L, a, b);
+    if (op_kind == 2)
+        return mul(L, a, b);
+    return div(L, a, b);
+}
+
 //------------------ Direct table arithmetic: t[k] = t[k] op amount
-template <typename Op, typename NilCase>
-CLX_INLINE_HOT void table_op(LState* L, const LValue& obj, const LValue& key, double amount, Op op, NilCase nil_case,
-    LValue (*fallback)(LState*, const LValue&, const LValue&))
+CLX_INLINE_HOT void table_op(LState* L, const LValue& obj, const LValue& key, double amount, int op_kind,
+    bool nil_ok)
 {
     if (obj.type == ValueType::Table) {
-        LTable* t = static_cast<LTable*>(obj.val.payload.ptr);
-        LValue val = t->gettable(key);
-        if (val.type == ValueType::Nil) {
-            t->settable(key, nil_case(amount));
-            return;
-        }
-        if (val.type == ValueType::Double) {
-            t->settable(key, LValue(op(val.val.payload.f64, amount)));
-            return;
-        }
-        if (val.type == ValueType::Int64) {
-            t->settable(key, LValue(op(static_cast<double>(val.val.payload.i64), amount)));
-            return;
-        }
+        static_cast<LTable*>(obj.val.payload.ptr)->op_direct(L, obj, key, amount, op_kind, nil_ok);
+        return;
     }
-    table_set(L, obj, key, fallback(L, table_get(L, obj, key), LValue(amount)));
+    LValue amt = table_op_amount(amount);
+    table_set(L, obj, key, table_op_apply(L, table_get(L, obj, key), amt, op_kind));
 }
 
-CLX_INLINE_HOT void table_increment(LState* L, const LValue& obj, const LValue& key, double amount)
+CLX_INLINE_HOT void table_increment(LState* L, const LValue& obj, const LValue& key, double amount,
+    bool nil_ok = false)
 {
-    table_op(L, obj, key, amount, [](double a, double b) { return a + b; }, [](double b) { return LValue(b); }, add);
+    table_op(L, obj, key, amount, 0, nil_ok);
 }
 
-CLX_INLINE_HOT void table_decrement(LState* L, const LValue& obj, const LValue& key, double amount)
+CLX_INLINE_HOT void table_decrement(LState* L, const LValue& obj, const LValue& key, double amount,
+    bool nil_ok = false)
 {
-    table_op(L, obj, key, amount, [](double a, double b) { return a - b; }, [](double b) { return LValue(-b); }, sub);
+    table_op(L, obj, key, amount, 1, nil_ok);
 }
 
-CLX_INLINE_HOT void table_multiply(LState* L, const LValue& obj, const LValue& key, double amount)
+CLX_INLINE_HOT void table_multiply(LState* L, const LValue& obj, const LValue& key, double amount,
+    bool nil_ok = false)
 {
-    table_op(L, obj, key, amount, [](double a, double b) { return a * b; }, [](double b) { return LValue(0.0); }, mul);
+    table_op(L, obj, key, amount, 2, nil_ok);
 }
 
-CLX_INLINE_HOT void table_divide(LState* L, const LValue& obj, const LValue& key, double amount)
+CLX_INLINE_HOT void table_divide(LState* L, const LValue& obj, const LValue& key, double amount, bool nil_ok = false)
 {
-    table_op(
-        L, obj, key, amount, [](double a, double b) { return a / b; }, [](double b) { return LValue(0.0 / b); }, div);
+    table_op(L, obj, key, amount, 3, nil_ok);
 }
 
 MultiValue str_len(LState*, const LValue*, size_t);
