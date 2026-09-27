@@ -177,7 +177,10 @@ static MultiValue make_lines_iter(LState *L, FileUd *f) {
         return MultiValue(line);
     };
 
-    return MultiValue({ L->create_closure(CFunctionType(iter)), LValue(u), nil() });
+    L->root_value(LValue(UserData, u));
+    MultiValue ret({ L->create_closure(CFunctionType(iter)), LValue(u), nil() });
+    L->unroot_value(LValue(UserData, u));
+    return ret;
 }
 
 static MultiValue file_read_args(LState *L, FileUd *f, const LValue *a, size_t c, bool lenient = false) {
@@ -285,6 +288,8 @@ static LValue make_file(LState *L, FILE *fp, bool close_on_gc, bool is_pipe = fa
 
     LTable *mt = static_cast<LTable *>(L->create_table().as_pointer());
     LValue file_mt(Table, mt);
+    L->root_value(LValue(UserData, ud));
+    L->root_value(file_mt);
 
     auto meth_close = [](LState *L, const LValue *a, size_t c) -> MultiValue {
         FileUd *f = as_file(L, a[0]);
@@ -407,6 +412,8 @@ static LValue make_file(LState *L, FILE *fp, bool close_on_gc, bool is_pipe = fa
             { "seek", meth_seek }, { "setvbuf", meth_setvbuf }, { "write", meth_write }, { "__gc", meth_gc } });
     mt->settable(LValue(L->intern_string("__index")), LValue(Table, mt));
     ud->metatable = mt;
+    L->unroot_value(LValue(UserData, ud));
+    L->unroot_value(file_mt);
     return LValue(UserData, ud);
 }
 
@@ -419,6 +426,8 @@ static LValue get_std_file(LState *L, FILE *fp) {
 
     LTable *mt = static_cast<LTable *>(L->create_table().as_pointer());
     LValue file_mt(Table, mt);
+    L->root_value(LValue(UserData, ud));
+    L->root_value(file_mt);
 
     auto meth_close = [](LState *L, const LValue *a, size_t c) -> MultiValue { return MultiValue(boolean(true)); };
 
@@ -469,6 +478,8 @@ static LValue get_std_file(LState *L, FILE *fp) {
             { "seek", meth_seek }, { "write", meth_write } });
     mt->settable(LValue(L->intern_string("__index")), LValue(Table, mt));
     ud->metatable = mt;
+    L->unroot_value(LValue(UserData, ud));
+    L->unroot_value(file_mt);
     return LValue(UserData, ud);
 }
 
@@ -476,9 +487,11 @@ static LValue default_input;
 static LValue default_output;
 
 static void set_default(LState *L, LValue &slot, const LValue &v) {
-    slot = v;
-    if (L)
+    if (L) {
+        L->unroot_value(slot);
         L->root_value(v);
+    }
+    slot = v;
 }
 
 static MultiValue io_open(LState *L, const LValue *args, size_t count) {
@@ -582,7 +595,10 @@ static MultiValue io_lines(LState *L, const LValue *args, size_t count) {
         return MultiValue(LValue(L->intern_string(ud->buf, n)));
     };
 
-    return MultiValue({ L->create_closure(CFunctionType(iter)), LValue(u), nil() });
+    L->root_value(LValue(UserData, u));
+    MultiValue ret({ L->create_closure(CFunctionType(iter)), LValue(u), nil() });
+    L->unroot_value(LValue(UserData, u));
+    return ret;
 }
 
 static MultiValue io_output(LState *L, const LValue *args, size_t count) {
