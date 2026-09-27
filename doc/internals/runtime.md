@@ -8,7 +8,7 @@ The clx runtime library (`libclx.a`) implements Lua's core semantics in C++. It 
 
 The virtual machine core implements:
 - Value representation (separate `ValueType` tag + 8-byte payload, with Integer type and TAG_ISTR inline strings)
-- Garbage collection (stop-the-world mark-and-sweep)
+- Garbage collection (generational by default, incremental opt-out)
 - Table operations with inline caching
 - Metamethod handling
 - Function calls
@@ -61,11 +61,15 @@ Strings ≤6 bytes are stored directly in the LValue's 64-bit `val` field (no he
 
 #### Garbage Collection
 
-Stop-the-world mark-and-sweep collector:
-- **Mark phase**: Traverses all reachable objects from global state and stack
-- **Sweep phase**: Deallocates objects not marked as reachable
+Generational collector, enabled by default:
+- **Young generation**: new objects start here; each minor collection marks the reachable ones and frees the rest
+- **Aging**: survivors graduate from young to survivor to old over successive minors
+- **Remembered set**: write barriers record old-to-young references, so minors never walk old subtrees
+- **Major collection**: a full mark-and-sweep fallback that runs when the old generation outgrows its budget
 - **Finalizers**: `__gc` metamethod called for objects before collection
-- Uses a reusable worklist vector to avoid repeated allocations
+- Uses raw pointer stacks (no per-operation vector bookkeeping) and recycled free lists for tables and closures
+
+Set `CLX_GC_MODE=incremental` to opt back out to the legacy incremental collector. Tune the generations with `CLX_GC_MINOR_KB` and `CLX_GC_MAJOR_KB`.
 
 ### 2. Base Library (src/runtime/base.cpp)
 
@@ -351,7 +355,7 @@ allocated).
 | String concatenation | O(n) per operation |
 | Numeric for loop | O(n) with SIMD |
 | Function call | O(1) setup + body |
-| GC pause | Incremental, 512-byte step budget, SIMD array scan |
+| GC pause | Generational minors (young-only), full mark-and-sweep majors, SIMD array scan |
 | String interning | O(1) average, one probe |
 | Pattern matching | O(n*m) worst case |
 
@@ -388,6 +392,8 @@ The `collectgarbage()` function accepts these options:
 | `"count"` | Returns total memory in use by Lua in Kbytes (fractional part gives exact bytes when multiplied by 1024) |
 | `"step"` | Performs a single GC sweep step. Optional integer arg pretends that many extra bytes were allocated. Returns `true` if the step finished a collection cycle |
 | `"isrunning"` | Returns `true` if the collector is running (not stopped) |
-| `"incremental"` | Switches to incremental mode (already the default). Returns `"incremental"` |
-| `"generational"` | Not supported — returns `"incremental"` (stays incremental) |
+| `"incremental"` | Switches to incremental mode (opt-out from the generational default). Returns `"incremental"` |
+| `"generational"` | Switches to generational mode (the default). Returns `"generational"` |
+| `"mode"` | Returns the current mode: `"generational"` or `"incremental"` |
+| `"stats"` | Returns a table with GC stats: `mode`, `collects`, `minors`, `minor_freed_kb`, `major_freed_kb`, `old_kb`, `remembered_high` |
 | `"param"` | Gets/sets GC parameters. Requires a parameter name (`"pause"`, `"stepmul"`, `"stepsize"`) and an optional new integer value (0–100000). Returns the previous value |
