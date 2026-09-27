@@ -469,13 +469,13 @@ LValue table_get_slow(LState* L, const LValue& obj, const LValue& key)
         LTable* t = static_cast<LTable*>(obj.as_pointer());
         if (key.type == ValueType::Int64) {
             int64_t idx = key.val.payload.i64;
-            if (static_cast<uint64_t>(idx - 1) < t->array_cap) {
+            if (static_cast<uint64_t>(idx - 1) < t->array_size) {
                 direct = LValue(t->array[idx - 1], t->array_types[idx - 1]);
             }
         } else if (key.type == ValueType::Double) {
             double d = key.val.payload.f64;
             int64_t idx = static_cast<int64_t>(d);
-            if (d == static_cast<double>(idx) && static_cast<uint64_t>(idx - 1) < t->array_cap) {
+            if (d == static_cast<double>(idx) && static_cast<uint64_t>(idx - 1) < t->array_size) {
                 direct = LValue(t->array[idx - 1], t->array_types[idx - 1]);
             }
         }
@@ -557,9 +557,9 @@ LTable::~LTable()
             delete[] ext->ic;
         if (!(flags & LFLAG_ARENA)) {
             if (ext->entries)
-                delete[] ext->entries;
+                free(ext->entries);
             if (ext->hash_bitmap)
-                delete[] ext->hash_bitmap;
+                free(ext->hash_bitmap);
         }
         delete ext;
         ext = nullptr;
@@ -579,22 +579,21 @@ void LTable::resize_hash(size_t new_size)
 
     LTableExt* ex = tbl_ensure_ext(this);
 
-    HashEntry* new_entries = new HashEntry[new_size];
-    for (size_t i = 0; i < new_size; ++i) {
-        new_entries[i].key.payload.u64 = HASH_EMPTY;
-        new_entries[i].ktype = Nil;
-    }
+    HashEntry* new_entries = static_cast<HashEntry*>(std::calloc(new_size, sizeof(HashEntry)));
 
     size_t bm_words = (new_size + 63) / 64;
-    uint64_t* new_bitmap = new uint64_t[bm_words]();
+    uint64_t* new_bitmap = static_cast<uint64_t*>(std::calloc(bm_words, sizeof(uint64_t)));
 
     uint32_t mask = static_cast<uint32_t>(new_size - 1);
     if (ex->entries) {
+        const uint64_t* old_bm = ex->hash_bitmap;
         for (size_t i = 0; i < ex->hash_size; ++i) {
+            if (old_bm && !(old_bm[i >> 6] & (1ULL << (i & 63))))
+                continue;
             if (ex->entries[i].ktype == Nil || ex->entries[i].vtype == Nil)
                 continue;
             uint64_t h = lvalue_hash(LValue(ex->entries[i].key, ex->entries[i].ktype)) & mask;
-            while (new_entries[h].ktype != Nil)
+            while (new_bitmap[h >> 6] & (1ULL << (h & 63)))
                 h = (h + 1) & mask;
             new_entries[h].key = ex->entries[i].key;
             new_entries[h].ktype = ex->entries[i].ktype;
@@ -603,7 +602,7 @@ void LTable::resize_hash(size_t new_size)
             new_bitmap[h / 64] |= (1ULL << (h % 64));
         }
         if (!(flags & LFLAG_ARENA))
-            delete[] ex->entries;
+            free(ex->entries);
     }
 
     flags &= ~LFLAG_ARENA;
@@ -611,9 +610,17 @@ void LTable::resize_hash(size_t new_size)
     ex->hash_size = new_size;
     ex->hash_tombs = 0;
     if (ex->hash_bitmap)
-        delete[] ex->hash_bitmap;
+        free(ex->hash_bitmap);
     ex->hash_bitmap = new_bitmap;
     ex->hash_version++;
+}
+
+//------------------ LTable::presize_hash - pre-allocate hash storage at 1/2 load for `expected` entries.
+void LTable::presize_hash(size_t expected)
+{
+    size_t need = next_pow2(expected * 2);
+    if (!ext || !ext->entries || ext->hash_size < need)
+        resize_hash(need);
 }
 
 //------------------ LTable::gettable — get value by key
@@ -621,12 +628,12 @@ LValue LTable::gettable(const LValue& key)
 {
     if (key.type == Int64) {
         int64_t idx = key.as_integer();
-        if (static_cast<uint64_t>(idx - 1) < array_cap)
+        if (static_cast<uint64_t>(idx - 1) < array_size)
             return LValue(array[idx - 1], array_types[idx - 1]);
     } else if (key.type == Double) {
         double d = key.as_number();
         int64_t idx = static_cast<int64_t>(d);
-        if (d == static_cast<double>(idx) && static_cast<uint64_t>(idx - 1) < array_cap)
+        if (d == static_cast<double>(idx) && static_cast<uint64_t>(idx - 1) < array_size)
             return LValue(array[idx - 1], array_types[idx - 1]);
     }
     LTableExt* ex = ext;
@@ -666,16 +673,17 @@ LValue LTable::gettable(const LValue& key)
 //------------------ LTable::settable — set value by key
 void LTable::settable(const LValue& key, const LValue& val)
 {
-    // Generational barrier for direct users (generated _G stores, runtime
-    // init): table_set/table_set_direct/table_set_int barrier themselves,
-    // but this member cannot rely on callers, so it barriers via the
-    // thread-local state. Null during LState construction (all young).
-    if (clx_current_L)
+    if (clx_current_L) {
         gc_barrier_table(clx_current_L, this, val);
+        if (key.is_gc_obj())
+            gc_barrier_table(clx_current_L, this, key);
+    }
 
     if (key.type == Int64) {
         int64_t idx = key.as_integer();
         if (static_cast<uint64_t>(idx - 1) < array_cap) {
+            if (static_cast<uint64_t>(idx - 1) > array_size)
+                table_fill_gap(this, array_size, static_cast<size_t>(idx) - 1);
             array[idx - 1] = val.val;
             array_types[idx - 1] = val.type;
             if (static_cast<size_t>(idx) > array_size)
@@ -717,19 +725,27 @@ void LTable::settable(const LValue& key, const LValue& val)
                         if (d == static_cast<double>(t))
                             hidx = t;
                     }
-                    if (hidx > 0 && hidx != idx && static_cast<uint64_t>(hidx - 1) < new_cap) {
+                    if (hidx <= 0 || static_cast<uint64_t>(hidx - 1) >= new_cap)
+                        continue;
+                    if (hidx > idx) {
+                        for (size_t j = array_size; j + 1 < static_cast<size_t>(hidx); ++j) {
+                            array[j] = TValue();
+                            array_types[j] = Nil;
+                        }
                         array[hidx - 1] = ext->entries[i].val;
                         array_types[hidx - 1] = ext->entries[i].vtype;
-                        ext->entries[i].key.payload.u64 = HASH_TOMBSTONE;
-                        ext->entries[i].ktype = Nil;
-                        ext->entries[i].val = TValue();
-                        ext->entries[i].vtype = Nil;
-                        ext->hash_count--;
-                        ext->hash_tombs++;
-                        ext->hash_version++;
-                        if (ext->hash_bitmap)
-                            ext->hash_bitmap[i / 64] &= ~(1ULL << (i % 64));
+                        if (static_cast<size_t>(hidx) > array_size)
+                            array_size = static_cast<size_t>(hidx);
                     }
+                    ext->entries[i].key.payload.u64 = HASH_TOMBSTONE;
+                    ext->entries[i].ktype = Nil;
+                    ext->entries[i].val = TValue();
+                    ext->entries[i].vtype = Nil;
+                    ext->hash_count--;
+                    ext->hash_tombs++;
+                    ext->hash_version++;
+                    if (ext->hash_bitmap)
+                        ext->hash_bitmap[i / 64] &= ~(1ULL << (i % 64));
                 }
             }
             return;
@@ -739,6 +755,8 @@ void LTable::settable(const LValue& key, const LValue& val)
         int64_t idx = static_cast<int64_t>(d);
         if (d == static_cast<double>(idx)) {
             if (static_cast<uint64_t>(idx - 1) < array_cap) {
+                if (static_cast<uint64_t>(idx - 1) > array_size)
+                    table_fill_gap(this, array_size, static_cast<size_t>(idx) - 1);
                 array[idx - 1] = val.val;
                 array_types[idx - 1] = val.type;
                 if (static_cast<size_t>(idx) > array_size)
@@ -780,19 +798,27 @@ void LTable::settable(const LValue& key, const LValue& val)
                             if (dd == static_cast<double>(t))
                                 hidx = t;
                         }
-                        if (hidx > 0 && hidx != idx && static_cast<uint64_t>(hidx - 1) < new_cap) {
+                        if (hidx <= 0 || static_cast<uint64_t>(hidx - 1) >= new_cap)
+                            continue;
+                        if (hidx > idx) {
+                            for (size_t j = array_size; j + 1 < static_cast<size_t>(hidx); ++j) {
+                                array[j] = TValue();
+                                array_types[j] = Nil;
+                            }
                             array[hidx - 1] = ext->entries[i].val;
                             array_types[hidx - 1] = ext->entries[i].vtype;
-                            ext->entries[i].key.payload.u64 = HASH_TOMBSTONE;
-                            ext->entries[i].ktype = Nil;
-                            ext->entries[i].val = TValue();
-                            ext->entries[i].vtype = Nil;
-                            ext->hash_count--;
-                            ext->hash_tombs++;
-                            ext->hash_version++;
-                            if (ext->hash_bitmap)
-                                ext->hash_bitmap[i / 64] &= ~(1ULL << (i % 64));
+                            if (static_cast<size_t>(hidx) > array_size)
+                                array_size = static_cast<size_t>(hidx);
                         }
+                        ext->entries[i].key.payload.u64 = HASH_TOMBSTONE;
+                        ext->entries[i].ktype = Nil;
+                        ext->entries[i].val = TValue();
+                        ext->entries[i].vtype = Nil;
+                        ext->hash_count--;
+                        ext->hash_tombs++;
+                        ext->hash_version++;
+                        if (ext->hash_bitmap)
+                            ext->hash_bitmap[i / 64] &= ~(1ULL << (i % 64));
                     }
                 }
                 return;
@@ -883,6 +909,155 @@ void LTable::settable(const LValue& key, const LValue& val)
             }
             e.val = val.val;
             e.vtype = val.type;
+            return;
+        }
+        h = (h + 1) & mask;
+    }
+}
+
+//------------------ LTable::op_direct - fused single-walk t[k]=t[k]<op>amount with int fidelity; misses run the full generic path.
+void LTable::op_direct(LState* L, const LValue& obj, const LValue& key, double amount, int op_kind, bool nil_ok)
+{
+    auto nil_case = [amount, op_kind]() -> double {
+        switch (op_kind) {
+        case 0:
+            return amount;
+        case 1:
+            return -amount;
+        case 2:
+            return 0.0;
+        default:
+            return 0.0 / amount;
+        }
+    };
+    LValue amt = table_op_amount(amount);
+    auto generic = [&]() {
+        table_set(L, obj, key, table_op_apply(L, table_get(L, obj, key), amt, op_kind));
+    };
+
+    if (key.is_gc_obj())
+        gc_barrier_table(L, this, key);
+
+    int64_t idx = -1;
+    if (key.type == ValueType::Int64) {
+        idx = key.as_integer();
+    } else if (key.type == ValueType::Double) {
+        double d = key.as_number();
+        int64_t t64 = static_cast<int64_t>(d);
+        if (d == static_cast<double>(t64))
+            idx = t64;
+    }
+
+    if (idx >= 1 && static_cast<uint64_t>(idx - 1) < array_size) {
+        LValue cur(array[idx - 1], array_types[idx - 1]);
+        LValue nv;
+        if (cur.type == ValueType::Nil) {
+            if (!nil_ok) {
+                generic();
+                return;
+            }
+            nv = LValue(nil_case());
+        } else if (cur.type == ValueType::Double || cur.type == ValueType::Int64) {
+            nv = table_op_apply(L, cur, amt, op_kind);
+        } else {
+            generic();
+            return;
+        }
+        gc_barrier_table(L, this, nv);
+        array[idx - 1] = nv.val;
+        array_types[idx - 1] = nv.type;
+        return;
+    }
+
+    LTableExt* ex = ext;
+    if (!ex || ex->hash_size == 0) {
+        if (idx >= 1) {
+            if (!nil_ok) {
+                generic();
+                return;
+            }
+            settable(key, LValue(nil_case()));
+            return;
+        }
+        resize_hash(8);
+        ex = ext;
+    } else if ((ex->hash_count + ex->hash_tombs + 1) * 4 >= ex->hash_size * 3) {
+        resize_hash(ex->hash_count >= ex->hash_size / 2 ? ex->hash_size * 2 : ex->hash_size);
+        ex = ext;
+    }
+
+    uint32_t mask = static_cast<uint32_t>(ex->hash_size - 1);
+    uint64_t h = lvalue_hash(key) & mask;
+    int32_t tomb = -1;
+    for (;;) {
+        HashEntry& e = ex->entries[h];
+        if (e.ktype == ValueType::Nil) {
+            if (e.key.payload.u64 == HASH_EMPTY) {
+                if (idx >= 1) {
+                    if (!nil_ok) {
+                        generic();
+                        return;
+                    }
+                    settable(key, LValue(nil_case()));
+                    return;
+                }
+                if (!nil_ok) {
+                    generic();
+                    return;
+                }
+                HashEntry& slot = (tomb != -1) ? ex->entries[tomb] : e;
+                slot.key = key.val;
+                slot.ktype = key.type;
+                slot.val = LValue(nil_case()).val;
+                slot.vtype = ValueType::Double;
+                if (tomb != -1)
+                    ex->hash_tombs--;
+                ex->hash_count++;
+                ex->hash_version++;
+                if (ex->hash_bitmap) {
+                    size_t bit_idx = (tomb != -1) ? static_cast<size_t>(tomb) : h;
+                    ex->hash_bitmap[bit_idx / 64] |= (1ULL << (bit_idx % 64));
+                }
+                return;
+            }
+            if (e.key.payload.u64 == HASH_TOMBSTONE && tomb == -1)
+                tomb = static_cast<int32_t>(h);
+            h = (h + 1) & mask;
+            continue;
+        }
+        if (lvalue_eq_fast(LValue(e.key, e.ktype), key)) {
+            LValue cur(e.val, e.vtype);
+            if (cur.type == ValueType::Nil) {
+                if (idx >= 1) {
+                    if (!nil_ok) {
+                        generic();
+                        return;
+                    }
+                    settable(key, LValue(nil_case()));
+                    return;
+                }
+                if (!nil_ok) {
+                    generic();
+                    return;
+                }
+                ex->hash_count++;
+                ex->hash_tombs--;
+                if (ex->hash_bitmap)
+                    ex->hash_bitmap[h / 64] |= (1ULL << (h % 64));
+                LValue nv(nil_case());
+                gc_barrier_table(L, this, nv);
+                e.val = nv.val;
+                e.vtype = nv.type;
+                return;
+            }
+            if (cur.type != ValueType::Double && cur.type != ValueType::Int64) {
+                generic();
+                return;
+            }
+            LValue nv = table_op_apply(L, cur, amt, op_kind);
+            gc_barrier_table(L, this, nv);
+            e.val = nv.val;
+            e.vtype = nv.type;
             return;
         }
         h = (h + 1) & mask;
@@ -1023,11 +1198,6 @@ LState::LState()
         if (v > 0)
             gc_major_threshold = size_t(v) * 1024;
     }
-    if (const char* e = getenv("CLX_GC_HEADROOM")) {
-        long long v = atoll(e);
-        if (v > 0)
-            gc_headroom_override = size_t(v);
-    }
 }
 
 static void dtor_free_table(LTable* t)
@@ -1042,11 +1212,11 @@ static void dtor_free_table(LTable* t)
     }
     if (t->ext) {
         if (t->ext->entries) {
-            delete[] t->ext->entries;
+            free(t->ext->entries);
             t->ext->entries = nullptr;
         }
         if (t->ext->hash_bitmap) {
-            delete[] t->ext->hash_bitmap;
+            free(t->ext->hash_bitmap);
             t->ext->hash_bitmap = nullptr;
         }
         if (t->ext->ic) {
@@ -1273,9 +1443,6 @@ static void gc_dispose_swept(LState* L, LHeader* curr)
     auto& GC_SUB = L->allocated_bytes;
     (void)GC_SUB;
     curr->flags &= ~(LFLAG_REMEMBERED | LFLAG_GC_PIN);
-    // Leaving the OLD generation (freed or parked): drop its old-set
-    // accounting, otherwise gc_old_bytes only grows and every trigger runs
-    // a full collection once it crosses the major threshold.
     L->gc_update_old_bytes(curr, curr->age, AGE_YOUNG);
     if (curr->flags & LFLAG_VM_PROXY) {
         if (clx_free_vm_proxy_ptr)
@@ -1283,6 +1450,7 @@ static void gc_dispose_swept(LState* L, LHeader* curr)
     } else if (curr->type == static_cast<uint8_t>(Table)) {
         LTable* t = static_cast<LTable*>(curr);
         if (tbl_metatable(t)) {
+            t->flags |= LFLAG_FINALIZABLE;
             t->next = L->gc_finalizable;
             L->gc_finalizable = t;
         } else {
@@ -1301,6 +1469,9 @@ static void gc_dispose_swept(LState* L, LHeader* curr)
     } else if (curr->type == static_cast<uint8_t>(Function)) {
         LCFunction* f = static_cast<LCFunction*>(curr);
         f->func = nullptr;
+        f->direct = nullptr;
+        f->env = nullptr;
+        f->self_ref = LValue();
         f->gc_cells.clear();
         f->next = L->free_functions;
         L->free_functions = f;
@@ -1338,8 +1509,26 @@ static void gc_dispose_swept(LState* L, LHeader* curr)
     }
 }
 
+//------------------ gc_prune_meta_list: unlink dead metatabled tables in one O(N) pass; per-table removal would be O(M*N).
+
+static void gc_prune_meta_list(LState* L)
+{
+    LTable** pp = &L->metatabled_tables;
+    while (*pp) {
+        LTable* n = *pp;
+        if (n->flags & LFLAG_FINALIZABLE) {
+            *pp = n->ext->meta_next;
+            n->ext->meta_next = nullptr;
+            n->flags &= ~(LFLAG_META_LIST | LFLAG_FINALIZABLE);
+        } else {
+            pp = &n->ext->meta_next;
+        }
+    }
+}
+
 static void gc_drain_finalizables(LState* L)
 {
+    gc_prune_meta_list(L);
     for (LTable* t = static_cast<LTable*>(L->gc_finalizable); t;) {
         LTable* nx = static_cast<LTable*>(t->next);
         meta_list_remove(L, t);
@@ -1359,7 +1548,7 @@ static void gc_drain_finalizables(LState* L)
         }
         if (t->ext) {
             if (t->ext->entries) {
-                delete[] t->ext->entries;
+                free(t->ext->entries);
                 t->ext->entries = nullptr;
             }
             t->ext->hash_count = 0;
@@ -1369,6 +1558,7 @@ static void gc_drain_finalizables(LState* L)
             t->ext->meta_next = nullptr;
         }
         t->array_size = t->array_cap = 0;
+        t->flags &= ~(LFLAG_META_LIST | LFLAG_FINALIZABLE);
         t->next = L->free_tables;
         L->free_tables = t;
         t = nx;
@@ -1449,7 +1639,7 @@ void LState::GCStack::free()
 //------------------ LState::gc_remember_cell — record an upvalue cell for the next minor
 void LState::gc_remember_cell(const LUpValue& cell)
 {
-    if (!cell || cell->is_gc_obj())
+    if (!cell)
         return;
     if (!gc_remembered_cell_set.insert(cell.get()).second)
         return;
@@ -1462,9 +1652,9 @@ void gc_barrier_header(LState* L, LHeader* owner, const LValue& newval)
     if (!newval.is_gc_obj())
         return;
     LHeader* nv = static_cast<LHeader*>(newval.as_pointer());
-    if (!nv || nv->age != AGE_YOUNG)
+    if (!nv || nv->age == AGE_OLD)
         return;
-    if (owner->age == AGE_OLD)
+    if (owner->age == AGE_OLD || owner->age == AGE_SURVIVOR)
         L->gc_remember(owner);
 }
 
@@ -1475,7 +1665,7 @@ void gc_barrier_cell(LState* L, const LUpValue& cell, const LValue& newval)
     if (!newval.is_gc_obj())
         return;
     LHeader* nv = static_cast<LHeader*>(newval.as_pointer());
-    if (!nv || nv->age != AGE_YOUNG)
+    if (!nv || nv->age == AGE_OLD)
         return;
     L->gc_remember_cell(cell);
 }
@@ -1540,10 +1730,9 @@ static bool gc_trace_table_young(LState* L, LTable* t, LState::GCStack& wl)
     LTableExt* ex = t->ext;
     if (!ex)
         return has_nonold;
-    for (size_t _i = 0; _i < ex->hash_size; ++_i) {
-        HashEntry& e = ex->entries[_i];
+    auto trace_entry = [&](const HashEntry& e) {
         if (e.ktype == Nil)
-            continue;
+            return;
         for (int which = 0; which < 2; ++which) {
             LValue v(which == 0 ? e.key : e.val, which == 0 ? e.ktype : e.vtype);
             if (!v.is_gc_obj())
@@ -1561,6 +1750,23 @@ static bool gc_trace_table_young(LState* L, LTable* t, LState::GCStack& wl)
             h->marked = 1;
             gc_push_for_trace(wl, h, v);
         }
+    };
+    if (ex->hash_bitmap) {
+        size_t words = (ex->hash_size + 63) / 64;
+        for (size_t w = 0; w < words; ++w) {
+            uint64_t bits = ex->hash_bitmap[w];
+            while (bits) {
+                size_t b = static_cast<size_t>(clx_ctzll(bits));
+                bits &= bits - 1;
+                size_t _i = (w << 6) + b;
+                if (_i >= ex->hash_size)
+                    break;
+                trace_entry(ex->entries[_i]);
+            }
+        }
+    } else {
+        for (size_t _i = 0; _i < ex->hash_size; ++_i)
+            trace_entry(ex->entries[_i]);
     }
     if (ex->metatable && ex->metatable->age != AGE_OLD && ex->metatable->marked == 0) {
         has_nonold = true;
@@ -1608,6 +1814,11 @@ static bool gc_trace_thread_young(LState* L, LThread* th, LState::GCStack& wl)
 static bool gc_trace_function_young(LState* L, LCFunction* f, LState::GCStack& wl)
 {
     bool has_nonold = false;
+    if (f->env) {
+        LValue envv(Table, f->env);
+        if (gc_mark_young(L, envv, wl))
+            has_nonold = true;
+    }
     for (const LUpValue& c : f->gc_cells)
         if (c && gc_mark_young(L, *c, wl))
             has_nonold = true;
@@ -1671,6 +1882,11 @@ void LState::gc_minor()
         gc_stats_remembered_high = gc_remembered.size();
     auto& wl = gc_worklist;
     wl.clear();
+
+    //------------------ arena tables: reset stale marks (never cleared by sweep)
+    for (FuncArena* ar = active_arenas; ar; ar = ar->next_active)
+        for (LTable* at = ar->tables; at; at = static_cast<LTable*>(at->next))
+            at->marked = 0;
 
     auto push_if_needed = [&](const LValue& v) {
         if (!v.is_gc_obj())
@@ -1774,7 +1990,7 @@ void LState::gc_minor()
 
         else if (curr->type == static_cast<uint8_t>(UserData)) {
             LUserdata* ud = static_cast<LUserdata*>(curr);
-            if (ud->metatable && ud->metatable->age == AGE_YOUNG && ud->metatable->marked == 0) {
+            if (ud->metatable && ud->metatable->age != AGE_OLD && ud->metatable->marked == 0) {
                 ud->metatable->marked = 1;
                 wl.push(ud->metatable);
             }
@@ -1796,6 +2012,38 @@ void LState::gc_minor()
                 LUserdata* ud = static_cast<LUserdata*>(h);
                 if (ud->metatable && ud->metatable->age != AGE_OLD)
                     gc_remember(ud);
+            } else if (h->type == static_cast<uint8_t>(Thread)) {
+                LThread* th = static_cast<LThread*>(h);
+                auto needs_root = [&](const LValue& v) {
+                    if (!v.is_gc_obj())
+                        return false;
+                    LHeader* ch = v.as_pointer();
+                    return ch && ch->type == static_cast<uint8_t>(v.type) && ch->age != AGE_OLD;
+                };
+                bool young_ref = needs_root(th->function);
+                if (th->caller && needs_root(LValue(Thread, th->caller)))
+                    young_ref = true;
+                for (size_t i = 0; !young_ref && i < th->yield_args.count; ++i)
+                    if (needs_root(th->yield_args[i]))
+                        young_ref = true;
+                for (size_t i = 0; !young_ref && i < th->resume_args.count; ++i)
+                    if (needs_root(th->resume_args[i]))
+                        young_ref = true;
+                if (young_ref)
+                    gc_remember(th);
+            } else if (h->type == static_cast<uint8_t>(Function)) {
+                LCFunction* fn = static_cast<LCFunction*>(h);
+                if (fn->env && fn->env->age != AGE_OLD)
+                    gc_remember(fn);
+                for (const LUpValue& c : fn->gc_cells) {
+                    if (c && c->is_gc_obj()) {
+                        LHeader* ch = static_cast<LHeader*>(c->as_pointer());
+                        if (ch && ch->type == static_cast<uint8_t>(c->type) && ch->age != AGE_OLD) {
+                            gc_remember(fn);
+                            break;
+                        }
+                    }
+                }
             }
         }
     };
@@ -1812,19 +2060,13 @@ void LState::gc_minor()
         }
         if (o->marked == 1) {
             age_and_promote(o);
-
-            o->marked = (o->age == AGE_SURVIVOR) ? 2 : 0;
+            o->marked = 0;
             link = &o->next;
         } else if (o->age == AGE_SURVIVOR) {
-            if (o->marked == 2) {
-                o->marked = 0;
-                link = &o->next;
-            } else {
-                LHeader* next_obj = o->next;
-                gc_dispose_swept(this, o);
-                *link = next_obj;
-                object_count--;
-            }
+            LHeader* next_obj = o->next;
+            gc_dispose_swept(this, o);
+            *link = next_obj;
+            object_count--;
         } else {
             link = &o->next;
         }
@@ -1847,8 +2089,13 @@ void LState::gc_minor()
         w = 0;
         for (size_t i = 0; i < gc_remembered_cells.size(); ++i) {
             const LUpValue& cell = gc_remembered_cells[i];
-            if (cell && !cell->is_gc_obj()) {
-                gc_remembered_cells[w++] = cell;
+            if (cell && cell->is_gc_obj()) {
+                LHeader* ch = static_cast<LHeader*>(cell->as_pointer());
+                if (ch && ch->type == static_cast<uint8_t>(cell->type) && ch->age != AGE_OLD
+                    && (cell->type != ValueType::UserData || is_allocated_userdata(ch))) {
+                    gc_remembered_cells[w++] = cell;
+                    continue;
+                }
             }
         }
         gc_remembered_cells.resize(w);
@@ -1905,8 +2152,29 @@ bool LState::gc_step()
             curr = next_obj;
         } else {
             if (gc_mode == GCMode::Generational && curr->age != AGE_OLD
-                && !(curr->flags & LFLAG_REMEMBERED) && !(curr->flags & LFLAG_GC_PIN))
-                gc_update_old_bytes(curr, curr->age, AGE_OLD), curr->age = AGE_OLD;
+                && !(curr->flags & LFLAG_REMEMBERED) && !(curr->flags & LFLAG_GC_PIN)) {
+                bool promoting_to_old = curr->age == AGE_SURVIVOR;
+                gc_update_old_bytes(curr, curr->age, AGE_OLD);
+                curr->age = AGE_OLD;
+                if (promoting_to_old && curr->marked == 1) {
+                    if (curr->type == static_cast<uint8_t>(Table))
+                        gc_trace_remember_nonold_children(static_cast<LTable*>(curr));
+                    else if (curr->type == static_cast<uint8_t>(Function)) {
+                        LCFunction* fn = static_cast<LCFunction*>(curr);
+                        if (fn->env && fn->env->age != AGE_OLD)
+                            gc_remember(fn);
+                        for (const LUpValue& c : fn->gc_cells) {
+                            if (c && c->is_gc_obj()) {
+                                LHeader* ch = static_cast<LHeader*>(c->as_pointer());
+                                if (ch && ch->type == static_cast<uint8_t>(c->type) && ch->age != AGE_OLD) {
+                                    gc_remember(fn);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             curr->marked = 0;
             object_count++;
             prev = curr;
@@ -1935,8 +2203,6 @@ bool LState::gc_step()
         //------------------ Pacing: one collection is a synchronous mark+sweep of O(heap), so
 
         size_t headroom = std::clamp(live / 2, size_t(1 * 1024 * 1024), size_t(256 * 1024 * 1024));
-        if (gc_headroom_override > 0)
-            headroom = gc_headroom_override;
         gc_bytes_threshold = live + headroom;
         gc_draining = false;
         return true;
@@ -1965,6 +2231,11 @@ void LState::collect_garbage_full()
         return;
     auto& wl = gc_worklist;
     wl.clear();
+
+    //------------------ arena tables: reset stale marks (never cleared by sweep)
+    for (FuncArena* ar = active_arenas; ar; ar = ar->next_active)
+        for (LTable* at = ar->tables; at; at = static_cast<LTable*>(at->next))
+            at->marked = 0;
 
     auto mark_gc = [&](LValue v, uint8_t mark) -> LHeader* { return gc_mark_value(this, v, mark); };
     auto push_if_needed = [&](LValue v) {
@@ -2278,6 +2549,9 @@ MultiValue call_function(LState* L, const LValue& func, const LValue* args, size
 
     size_t prev_shadow = L->shadow_top;
     L->shadow_stack[L->shadow_top++] = TypedSlot(const_cast<TValue*>(&func.val), const_cast<ValueType*>(&func.type));
+    for (size_t ai = 0; ai < count; ++ai)
+        L->shadow_stack[L->shadow_top++]
+            = TypedSlot(const_cast<TValue*>(&args[ai].val), const_cast<ValueType*>(&args[ai].type));
 
     if (func.type == Function) {
         LCFunction* f = static_cast<LCFunction*>(func.as_pointer());
@@ -2368,10 +2642,17 @@ MultiValue call_direct(LState* L, const LValue& func, const LValue* args, size_t
     if (func.type == ValueType::Function) {
         LCFunction* f = static_cast<LCFunction*>(func.as_pointer());
         if (f->direct) {
+            size_t prev_shadow = L->shadow_top;
+            L->shadow_stack[L->shadow_top++]
+                = TypedSlot(const_cast<TValue*>(&func.val), const_cast<ValueType*>(&func.type));
+            for (size_t ai = 0; ai < count; ++ai)
+                L->shadow_stack[L->shadow_top++]
+                    = TypedSlot(const_cast<TValue*>(&args[ai].val), const_cast<ValueType*>(&args[ai].type));
             LCFunction* saved = L->current_func;
             L->current_func = f;
             MultiValue ret = f->direct(L, args, count);
             L->current_func = saved;
+            L->shadow_top = prev_shadow;
             return ret;
         }
     }
@@ -2508,6 +2789,9 @@ LValue LState::create_table(size_t asize, size_t hsize)
         t->array_size = 0;
     }
 
+    if (hsize > 0)
+        t->presize_hash(hsize);
+
     t->type = static_cast<uint8_t>(Table);
     t->marked = 0;
     t->age = AGE_YOUNG;
@@ -2549,9 +2833,8 @@ clx::LValue clx::LState::create_closure(CFunctionType func, LTable* env, std::ve
     }
 
     auto* fnptr = f->func.target<MultiValue (*)(LState*, const LValue*, size_t)>();
-    if (fnptr) {
-        f->direct = *fnptr;
-    }
+    f->direct = fnptr ? *fnptr : nullptr;
+    f->self_ref = LValue();
     f->type = static_cast<uint8_t>(Function);
     f->marked = 0;
     f->age = AGE_YOUNG;
@@ -2612,21 +2895,38 @@ LValue call_bin_metamethod(LState* L, const LValue& a, const LValue& b, const ch
         }
     }
 
-    std::string prefix = file_line_prefix(L);
-
     std::string_view ev(event);
 
     if (ev == "__eq")
         return clx::LValue(false);
 
+    std::string prefix = file_line_prefix(L);
+
+    if (ev == "__lt" || ev == "__le") {
+        auto type_name = [](const LValue& v) {
+            size_t idx = (v.type == ValueType::Int64) ? static_cast<size_t>(ValueType::Double)
+                                                       : static_cast<size_t>(v.type);
+            return VALUE_TYPE_NAMES[idx];
+        };
+        throw LRuntimeException(
+            LValue(L->intern_string(prefix + "attempt to compare " + type_name(a) + " with " + type_name(b))));
+    }
+
     std::string op_type = "perform arithmetic on";
-    if (ev == "__lt" || ev == "__le")
-        op_type = "compare";
-    else if (ev == "__concat")
+    if (ev == "__concat")
         op_type = "concatenate";
+    else if (ev == "__len")
+        op_type = "get length of";
+    else if (ev == "__band" || ev == "__bor" || ev == "__bxor" || ev == "__bnot" || ev == "__shl"
+        || ev == "__shr")
+        op_type = "perform bitwise operation on";
+
+    bool a_is_number = (a.type == ValueType::Int64 || a.type == ValueType::Double);
+    bool a_is_concatable = (a_is_number || a.type == ValueType::String);
+    const LValue& bad = (ev == "__concat") ? (a_is_concatable ? b : a) : (a_is_number ? b : a);
 
     std::string err_msg
-        = prefix + "attempt to " + op_type + " a " + VALUE_TYPE_NAMES[static_cast<size_t>(a.type)] + " value";
+        = prefix + "attempt to " + op_type + " a " + VALUE_TYPE_NAMES[static_cast<size_t>(bad.type)] + " value";
     throw LRuntimeException(LValue(L->intern_string(err_msg)));
 }
 
