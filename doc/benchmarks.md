@@ -54,6 +54,8 @@ benchmarks\run.bat
 
 ## Current results
 
+### Linux x86-64
+
 Speedups vs. Lua 5.5 (10-run average, single CPU, `hyperfine`):
 
 | Script | lua 5.5 | LuaJIT | clx (speedup, `--fast`) |
@@ -82,6 +84,37 @@ Speedups vs. Lua 5.5 (10-run average, single CPU, `hyperfine`):
 | warmup.lua | 0.007s (1.00x) | 0.006s (1.17x) | **0.003s (2.33x)** |
 
 > Measured on an Intel® Core™ i5 Ultra 125U CPU @ 4.30GHz · Linux · GCC 13.3.0 · Average of 10 runs · clx `--fast` built with AVX2
+
+### macOS ARM64
+
+Speedups vs. Lua 5.5 (10-run average, `hyperfine`):
+
+| Script | lua 5.5 | LuaJIT | clx (speedup, `--fast`) |
+|--------|---------|--------|--------------------------|
+| 3ddist.lua | 0.396s (1.00x) | 0.042s (9.43x) | **0.014s (28.29x)** |
+| ackermann.lua | 0.161s (1.00x) | **0.026s (6.19x)** | 0.050s (3.22x) |
+| arraysum.lua | 0.203s (1.00x) | 0.063s (3.22x) | **0.054s (3.76x)** |
+| binarytrees.lua | 0.399s (1.00x) | **0.113s (3.53x)** | 0.127s (3.14x) |
+| bubble.lua | 0.288s (1.00x) | **0.014s (20.57x)** | 0.057s (5.05x) |
+| canada.lua | 0.176s (1.00x) | **0.089s (1.98x)** | 0.163s (1.08x) |
+| coro.lua | 0.533s (1.00x) | **0.099s (5.38x)** | 0.312s (1.71x) |
+| fannkuchredux.lua | 1.977s (1.00x) | **0.289s (6.84x)** | 0.743s (2.66x) |
+| fasta.lua | 0.242s (1.00x) | **0.087s (2.78x)** | 0.141s (1.72x) |
+| fib.lua | 0.261s (1.00x) | 0.033s (7.91x) | **0.026s (10.04x)** |
+| hashtable.lua | 0.408s (1.00x) | **0.108s (3.78x)** | 0.205s (1.99x) |
+| json.lua | 0.147s (1.00x) | 0.592s (0.25x) | **0.019s (7.74x)** |
+| knucleotide.lua | 0.076s (1.00x) | **0.039s (1.95x)** | 0.045s (1.69x) |
+| life.lua | 0.329s (1.00x) | **0.031s (10.61x)** | 0.072s (4.57x) |
+| mandelbrot.lua | 0.287s (1.00x) | **0.025s (11.48x)** | 0.027s (10.63x) |
+| nbody.lua | 0.219s (1.00x) | **0.014s (15.64x)** | 0.059s (3.71x) |
+| pi.lua | 0.374s (1.00x) | 0.552s (0.68x) | **0.011s (34.00x)** |
+| regexdna.lua | 0.047s (1.00x) | 0.045s (1.04x) | **0.035s (1.34x)** |
+| sieve.lua | 0.202s (1.00x) | 0.235s (0.86x) | **0.115s (1.76x)** |
+| skynet.lua | 0.453s (1.00x) | **0.123s (3.68x)** | 0.196s (2.31x) |
+| spectralnorm.lua | 0.370s (1.00x) | **0.015s (24.67x)** | 0.019s (19.47x) |
+| warmup.lua | 0.005s (1.00x) | 0.005s (1.00x) | **0.004s (1.25x)** |
+
+> Measured on an Apple A18 Pro · macOS 26.6.2 (ARM64) · Apple clang 21.0.0 · Average of 10 runs · clx `--fast`
 
 ## What each benchmark tests
 
