@@ -645,9 +645,7 @@ struct LazyReg {
     RawCFunction func;
 };
 
-//------------------ Hash/array hybrid table. EMPTY = 0 so a calloc'd entries array is
-// immediately a valid empty table (ktype 0 = Nil + payload 0 = EMPTY); TOMBSTONE
-// stays distinct so array-evacuation slots remain probe-continuation markers.
+    //------------------ Hash/array table: EMPTY=0 makes calloc'd arrays valid; TOMBSTONE keeps evacuated slots probing.
 static constexpr uint64_t HASH_EMPTY = 0;
 static constexpr uint64_t HASH_TOMBSTONE = 0xFFFFFFFFFFFFFFFEULL;
 
@@ -699,10 +697,7 @@ struct LTable : public LHeader {
 
     LValue gettable(const LValue& key);
     void settable(const LValue& key, const LValue& val);
-    //------------------ op_direct: single-walk fused t[k] = t[k] <op> amount. A raw
-    // miss stores the nil-case arithmetic only when nil_ok (zero-index-proven);
-    // otherwise it runs the full generic get/compute/set path so plain tables
-    // still raise arithmetic-on-nil and unknown metatables are consulted.
+    //------------------ op_direct: fused single-walk t[k]=t[k]<op>amount; misses take the full generic path (arith-on-nil, metatables).
     void op_direct(LState* L, const LValue& obj, const LValue& key, double amount, int op_kind, bool nil_ok);
 
     LValue get_value(LState* L, const LValue& key);
@@ -712,8 +707,7 @@ struct LTable : public LHeader {
     void bind(LState* L, const char* name, CFunctionType func);
     void bind_all(LState* L, std::initializer_list<LReg> funcs);
 
-    //------------------ presize_hash: pre-allocate hash storage for `expected`
-    //------------------ entries at 1/2 load; no-op when storage is already large enough.
+    //------------------ presize_hash: pre-allocate storage for `expected` entries at 1/2 load; no-op if already large enough.
     void presize_hash(size_t expected);
 
 private:
@@ -934,9 +928,7 @@ struct StringArena {
     }
 };
 
-//------------------ String interning pool. Slots hold only the baked pointer; the cached
-// hash-low and length live in the string header (baked-16 / baked-8), keeping slots at
-// 8 bytes so rehash traffic stays 3x smaller than pointer+hash+len entries.
+//------------------ String pool: slots hold only the baked pointer; hash-low/length live in the string header (8-byte slots).
 struct StringPool {
     struct Slot {
         char* baked;
@@ -1072,8 +1064,7 @@ private:
             && clx_memcmp(baked, str, len) == 0;
     }
 
-    //------------------ slot_hash: cached header hash (low 32 bits; index bits are identical
-    // to the original full-hash index for any capacity below 2^31)
+    //------------------ slot_hash: cached header hash low 32 bits; index bits match the full hash below capacity 2^31.
     static uint64_t slot_hash(const char* baked)
     {
         uint32_t s_low;
@@ -1323,8 +1314,7 @@ struct LState {
     std::vector<LUpValue> gc_remembered_cells;
     std::unordered_set<const LValue*> gc_remembered_cell_set;
 
-    //------------------ Registered per-function arenas (arena tables live outside
-    //------------------ allocated_objects, so each mark phase must clear their marks)
+    //------------------ Per-function arenas: their tables live outside allocated_objects; each mark phase clears their marks.
 
     FuncArena* active_arenas = nullptr;
 
@@ -1456,10 +1446,7 @@ CLX_INLINE_HOT MultiValue call_cfunc_rooted(LState* L, RawCFunction f, const LVa
     return ret;
 }
 
-//------------------ Rooted direct closure invocation: roots args[] across a
-// direct std::function call (the is_direct/self-call fast path), which would
-// otherwise leave survivor-aged arguments invisible to collections running
-// inside the callee. Same discipline as the *_rooted wrappers above.
+//------------------ Roots args[] across the direct-call fast path; else collections inside the callee miss survivor-aged args.
 CLX_INLINE_HOT MultiValue call_cfunc_direct(LState* L, const CFunctionType& f, const LValue* args, size_t count)
 {
     size_t base = L->shadow_top;
@@ -1928,8 +1915,7 @@ CLX_INLINE_HOT void arena_reset(FuncArena* a)
     a->end = nullptr;
 }
 
-//------------------ Runs on scope exit too, so C++ unwinding from a Lua error
-//------------------ unregisters the arena instead of leaving a dangling entry.
+//------------------ Runs on unwind too, so a Lua error unregisters the arena (no dangling entry).
 CLX_INLINE FuncArena::~FuncArena()
 {
     arena_reset(this);
@@ -1951,8 +1937,7 @@ CLX_INLINE_HOT LValue arena_create_table(LState* L, FuncArena* a, size_t asize, 
     char* mem = static_cast<char*>(arena_alloc(a, total));
     LTable* t = new (mem) LTable();
     t->flags |= LFLAG_ARENA;
-    //------------------ Per-arena table list (via LHeader::next, which arena
-    //------------------ tables never use for heap chains) + registry for mark clearing
+    //------------------ Per-arena table list (via LHeader::next) + registry for mark-phase clearing.
     t->next = a->tables;
     a->tables = t;
     if (!a->owner) {
@@ -2687,9 +2672,7 @@ CLX_INLINE_HOT LValue table_get(LState* L, const LValue& obj, const LValue& key)
 
 extern thread_local LState* clx_current_L;
 
-//------------------ Fill array gaps with nil so recycled buffers never expose
-// stale slots: a sparse append (t[5] = x on a smaller table) must read back
-// nil in the gap, and the collector must never see stale GC references there.
+//------------------ Fill array gaps with nil so recycled buffers never expose stale slots or GC references.
 CLX_INLINE void table_fill_gap(LTable* t, size_t from, size_t to)
 {
     for (size_t j = from; j < to; ++j) {
@@ -2892,8 +2875,7 @@ CLX_INLINE_HOT void table_set_direct(LState* L, const LValue& obj, const LValue&
     table_set(L, obj, key, val);
 }
 
-//------------------ table_op_amount: fused-op constant as LValue with int fidelity
-// for integral doubles (mirrors the clx::integer const the unfused path emits)
+//------------------ table_op_amount: fused-op constant as LValue with int fidelity for integral doubles.
 CLX_INLINE_HOT LValue table_op_amount(double amount)
 {
     if (amount >= -9007199254740992.0 && amount <= 9007199254740992.0
