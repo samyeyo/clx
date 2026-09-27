@@ -6,6 +6,87 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 
 ---
 
+## [0.4.0] - 2026-09-28
+
+### Added
+
+* New generational garbage collector, enabled by default. Short-lived objects are now collected cheaply without rescanning long-lived data. Allocation-heavy programs run faster and use less memory. Tune it with `CLX_GC_MODE`, `CLX_GC_MINOR_KB` and `CLX_GC_MAJOR_KB`. Inspect it with `collectgarbage("mode")` and `collectgarbage("stats")`. Set `CLX_GC_MODE=incremental` to get the previous collector back
+* Faster function calls. Local functions are now called directly without intermediate boxing, so recursive code runs much faster. The binarytrees benchmark now beats Lua 5.5 by about 1.6x (AVX2 `--fast`)
+* More robust memory handling. Values held by running C++ code can no longer be freed too early. This covers native modules, sort comparators, string-search replacements, module loaders and protected calls. It fixes several rare crashes
+* Native modules found via `--modules` now show up in `package.loaded` as expected. `require()` resolves builtin modules again
+* Faster string operations using SIMD instructions on x86 and ARM. This covers case conversion, searching and reversing
+* `require()` can now load plain Lua scripts through the embedded Lua VM. `math.fmod` is now recognized by the compiler
+* Benchmark site: regexdna benchmark, and a strings-oriented benchmark (regxdna)
+* Faster table loops. Locals, parameters and generic-for variables whose uses never force them into memory no longer keep their address taken for the garbage collector, so they stay in registers instead of memory. 
+* `ipairs()` and `pairs()` over a numeric array local now compile to a plain C++ for-loop over the array itself, skipping the iterator protocol; growth during iteration still behaves like Lua
+
+### Changed
+
+* Compiling with the default `--size` mode is now about 3.6x faster. Inlining and LTO are disabled there
+* Single-character `string.sub(s, i, i)` is now effectively free
+* Smarter type tracking in the optimizer. More arithmetic now compiles to fast native code
+* Safer and faster generated code for table access and integer arithmetic
+* `io.open()` on a missing file returns `nil` plus an error message. This matches Lua 5.5
+* Table hash storage now lives in one zero-initialized block with tombstone markers instead of a linked chain, so lookups walk it once and growing a table is much cheaper. Interned-string pool slots shrink to a third of their previous size (8 bytes)
+* Read-modify-write table loops such as `t[k] = t[k] + 1` fuse into a single hash walk when the optimizer can prove no metatable can interfere, skipping the generic get/set path
+
+### Fixed
+
+* Fixed several collector bugs found while developing the generational collector. This includes runaway memory growth where short-lived objects were never freed, and a slow leak when reused tables shrank
+* Closed write-barrier gaps on inlined table stores and direct table updates. Old-to-young references could otherwise lose live objects. Stores of plain numbers now skip the barrier entirely
+* Old-generation accounting is now released when objects are freed. Full collections no longer repeat once the old budget is crossed
+* Fixed compilation failures for some valid programs using captured variables, duplicate parameter names (#33), and `repeat...until` loops that leaked redeclared locals into global scope (#36)
+* Fixed wrong results from string concatenation in longer expressions (#38). Fixed variables used before assignment being miscompiled. Integer arithmetic now promotes to double on overflow
+* Fixed crashes when returning many values without an active state (#37). Fixed collecting values held by coroutines, finalizers, and closures
+* Fixed wrong Lua line numbers in error messages after closures (#35)
+* Fixed crashes and wrong results for error messages created outside Lua code (#40, #41). Fixed strings containing embedded zero bytes (#43)
+* Fixed tables. Deleting keys during `next()` iteration no longer breaks the loop. Numeric sorting no longer corrupts string arrays. `#t` and table constructors now behave correctly with mixed keys and trailing calls
+* Writing past the end of an array now fills the gap with nil, so reading a skipped index returns nil instead of stale data
+* `table.insert` and `table.move` now run write barriers while shifting elements, so old-to-young references moved into a growing table survive minor collections. Array reads are bounded by the real array length
+* Fixed SIMD table scans on ARM dropping every other byte. Fixed out-of-bounds array access on missing capacity. `math.frexp()` with no arguments is now rejected like Lua. Multiline strings now lex correctly
+* Fixed two cases where the compiler itself hung or burned CPU. One was deeply nested numeric code. The other was files with many function definitions
+* Fixed compiler failures and wrong results when a numeric array local is used where a single Lua value is expected: arithmetic, conditions, concatenations, constructors, call arguments, for-loop bounds, returns and more now handle it correctly
+* A generic-for loop whose iterator is not a function now raises Lua's "attempt to call a number value" error instead of crashing
+* The cached length behind `#t` is now discarded whenever the array can grow, so loop appends, unknown-index writes and holes no longer report a stale length
+* Numeric-for loops with non-numeric bounds now raise a catchable Lua error, matching Lua, instead of terminating the program
+* More minor-collection gaps closed: young tables, environments, threads and closures reachable from old code are now remembered, function-arena tables have their marks cleared every cycle, and dead metatable lists are pruned in a single pass
+* Comparing incompatible values now uses Lua's "attempt to compare" wording for `__lt` and `__le`, with matching messages for length, bitwise and concatenation errors
+* Fixed a dangling-pointer bug in optimizer state that could make `pairs()` report `9.0` instead of `9` for array values
+* Fixed rare crashes or corrupted values when the last argument of a call is itself a call returning multiple values, such as `f(g())` or `obj:m(g())`. The garbage collector could run while stale references from the finished call were still around
+* Fixed rare crashes after a runtime error unwound a function call. The error path now releases everything the call was holding before the error propagates
+* Fixed rare crashes while opening files or reading lines: `io.open()`, `io.lines()` and the standard streams could be garbage-collected before their setup finished. The same window while the `string` library registers at startup is closed too
+* Fixed memory growing without bound in programs that call `io.input()` or `io.output()` in a loop; each call now lets go of the previously held file. Internal thread tracking is also initialized up front so an early collection cannot read uninitialized memory
+* Fixed a compiler warning about inline macros appearing on every build. Cleaned up other warnings. Fixed the Windows MSVC build
+
+### Tests
+
+* New stress tests that hammer the collector and error handling. New regression tests for table edge cases, closures, integer handling, and file IO
+* New regression tests for numeric arrays in value positions (including iterator and length-edge guards), comparison metamethods, `next()`/`pairs()` consistency, and hash growth with tombstones
+* New regression test for multi-value trailing-argument calls, such as `f(g())` and `obj:m(g())`, running as part of `tests/run.sh`
+
+### Refactored
+
+* Cleaned up source comments to section headers only and applied uniform WebKit formatting across `include/` and `src/`
+* Source comments condensed to single-line section headers throughout the compiler and runtime, with the longer explanations rewritten to one tight line each
+* Removed the dead `_gf_base_N` shadow-stack base emission from generic-for loops; the loop's `ScopeGuard` already restores the iterator triplet
+
+### Documentation
+
+* New installation instructions, and documented the new collector options in the runtime internals
+* Refreshed the internals docs: the architecture and runtime pages describe the generational collector, and the optimizations page documents header hoisting and snapshot shadow-stack rooting. The CLI reference now lists the real `CLX_*` environment variables
+
+### Build
+
+* `CLX_*` environment variables (including `CLX_ARCH`) are now forwarded to the build. x64 defaults to SSE2 with AVX/AVX2/AVX512 opt-ins
+* Removed a bogus SSE2 flag that warned on MSVC. Fixed builds on case-sensitive filesystems. Fixed tail-call optimization on ARM64 Linux (GCC)
+
+### Benchmarks
+
+* Refreshed ARM64 numbers on the benchmark site
+* Refreshed all x86-64 benchmark numbers with new 10-run measurements, including the new regexdna row, and cross-checked benchmark outputs against Lua 5.5
+
+---
+
 ## [0.3.0] - 2026-08-21
 
 ### Changed

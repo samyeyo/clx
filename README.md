@@ -36,6 +36,7 @@ Hello clx !
 
 - **Just write Lua.** clx targets Lua 5.5, so your code works like ordinary Lua.
 - **Fast native speed** — your scripts are compiled to native machine code.
+- **Efficient memory management** — a generational garbage collector tuned for short-lived data.
 - **Standalone binaries** — no interpreter or extra runtime to install alongside your program.
 - **Small outputs** — size-friendly builds can create very compact executables.
 - **Cross-platform** — works on Linux, macOS, and Windows.
@@ -98,13 +99,13 @@ clx compares well against the reference Lua 5.5 interpreter:
 
 | Script | lua 5.5 | LuaJIT | clx `--fast` |
 |--------|---------|--------|--------------------------|
-| fib.lua | 0.299s (1.00x) | 0.044s (6.80x) | **0.007s (42.71x)** |
-| arraysum.lua | 0.317s (1.00x) | 0.098s (3.23x) | **0.083s (3.82x)** |
-| spectralnorm.lua | 0.382s (1.00x) | **0.020s (19.10x)** | 0.036s (10.61x) |
-| canada.lua | 0.347s (1.00x) | **0.134s (2.59x)** | 0.231s (1.50x) |
-| warmup.lua | **0.003s (1.00x)** | 0.005s (0.60x) | 0.006s (0.50x) |
+| fib.lua | 0.327s (1.00x) | 0.055s (5.95x) | **0.007s (46.71x)** |
+| arraysum.lua | 0.311s (1.00x) | **0.105s (2.96x)** | 0.117s (2.66x) |
+| spectralnorm.lua | 0.370s (1.00x) | **0.022s (16.82x)** | 0.034s (10.88x) |
+| canada.lua | 0.392s (1.00x) | **0.150s (2.61x)** | 0.258s (1.52x) |
+| warmup.lua | 0.007s (1.00x) | 0.006s (1.17x) | **0.003s (2.33x)** |
 
-> Measured on an Intel® Core™ i5 Ultra 125U CPU @ 4.30GHz · Linux · GCC 13.3.0 · Average of 10 runs
+> Measured on an Intel® Core™ i5 Ultra 125U CPU @ 4.30GHz · Linux · GCC 13.3.0 · Average of 10 runs · clx `--fast` built with AVX2
 
 > Full benchmarks are available in **[clx benchmarks](./doc/benchmarks.md)**
 
