@@ -48,6 +48,10 @@ struct AnalysisState {
 
     //------------------ Per-function analysis data
     std::map<std::pair<uint32_t, std::string_view>, std::set<std::string_view>> numeric_table_fields;
+    //------------------ zero_index_tables: fresh {__index=0}-metatable locals; fused t[k]=t[k]<op>const skips __index on miss.
+    std::set<std::pair<uint32_t, std::string_view>> zero_index_tables;
+    //------------------ dead_stmts: single-occurrence literal-only table decls, never observable; codegen drops them.
+    std::set<uint32_t> dead_stmts;
     std::set<std::string_view> direct_callables;
     std::set<std::string_view> fast_callables;
     std::set<std::string_view> native_direct_funcs;
