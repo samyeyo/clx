@@ -49,7 +49,7 @@ static size_t get_array_len(LState *L, LTable *t) {
 
 //------------------ get_elem: gets array element by 1-based index (hot helper)
 static LValue get_elem(LTable *t, size_t idx) {
-    if (static_cast<uint64_t>(idx - 1) < t->array_cap)
+    if (static_cast<uint64_t>(idx - 1) < t->array_size)
         return LValue(t->array[idx - 1], t->array_types[idx - 1]);
     LValue p = t->gettable(LValue(static_cast<int64_t>(idx)));
     return p.type != Nil ? p : LValue();
@@ -123,6 +123,7 @@ MultiValue table_insert(LState *L, const LValue *args, size_t count) {
             size_t move_n = len - pos + 1;
             std::memmove(&list->array[pos], &list->array[pos - 1], move_n * sizeof(TValue));
             std::memmove(&list->array_types[pos], &list->array_types[pos - 1], move_n * sizeof(ValueType));
+            gc_barrier_table(L, list, val);
             list->array[pos - 1] = val.val;
             list->array_types[pos - 1] = val.type;
             if (list->array_size <= len)
@@ -300,11 +301,13 @@ MultiValue table_move(LState *L, const LValue *args, size_t count) {
     if (t >= f) {
         for (int64_t k = e; k >= f; --k) {
             LValue v = get_elem(src, static_cast<size_t>(k));
+            gc_barrier_table(L, dst, v);
             set_elem(dst, static_cast<size_t>(t + (k - f)), v);
         }
     } else {
         for (int64_t k = f; k <= e; ++k) {
             LValue v = get_elem(src, static_cast<size_t>(k));
+            gc_barrier_table(L, dst, v);
             set_elem(dst, static_cast<size_t>(t + (k - f)), v);
         }
     }
