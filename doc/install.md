@@ -95,6 +95,6 @@ After this, `clx` is on your PATH with the libraries and headers under `/usr/loc
 
 ```sh
 clx --version
-# clx 0.3.0
+# clx 0.4.0
 # MIT License - Copyright (c) 2026 Tine Samir
 ```
