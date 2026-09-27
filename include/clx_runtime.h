@@ -1196,8 +1196,8 @@ struct LState {
     LTable* slab_alloc_table();
     void slab_release();
 
-    LThread* main_thread;
-    LThread* running_thread;
+    LThread* main_thread = nullptr;
+    LThread* running_thread = nullptr;
 
     static constexpr size_t MAX_SHADOW_STACK = 262144;
     ShadowStack shadow_stack;
@@ -1279,6 +1279,18 @@ struct LState {
     {
         if (v.is_gc_obj())
             permanent_roots.push_back(v);
+    }
+
+    void unroot_value(const LValue& v)
+    {
+        if (!v.is_gc_obj())
+            return;
+        for (size_t i = permanent_roots.size(); i-- > 0;) {
+            if (permanent_roots[i].is_gc_obj() && permanent_roots[i].as_pointer() == v.as_pointer()) {
+                permanent_roots.erase(permanent_roots.begin() + i);
+                return;
+            }
+        }
     }
 
     enum class GCPhase : uint8_t { Idle,
@@ -1404,7 +1416,13 @@ CLX_INLINE_HOT MultiValue call_function_rooted(
     for (size_t i = 0; i < count; ++i)
         L->shadow_stack[L->shadow_top++]
             = TypedSlot(const_cast<TValue*>(&args[i].val), const_cast<ValueType*>(&args[i].type));
-    MultiValue ret = call_function(L, func, args, count, file, line);
+    MultiValue ret;
+    try {
+        ret = call_function(L, func, args, count, file, line);
+    } catch (...) {
+        L->shadow_top = base;
+        throw;
+    }
     L->shadow_top = base;
     return ret;
 }
@@ -1417,7 +1435,13 @@ CLX_INLINE_HOT MultiValue call_direct_rooted(
         = TypedSlot(const_cast<TValue*>(&func.val), const_cast<ValueType*>(&func.type));
     for (size_t i = 0; i < count; ++i)
         L->shadow_stack[L->shadow_top++] = TypedSlot(const_cast<TValue*>(&args[i].val), const_cast<ValueType*>(&args[i].type));
-    MultiValue ret = call_direct(L, func, args, count, file, line);
+    MultiValue ret;
+    try {
+        ret = call_direct(L, func, args, count, file, line);
+    } catch (...) {
+        L->shadow_top = base;
+        throw;
+    }
     L->shadow_top = base;
     return ret;
 }
@@ -1429,7 +1453,13 @@ CLX_INLINE_HOT MultiValue call_cfunc_rooted(LState* L, CFunctionType f, const LV
     for (size_t i = 0; i < count; ++i)
         L->shadow_stack[L->shadow_top++]
             = TypedSlot(const_cast<TValue*>(&args[i].val), const_cast<ValueType*>(&args[i].type));
-    MultiValue ret = f(L, args, count);
+    MultiValue ret;
+    try {
+        ret = f(L, args, count);
+    } catch (...) {
+        L->shadow_top = base;
+        throw;
+    }
     L->shadow_top = base;
     return ret;
 }
@@ -1441,7 +1471,13 @@ CLX_INLINE_HOT MultiValue call_cfunc_rooted(LState* L, RawCFunction f, const LVa
     for (size_t i = 0; i < count; ++i)
         L->shadow_stack[L->shadow_top++]
             = TypedSlot(const_cast<TValue*>(&args[i].val), const_cast<ValueType*>(&args[i].type));
-    MultiValue ret = f(L, args, count);
+    MultiValue ret;
+    try {
+        ret = f(L, args, count);
+    } catch (...) {
+        L->shadow_top = base;
+        throw;
+    }
     L->shadow_top = base;
     return ret;
 }
@@ -1453,7 +1489,13 @@ CLX_INLINE_HOT MultiValue call_cfunc_direct(LState* L, const CFunctionType& f, c
     for (size_t i = 0; i < count; ++i)
         L->shadow_stack[L->shadow_top++]
             = TypedSlot(const_cast<TValue*>(&args[i].val), const_cast<ValueType*>(&args[i].type));
-    MultiValue ret = f(L, args, count);
+    MultiValue ret;
+    try {
+        ret = f(L, args, count);
+    } catch (...) {
+        L->shadow_top = base;
+        throw;
+    }
     L->shadow_top = base;
     return ret;
 }
