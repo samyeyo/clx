@@ -1483,7 +1483,7 @@ static void gc_dispose_swept(LState* L, LHeader* curr)
         else
             L->allocated_bytes -= th_bytes;
 #if defined(_WIN32)
-        if (th->fiber && L->free_fiber_threads < LState::kMaxPooledFibers) {
+        if (th->fiber && L->free_fiber_threads < kMaxPooledFibers) {
             L->free_fiber_threads++;
         } else {
             if (th->fiber)
