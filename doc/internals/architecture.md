@@ -316,9 +316,10 @@ Proxy nodes keep the referenced clx object alive from the VM side. The two colle
 
 ### Garbage Collection
 
-Stop-the-world mark-and-sweep collector:
-- **Mark phase**: Traverse reachable objects from roots via worklist
-- **Sweep phase**: Deallocate unreachable objects, recycle freed LTable/LCFunction nodes into free lists
+Generational collector (default; `CLX_GC_MODE=incremental` opts out):
+- **Minor collections**: trace roots (shadow stack, threads, permanent roots) plus the remembered set, mark reachable young objects, promote survivors (young to survivor to old), and free unreachable survivor garbage — old objects are never traced or freed here
+- **Write barriers**: storing a young value into an old table, closure, coroutine or upvalue cell records the owner, so the next minor sees the edge
+- **Major collections**: full mark-and-sweep fallback when the old generation outgrows its budget; the incremental collector remains available as the opt-out path
 
 Tables whose metatables are set are linked into a `meta_next` metatable list, so the mark
 phase scans only metatabled tables for finalizer references instead of every table. Permanent
