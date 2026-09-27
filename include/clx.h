@@ -371,6 +371,12 @@ CLX_INLINE void raw_set_i(LState* L, const LValue& table, int64_t idx, const LVa
 {
     LTable* t = check_table(L, table);
     if (static_cast<uint64_t>(idx - 1) < t->array_cap) {
+        if (static_cast<uint64_t>(idx - 1) > t->array_size) {
+            for (size_t j = t->array_size; j < static_cast<size_t>(idx) - 1; ++j) {
+                t->array[j] = TValue();
+                t->array_types[j] = Nil;
+            }
+        }
         t->array[idx - 1] = val.val;
         t->array_types[idx - 1] = val.type;
         if (static_cast<size_t>(idx) > t->array_size)
@@ -532,39 +538,52 @@ CLX_INLINE MultiValue next(LState* L, const LValue& table, const LValue& key)
         return MultiValue(LValue());
     }
 
-    if (ex->hash_bitmap) {
-        size_t bm_words = (ex->hash_size + 63) / 64;
-        for (size_t word = 0; word < bm_words; ++word) {
-            uint64_t bits = ex->hash_bitmap[word];
-            while (bits) {
-                size_t idx = word * 64 + clx_ctzll(bits);
-                if (idx >= ex->hash_size)
+    size_t scan_start = 0;
+    if (!found_key) {
+        uint32_t mask = static_cast<uint32_t>(ex->hash_size - 1);
+        uint64_t h = lvalue_hash(key) & mask;
+        bool located = false;
+        for (;;) {
+            HashEntry& e = ex->entries[h];
+            if (e.ktype == ValueType::Nil) {
+                if (e.key.payload.u64 == HASH_EMPTY)
                     break;
-                HashEntry& e = ex->entries[idx];
-                if (!found_key) {
-                    if (lvalue_eq_fast(LValue(e.key, e.ktype), key))
-                        found_key = true;
-                } else if (e.vtype != ValueType::Nil) {
-                    return MultiValue({ LValue(e.key, e.ktype), LValue(e.val, e.vtype) });
-                }
-                bits &= bits - 1;
+            } else if (lvalue_eq_fast(LValue(e.key, e.ktype), key)) {
+                located = true;
+                scan_start = h + 1;
+                break;
             }
+            h = (h + 1) & mask;
         }
-    } else {
-        for (size_t i = 0; i < ex->hash_size; ++i) {
-            HashEntry& e = ex->entries[i];
-            if (e.ktype == ValueType::Nil)
-                continue;
-            if (!found_key) {
-                if (lvalue_eq_fast(LValue(e.key, e.ktype), key))
-                    found_key = true;
-            } else if (e.vtype != ValueType::Nil) {
-                return MultiValue({ LValue(e.key, e.ktype), LValue(e.val, e.vtype) });
+        if (!located)
+            throw_runtime_error("invalid key to 'next'");
+    }
+
+    if (scan_start < ex->hash_size) {
+        if (ex->hash_bitmap) {
+            size_t bm_words = (ex->hash_size + 63) / 64;
+            size_t word = scan_start / 64;
+            size_t shift = scan_start % 64;
+            uint64_t bits = ex->hash_bitmap[word] & ~((1ULL << shift) - 1);
+            for (; word < bm_words; ++word, bits = ex->hash_bitmap[word]) {
+                while (bits) {
+                    size_t idx = word * 64 + clx_ctzll(bits);
+                    if (idx >= ex->hash_size)
+                        break;
+                    HashEntry& e = ex->entries[idx];
+                    if (e.vtype != ValueType::Nil)
+                        return MultiValue({ LValue(e.key, e.ktype), LValue(e.val, e.vtype) });
+                    bits &= bits - 1;
+                }
+            }
+        } else {
+            for (size_t i = scan_start; i < ex->hash_size; ++i) {
+                HashEntry& e = ex->entries[i];
+                if (e.vtype != ValueType::Nil)
+                    return MultiValue({ LValue(e.key, e.ktype), LValue(e.val, e.vtype) });
             }
         }
     }
-    if (key.type != ValueType::Nil && !found_key)
-        throw_runtime_error("invalid key to 'next'");
     return MultiValue(LValue());
 }
 
