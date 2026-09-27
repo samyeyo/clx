@@ -86,7 +86,7 @@ private:
     //------------------ fast_call_box_flag: C++ bool expression restoring the return subtype of a fast call
     std::string fast_call_box_flag(std::string_view fname, uint32_t first_arg, uint32_t arg_count);
 
-    //------------------ box_native_identifier: boxes a native double local/param, restoring Int64 subtype via its runtime flag when present
+    //------------------ box_native_identifier: boxes a native double local/param, restoring Int64 via its runtime flag.
     void box_native_identifier(std::string_view emit_name, std::string_view lua_name);
 
     //------------------ var_reassigned_non_int: checks if a variable receives any new non-integer value
@@ -107,27 +107,19 @@ private:
 
     //------------------ impl_call: call expression for a direct-callable's impl, deref-ing heap holder cells
     std::string impl_call(std::string_view fname);
-    //------------------ hoisted_table_ptr: hoisted header pointer for a
-    // definitely-tabled local used as an index base, or "" when the table
-    // node is not a hoisted local (callers emit the checked path instead)
+    //------------------ hoisted_table_ptr: header pointer for a hoisted index-base local, else ""; callers emit the checked path.
     std::string hoisted_table_ptr(uint32_t table_idx);
 
-    //------------------ local_root_snapshot_ok: true when every statement using a local
-    // lowers to inline code, so a snapshot root can keep the local in a register
+    //------------------ local_root_snapshot_ok: every use lowers inline, so a snapshot root can keep the local in a register.
     bool local_root_snapshot_ok(std::string_view lua_name);
 
-    //------------------ emit_local_root: pushes a shadow-stack root for a block local.
-    // Locals that are never reassigned get a private snapshot slot so the local
-    // itself is never addressed and can stay in a register on hot paths.
+    //------------------ emit_local_root: root a block local; never-reassigned locals use a snapshot slot and stay in registers.
     void emit_local_root(std::string_view name);
 
-    //------------------ emit_param_root: shadow-stack root for a parameter or a generic-for
-    // variable, which are bound at their header rather than by a LocalDecl
+    //------------------ emit_param_root: shadow-stack root for a parameter/generic-for variable (bound at header, not by LocalDecl).
     void emit_param_root(std::string_view lua_name, std::string_view cpp_name);
 
-    //------------------ emit_loop_table_hoists: derive an LTable* once per loop
-    // for definitely-table locals indexed in the body; added collects the names
-    // registered so restore_loop_table_hoists can pop them after the loop
+    //------------------ emit_loop_table_hoists: hoist an LTable* per loop for definitely-tabled locals; added collects names to restore.
     void emit_loop_table_hoists(uint32_t body_idx, std::vector<std::string_view>& added);
 
     //------------------ restore_loop_table_hoists: removes names registered by emit_loop_table_hoists
@@ -151,7 +143,7 @@ private:
     void emitTrueLiteral(const ASTNode& node, uint32_t node_idx);
     void emitFalseLiteral(const ASTNode& node, uint32_t node_idx);
     void emitNilLiteral(const ASTNode& node, uint32_t node_idx);
-    void emitTableOp(int bin_op, uint32_t lhs_tbl, uint32_t lhs_key, uint32_t const_idx);
+    void emitTableOp(int bin_op, uint32_t lhs_tbl, uint32_t lhs_key, uint32_t const_idx, bool nil_ok);
     void emitNumber(const ASTNode& node, uint32_t node_idx);
     void emitInteger(const ASTNode& node, uint32_t node_idx);
     void emitIdentifier(const ASTNode& node, uint32_t node_idx);
