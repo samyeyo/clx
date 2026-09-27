@@ -359,6 +359,81 @@ Generic for loops emit direct `LCFunction` pointer calls in the loop body, avoid
 indirect call overhead. Inline `ipairs(t)` patterns are detected and emitted as direct
 `while` loops over `table_get_int` with no iterator function calls.
 
+### Loop-invariant table header hoisting
+
+For a local with a single reaching table-constructor definition that is never reassigned
+and never captured (`table_typed_locals`), every use is provably a table. When such a
+local is indexed inside a loop, the emitter derives its `LTable*` once before the loop
+and reuses it, so the per-access type check and the 16-byte `LValue` copy are removed:
+
+```lua
+local t = {}
+t.tag = 0
+for i = 1, n do
+    sum = sum + t[i]
+end
+
+-- Generated C++
+clx::LTable* _ht_t = static_cast<clx::LTable*>(l_t.as_pointer());
+for (...) {
+    sum = sum + (_k - 1 < _ht_t->array_size) ? ... ;
+}
+```
+
+The pointer is derived from a local that stays rooted for the loop's lifetime, so no GC
+risk is introduced. Only definitely-table locals are considered; a table declared
+*inside* the loop (fresh each iteration), captured by a closure, or skipped by a `goto`
+(codegen forward-declares such locals but they are uninitialized) uses the checked path.
+The failure mode is a missed optimization, never incorrect code.
+
+### Snapshot shadow-stack roots for locals, parameters and loop variables
+
+Every non-native local is rooted on the shadow stack so the GC can find the heap objects
+it holds. The root slot stores a *pointer to the local's storage*, which forces the local
+into memory and defeats register allocation for the whole block -- measured at ~2.4x on an
+access-dense inner loop such as `bubble.lua`'s swap.
+
+For a local whose uses never force it into memory, `emit_local_root` /`emit_param_root`
+root a private snapshot slot instead, so the local's own address is never taken and the
+local stays in a register. This covers block locals that are never reassigned (not in
+`reassigned_vars`), and parameters and generic-for variables that are never an assignment
+target anywhere (`assigned_targets`):
+
+```lua
+if t[j] > t[j+1] then
+    local temp = t[j]
+    t[j] = t[j+1]
+    t[j+1] = temp
+end
+
+-- Generated C++
+clx::LValue l_temp = ...;
+clx::LValue _rs_temp = l_temp;
+L->shadow_stack[L->shadow_top++] = clx::TypedSlot(&_rs_temp.val, &_rs_temp.type);
+```
+
+The GC only ever *reads* shadow slots (`mark`/`push_if_needed`); nothing writes back
+through them, so a snapshot is equivalent as long as the variable is never assigned
+again -- which is exactly the eligibility condition, and any other shape keeps the direct
+root. The block guard is unchanged, so the push/pop stays balanced.
+
+A snapshot only pays off when the local can actually stay in registers. `scan_own` walks
+the enclosing function body tracking whether each use is *by reference* -- that is,
+whether the text emitted for it becomes an argument of a helper call such as
+`clx::table_get(L, l_t, l_key)`, `clx::add(L, a, b)`, `clx::call(L, f, args...)` or
+`settable(key, value)`. Those bind a `const clx::LValue&`, which materialises the local in
+memory anyway, and the extra copy then costs more than the addressing it replaced
+(`fannkuchredux.lua`'s swap block regressed 1.22x when this check was bypassed). Operands
+that are emitted as values are not flagged: a table access on a numeric key, a native
+operator, or an argument copied into an `LValue args[]` array all leave the local in a
+register. When the check says no, the direct root is emitted, so the failure mode is a
+missed optimization, never incorrect code.
+
+`tests/regression/local_root.lua` covers the cases that would break if a snapshot ever
+went stale or lost its only reference: a local, a parameter and a loop variable each held
+as the GC's only reference across a full collection, plus reassignment, closure capture,
+shadowing, `goto`-crossed locals and `<close>`.
+
 ### Branch prediction hints
 
 Fast paths are annotated with `[[likely]]` attributes and hot runtime helpers are marked
