@@ -49,7 +49,12 @@ else()
 endif()
 
 set(RUNTIME_SOURCES
-    src/runtime/runtime.cpp 
+    src/runtime/threads.cpp
+    src/runtime/values.cpp
+    src/runtime/tables.cpp
+    src/runtime/state.cpp
+    src/runtime/gc.cpp
+    src/runtime/calls.cpp
     src/runtime/base.cpp 
     src/runtime/package.cpp 
     src/runtime/math.cpp 
@@ -189,7 +194,16 @@ set(SOURCES
     src/syntax/lexer.cpp
     src/syntax/parser.cpp
     src/optimizer/optimizer.cpp
+    src/optimizer/owners.cpp
+    src/optimizer/numbers.cpp
+    src/optimizer/functions.cpp
+    src/optimizer/tables.cpp
     src/codegen/codegen.cpp
+    src/codegen/helpers.cpp
+    src/codegen/expressions.cpp
+    src/codegen/statements.cpp
+    src/codegen/loops.cpp
+    src/codegen/assignments.cpp
 )
 
 add_executable(clx ${SOURCES})
