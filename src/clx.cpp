@@ -10,12 +10,14 @@
 #endif
 
 #include <array>
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -106,6 +108,55 @@ static std::vector<fs::path> clx_lib_roots(const fs::path& exe_dir, const fs::pa
     }
 
     return roots;
+}
+
+//------------------ ModuleLinkKind: how a precompiled module archive must be declared and invoked
+enum class ModuleLinkKind { Cpp,
+    C,
+    CPrefixed };
+
+//------------------ clx_slurp_file: raw bytes of a file, empty when unreadable
+static std::string clx_slurp_file(const fs::path& file)
+{
+    std::ifstream in(file, std::ios::binary);
+    if (!in.is_open())
+        return {};
+    return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+}
+
+//------------------ clx_archive_has_c_symbol: NUL-delimited C symbol present in an archive string table
+static bool clx_archive_has_c_symbol(const std::string& data, const std::string& sym)
+{
+    if (data.size() < sym.size() + 1)
+        return false;
+    size_t pos = 0;
+    while ((pos = data.find(sym, pos)) != std::string::npos) {
+        char prev = (pos == 0) ? '\0' : data[pos - 1];
+        bool leading = (pos == 0) || (prev == '\0') || (prev == '_');
+        if (leading && data[pos + sym.size()] == '\0')
+            return true;
+        ++pos;
+    }
+    return false;
+}
+
+//------------------ clx_scan_module_kind: classify an archive as C++, C, or a clx-renamed C opener
+static ModuleLinkKind clx_scan_module_kind(const fs::path& lib, const std::string& mod)
+{
+    std::string data = clx_slurp_file(lib);
+    if (data.empty())
+        return ModuleLinkKind::Cpp;
+
+    std::string raw = "luaopen_" + mod;
+    if (data.find("_Z" + std::to_string(raw.size()) + raw) != std::string::npos)
+        return ModuleLinkKind::Cpp;
+    if (data.find("?luaopen_" + mod + "@@") != std::string::npos)
+        return ModuleLinkKind::Cpp;
+    if (clx_archive_has_c_symbol(data, "clx_luaopen_" + mod))
+        return ModuleLinkKind::CPrefixed;
+    if (clx_archive_has_c_symbol(data, raw))
+        return ModuleLinkKind::C;
+    return ModuleLinkKind::Cpp;
 }
 
 //------------------ CLX: execute - runs a shell command, captures stdout and exit code
@@ -271,6 +322,14 @@ int main(int argc, char* argv[])
                 if (!mods.empty()) {
                     precompiled_modules.push_back(mods);
                 }
+                {
+                    std::vector<std::string> seen;
+                    for (auto& m : precompiled_modules) {
+                        if (std::find(seen.begin(), seen.end(), m) == seen.end())
+                            seen.push_back(m);
+                    }
+                    precompiled_modules.swap(seen);
+                }
             }
         } else if (arg == "--object") {
             mode = BuildMode::Object;
@@ -390,6 +449,83 @@ int main(int argc, char* argv[])
 
     std::vector<std::string> cpp_files;
 
+    //------------------ Install roots — computed before codegen so module archives can be classified
+    fs::path exe_dir;
+#ifdef _WIN32
+    char path_buffer[MAX_PATH];
+    GetModuleFileNameA(NULL, path_buffer, MAX_PATH);
+    exe_dir = fs::path(path_buffer).parent_path();
+#else
+    {
+        char buf[4096];
+        ssize_t len = -1;
+#ifdef __APPLE__
+        uint32_t bufsize = sizeof(buf);
+        if (_NSGetExecutablePath(buf, &bufsize) == 0) {
+            char real[4096];
+            if (realpath(buf, real)) {
+                len = static_cast<ssize_t>(strlen(real));
+                memcpy(buf, real, static_cast<size_t>(len) + 1);
+            } else {
+                len = static_cast<ssize_t>(bufsize > sizeof(buf) ? sizeof(buf) : bufsize);
+            }
+        }
+#else
+        len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+#endif
+        if (len != -1) {
+            buf[len] = '\0';
+            exe_dir = fs::path(buf).parent_path();
+        } else {
+            exe_dir = fs::absolute(fs::path(argv[0])).parent_path();
+        }
+    }
+#endif
+    fs::path build_root = exe_dir.parent_path();
+    auto lib_roots = clx_lib_roots(exe_dir, build_root);
+
+    std::vector<fs::path> mod_search_dirs;
+    mod_search_dirs.push_back(fs::current_path());
+    for (const auto& root : lib_roots) {
+        fs::path p = root / "clx";
+        if (fs::exists(p))
+            mod_search_dirs.push_back(p);
+    }
+    {
+        fs::path p = build_root / "lib" / "clx";
+        if (fs::exists(p))
+            mod_search_dirs.push_back(p);
+    }
+    for (const auto& opt : cc_options) {
+        if (opt.size() > 2 && opt[0] == '-' && opt[1] == 'L') {
+            std::string dir = opt.substr(2);
+            if (!dir.empty() && fs::is_directory(dir))
+                mod_search_dirs.push_back(fs::path(dir));
+        }
+    }
+
+    //------------------ Module archives: locate once, then classify C++ vs C entry points
+    std::map<std::string, fs::path> module_archives;
+    std::map<std::string, ModuleLinkKind> module_kinds;
+    for (const auto& mod : precompiled_modules) {
+        if (module_archives.count(mod))
+            continue;
+#ifdef _WIN32
+        std::string target_lib = mod + ".lib";
+#else
+        std::string target_lib = mod + ".a";
+#endif
+        fs::path resolved;
+        for (const auto& dir : mod_search_dirs) {
+            if (fs::exists(dir / target_lib)) {
+                resolved = dir / target_lib;
+                break;
+            }
+        }
+        module_archives[mod] = resolved;
+        module_kinds[mod] = clx_scan_module_kind(resolved.empty() ? fs::path(target_lib) : resolved, mod);
+    }
+
     for (const auto& input_file : input_files) {
         std::ifstream t(input_file);
         if (!t.is_open()) {
@@ -434,7 +570,12 @@ int main(int argc, char* argv[])
         }
 
         clx::CodeEmitter emitter(ctx, cpp_file.string().c_str(), analysis);
-        emitter.emit(root, module_name);
+        try {
+            emitter.emit(root, module_name);
+        } catch (const std::exception& e) {
+            std::cerr << e.what() << "\n";
+            return 1;
+        }
         cpp_files.push_back(cpp_file.string());
     }
     if (mode == BuildMode::Executable) {
@@ -445,8 +586,25 @@ int main(int argc, char* argv[])
             std::string mod = fs::path(file).stem().string();
             appender << "\nextern clx::LValue luaopen_" << mod << "(clx::LState* L);\n";
         }
+        for (const auto& file : input_files) {
+            std::string m = fs::path(file).stem().string();
+            auto hit = module_kinds.find(m);
+            if (hit != module_kinds.end() && hit->second != ModuleLinkKind::Cpp) {
+                std::cerr << "Error: input module \"" << m << "\" collides with the precompiled C module \"" << m << "\".\n";
+                return 1;
+            }
+        }
+
         for (const auto& mod : precompiled_modules) {
-            appender << "\nextern clx::LValue luaopen_" << mod << "(clx::LState* L);\n";
+            ModuleLinkKind kind = module_kinds.at(mod);
+            if (kind == ModuleLinkKind::Cpp) {
+                appender << "\nextern clx::LValue luaopen_" << mod << "(clx::LState* L);\n";
+            } else {
+                std::string sym = (kind == ModuleLinkKind::CPrefixed) ? "clx_luaopen_" + mod : "luaopen_" + mod;
+                appender << "\nextern \"C\" int " << sym << "(struct lua_State*);\n";
+                appender << "static clx::LValue clx_cmod_" << mod << "(clx::LState* L) { return clx::luaapi_c_module_open(L, " << sym
+                         << ", \"" << mod << "\"); }\n";
+            }
         }
 
         if (dynamic_loading_enabled)
@@ -478,10 +636,17 @@ int main(int argc, char* argv[])
                 appender << "        L->register_module(\"" << mod << "\", luaopen_" << mod << ");\n";
         }
         for (const auto& mod : precompiled_modules) {
+            ModuleLinkKind kind = module_kinds.at(mod);
             appender << "        {\n";
-            appender << "            clx::LValue _m = luaopen_" << mod << "(L);\n";
-            appender << "            L->register_loaded_module(\"" << mod << "\", _m);\n";
-            appender << "            L->register_module(\"" << mod << "\", luaopen_" << mod << ");\n";
+            if (kind == ModuleLinkKind::Cpp) {
+                appender << "            clx::LValue _m = luaopen_" << mod << "(L);\n";
+                appender << "            L->register_loaded_module(\"" << mod << "\", _m);\n";
+                appender << "            L->register_module(\"" << mod << "\", luaopen_" << mod << ");\n";
+            } else {
+                appender << "            clx::LValue _m = clx_cmod_" << mod << "(L);\n";
+                appender << "            L->register_loaded_module(\"" << mod << "\", _m);\n";
+                appender << "            L->register_module(\"" << mod << "\", clx_cmod_" << mod << ");\n";
+            }
             appender << "        }\n";
         }
 
@@ -513,40 +678,7 @@ int main(int argc, char* argv[])
 
     std::string include_opt;
     std::string lib_link;
-
-    fs::path exe_dir;
-#ifdef _WIN32
-    char path_buffer[MAX_PATH];
-    GetModuleFileNameA(NULL, path_buffer, MAX_PATH);
-    exe_dir = fs::path(path_buffer).parent_path();
-#else
-    {
-        char buf[4096];
-        ssize_t len = -1;
-#ifdef __APPLE__
-        uint32_t bufsize = sizeof(buf);
-        if (_NSGetExecutablePath(buf, &bufsize) == 0) {
-            char real[4096];
-            if (realpath(buf, real)) {
-                len = static_cast<ssize_t>(strlen(real));
-                memcpy(buf, real, static_cast<size_t>(len) + 1);
-            } else {
-                len = static_cast<ssize_t>(bufsize > sizeof(buf) ? sizeof(buf) : bufsize);
-            }
-        }
-#else
-        len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-#endif
-        if (len != -1) {
-            buf[len] = '\0';
-            exe_dir = fs::path(buf).parent_path();
-        } else {
-            exe_dir = fs::absolute(fs::path(argv[0])).parent_path();
-        }
-    }
-#endif
-    fs::path build_root = exe_dir.parent_path();
-    auto lib_roots = clx_lib_roots(exe_dir, build_root);
+    std::string runtime_lib_dir;
 
     fs::path include_dir;
     if (!fs::exists(build_root / "include")) {
@@ -591,6 +723,7 @@ int main(int argc, char* argv[])
                 found = true;
         }
         lib_link = " \"" + (found ? lib_path.string() : std::string("clx.lib")) + "\"";
+        runtime_lib_dir = found ? lib_path.parent_path().string() : std::string();
 #else
         std::string lib_file = size_mode ? "libclx_size.a" : "libclx.a";
         std::string lib_dir;
@@ -600,6 +733,7 @@ int main(int argc, char* argv[])
                 break;
             }
         }
+        runtime_lib_dir = lib_dir;
 #ifdef __APPLE__
         lib_link = lib_dir.empty() ? (size_mode ? " -lclx_size" : " -lclx")
                                    : " -L " + lib_dir + (size_mode ? " -lclx_size" : " -lclx");
@@ -609,23 +743,34 @@ int main(int argc, char* argv[])
 #endif
     }
 
-    std::vector<fs::path> mod_search_dirs;
-    mod_search_dirs.push_back(fs::current_path());
-    for (const auto& root : lib_roots) {
-        fs::path p = root / "clx";
-        if (fs::exists(p))
-            mod_search_dirs.push_back(p);
-    }
+    //------------------ Lua 5.5 C API bridge archive, linked only when a precompiled C module needs it
     {
-        fs::path p = build_root / "lib" / "clx";
-        if (fs::exists(p))
-            mod_search_dirs.push_back(p);
-    }
-    for (const auto& opt : cc_options) {
-        if (opt.size() > 2 && opt[0] == '-' && opt[1] == 'L') {
-            std::string dir = opt.substr(2);
-            if (!dir.empty() && fs::is_directory(dir))
-                mod_search_dirs.push_back(fs::path(dir));
+        bool need_capi = false;
+        for (const auto& kind : module_kinds) {
+            if (kind.second != ModuleLinkKind::Cpp) {
+                need_capi = true;
+                break;
+            }
+        }
+        if (need_capi) {
+#ifdef _WIN32
+            std::string capi_file = size_mode ? "clx_capi_size.lib" : "clx_capi.lib";
+            fs::path capi_path = fs::path(runtime_lib_dir) / capi_file;
+            if (!fs::exists(capi_path))
+                capi_path = build_root / "Release" / capi_file;
+            if (!fs::exists(capi_path))
+                capi_path = build_root / "lib" / capi_file;
+            lib_link += " \"" + capi_path.string() + "\"";
+#else
+            std::string capi_file = size_mode ? "libclx_capi_size.a" : "libclx_capi.a";
+            bool found = !runtime_lib_dir.empty() && fs::exists(fs::path(runtime_lib_dir) / capi_file);
+#ifdef __APPLE__
+            lib_link += found ? " -L " + runtime_lib_dir + (size_mode ? " -lclx_capi_size" : " -lclx_capi")
+                              : (size_mode ? " -lclx_capi_size" : " -lclx_capi");
+#else
+            lib_link += found ? " -L " + runtime_lib_dir + " -l:" + capi_file : " -l:" + capi_file;
+#endif
+#endif
         }
     }
 
