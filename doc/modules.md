@@ -5,6 +5,8 @@ ways to organize and load them, both used through Lua's familiar `require()`:
 
 - **Lua source modules** — other `.lua` files compiled together with your entry point
 - **Native C++ modules** — precompiled code you link with `--modules`
+- **Native C modules** — existing C code using the standard Lua 5.5 C API, also
+  linked with `--modules`
 
 ## Lua source modules
 
@@ -125,6 +127,97 @@ If your native module depends on external libraries, pass the link flags too:
 clx main.lua --modules my_native_mod -lm -lz
 ```
 
+## Native C modules (standard Lua 5.5 C API)
+
+clx ships the standard Lua 5.5 C API headers — `lua.h`, `lauxlib.h` and
+`lualib.h` — plus a bridge that implements that API on top of the clx runtime,
+so existing C modules written against the official API compile and run
+unchanged:
+
+```bash
+# fetch a module such as luafilesystem, then:
+cc -c -O2 -I/path/to/clx/include lfs.c -o lfs.o
+ar rcs lfs.a lfs.o
+
+clx main.lua --modules lfs -o main
+./main
+```
+
+The `--modules` argument is the archive filename without its extension, and
+the module must export a C `luaopen_<name>` symbol:
+
+```c
+#include "lua.h"
+#include "lauxlib.h"
+#include "lualib.h"
+
+int luaopen_lfs(lua_State *L);   /* declared by lfs.h */
+```
+
+clx classifies each archive before code generation by scanning its symbols:
+
+- an Itanium/MSVC-mangled `luaopen_<name>` is treated as a **C++ module** and
+  declared as `clx::LValue luaopen_<name>(clx::LState*)`.
+- a plain, unmangled `luaopen_<name>` is treated as a **C module**; clx emits
+  `extern "C" int luaopen_<name>(struct lua_State*)` and a small adapter that
+  runs it and seeds `package.loaded` for `require`.
+- `clx_luaopen_<name>` (the prefixed form some wrappers emit) is also treated
+  as a **C module**, declared under that symbol.
+
+Names are resolved in the current directory first, then in clx's own `lib/clx`
+install locations and any `-L` flags you pass. An input `.lua` file whose stem
+collides with a precompiled C module name is rejected.
+
+Two things to know when writing C modules:
+
+- `luaL_checkoption` returns the **index** of the chosen option in `lst`, not
+  the string (this is a Lua 5.5 change).
+- `luaL_openlibs` and `luaL_openselectedlibs` live in `lualib.h`, not
+  `lauxlib.h` — include it if you call them.
+
+### Linking: the C API wrapper is its own archive
+
+The C API bridge is **not** part of `libclx.a` / `libclx_size.a`. It is built
+into a dedicated archive installed alongside them:
+
+| archive | contents |
+|---------|----------|
+| `libclx.a` / `clx.lib` | core runtime — values, tables, GC, stdlibs, coroutines |
+| `libclx_size.a` / `clx_size.lib` | the same core runtime, `-Os` (default) |
+| `libclx_capi.a` / `clx_capi.lib` | Lua 5.5 C API wrapper — `lua_*`, `luaL_*`, `luaopen_*` adapters |
+| `libclx_capi_size.a` / `clx_capi_size.lib` | the same wrapper, `-Os` (default) |
+
+clx links `libclx_capi*.a` **only** when `--modules` pulls in an archive that
+classifies as a C module. C++ modules and plain Lua programs never pull it in,
+so they pay nothing for the wrapper.
+
+The core archive and the wrapper always come as a matched pair — pick the
+variant once with `--size` (default) or `--fast`:
+
+```bash
+clx main.lua --modules lfs -o main          # libclx_size.a + libclx_capi_size.a
+clx main.lua --modules lfs --fast -o main   # libclx.a      + libclx_capi.a
+```
+
+Both archives are resolved together, in the same places, in order: `build/`,
+`lib/` and `lib64/` next to the `clx` binary, then the install prefix's libdir
+(the one used at `cmake --install` time). If the wrapper archive cannot be
+found the link stops with a "library not found" error; if it is found but
+stale, with undefined `lua_*` or `clx::luaapi_c_module_open` symbols.
+
+If you link by hand instead of going through the driver:
+
+```bash
+# default (--size) build
+c++ main.o lfs.a -L/path/to/clx/lib -lclx_size -lclx_capi_size -o main
+
+# --fast build
+c++ main.o lfs.a -L/path/to/clx/lib -lclx -lclx_capi -o main
+```
+
+Keep the pair consistent: `-Os` and `-O3` objects are interchangeable at link
+time, but only one core/wrapper variant should be pulled into a given binary.
+
 ## Building Lua as a library
 
 You can also compile a `.lua` file into a static library or object file that
@@ -155,7 +248,9 @@ local proc = require("native_processor")  -- native C++ module
 
 | Option | What it does |
 |--------|--------------|
-| `--modules <list>` | Link prebuilt C++ modules (comma-separated) |
+| `--modules <list>` | Link prebuilt C++/C modules (comma-separated) |
+| `--fast` | Link `libclx.a` + `libclx_capi.a` (optimize for speed) |
+| `--size` | Link `libclx_size.a` + `libclx_capi_size.a` (default) |
 | `--minimal` | Leave out non-essential libraries (string, table, io, os, math, utf8, coroutine) |
 | `--static` | Build a static library that exports `luaopen_*` |
 | `--object` | Build an object file that exports `luaopen_*` |

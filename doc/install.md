@@ -12,7 +12,7 @@ cd clx
 ./build.sh install
 ```
 
-This installs the `clx` compiler to `/usr/local/bin`, the runtime libraries (`libclx.a`, `libclx_size.a`, `libclx_lua.a`) to `/usr/local/lib`, and the headers to `/usr/local/include`. Run `./build.sh uninstall` to remove it.
+This installs the `clx` compiler to `/usr/local/bin`, the runtime libraries (`libclx.a`, `libclx_size.a`, `libclx_capi.a`, `libclx_capi_size.a`, `libclx_lua.a`) to `/usr/local/lib`, and the headers to `/usr/local/include`. Run `./build.sh uninstall` to remove it.
 
 ### Windows
 
