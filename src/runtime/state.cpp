@@ -167,6 +167,8 @@ void LState::invoke_gc_finalizer(LUserdata *ud, const char *tag) {
 
 //------------------ LState::~LState — state destructor
 LState::~LState() {
+    if (luaapi_cleanup)
+        luaapi_cleanup(this);
     shadow_stack.reset();
     if (gc_phase == GCPhase::Sweeping) {
         while (gc_phase == GCPhase::Sweeping)
