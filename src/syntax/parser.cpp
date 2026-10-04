@@ -7,6 +7,7 @@
 
 #include "parser.h"
 #include "../codegen/codegen.h"
+#include "../codegen/helpers.h"
 #include <charconv>
 #include <stdexcept>
 
@@ -218,8 +219,21 @@ uint32_t Parser::parse_primary()
         ASTNode node;
         node.type = NodeType::String;
         node.line = current_token.line;
-        node.as.string.text = current_token.text.data();
-        node.as.string.length = current_token.text.length();
+        if (current_token.raw) {
+            node.as.string.text = current_token.text.data();
+            node.as.string.length = current_token.text.length();
+        } else {
+            std::string decoded;
+            try {
+                decoded = lua_decode_string(current_token.text);
+            } catch (const std::exception &e) {
+                throw std::runtime_error(
+                    "Error: " + ctx.filename + ":" + std::to_string(current_token.line) + ": " + e.what());
+            }
+            node.as.string.length = decoded.length();
+            ctx.string_storage.push_back(std::move(decoded));
+            node.as.string.text = ctx.string_storage.back().data();
+        }
         advance();
         return add_node(node);
     }
