@@ -519,7 +519,7 @@ void CodeEmitter::emit(uint32_t root_node, std::string_view module_name) {
 
         for (size_t i = 0; i < n; ++i) {
             auto &s = state.string_pool[i];
-            std::string decoded = lua_decode_string(s);
+            std::string decoded(s);
             uint64_t h = (decoded.length() <= 8) ? swar_hash_8(decoded.data(), decoded.length())
                                                  : wyhash_str(decoded.data(), decoded.length());
             size_t idx = h & mask;
@@ -532,7 +532,7 @@ void CodeEmitter::emit(uint32_t root_node, std::string_view module_name) {
         out << "    static const clx::StringPool::PrecomputedEntry _cstr_all[" << n << "] = {\n";
         for (size_t i = 0; i < n; ++i) {
             auto &s = state.string_pool[i];
-            std::string decoded = lua_decode_string(s);
+            std::string decoded(s);
             uint64_t h = (decoded.length() <= 8) ? swar_hash_8(decoded.data(), decoded.length())
                                                  : wyhash_str(decoded.data(), decoded.length());
             out << "        {\"" << cpp_escape(decoded) << "\", " << (unsigned int)decoded.length() << ", " << h

@@ -1232,7 +1232,7 @@ void CodeEmitter::emitBinaryOp(const ASTNode &node, uint32_t node_idx) {
             for (auto op : operands) {
                 if (ctx.nodes[op].type == NodeType::String) {
                     std::string_view s(ctx.nodes[op].as.string.text, ctx.nodes[op].as.string.length);
-                    std::string d = lua_decode_string(s);
+                    std::string d(s);
                     out << "clx_memcpy(_p, \"" << cpp_escape(d) << "\", " << d.length() << "); _p += " << d.length()
                         << "; ";
                 } else {
