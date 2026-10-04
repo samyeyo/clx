@@ -9,6 +9,7 @@
 #define SYNTAX_NODES_H
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -281,6 +282,8 @@ struct ASTContext {
     std::string filename;
     std::vector<ASTNode> nodes;
     std::vector<uint32_t> block_statements;
+    //------------------ string_storage: owning storage for decoded short-string literal bytes
+    std::deque<std::string> string_storage;
 };
 
 //------------------ TokenType: all token kinds produced by the lexer
@@ -352,6 +355,8 @@ struct Token {
     std::string_view text;
     double number_value = 0.0;
     int line = 0;
+    //------------------ raw: long-bracket string body is literal (no escape decoding)
+    bool raw = false;
 };
 
 }
