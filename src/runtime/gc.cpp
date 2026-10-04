@@ -389,6 +389,9 @@ static bool gc_trace_thread_young(LState *L, LThread *th, LState::GCStack &wl) {
         one(th->yield_args[i]);
     for (size_t i = 0; i < th->resume_args.count; ++i)
         one(th->resume_args[i]);
+    for (size_t i = 0; i < th->shadow_top; ++i)
+        if (th->shadow[i].val)
+            one(LValue(*th->shadow[i].val, *th->shadow[i].type));
     return has_nonold;
 }
 
@@ -605,6 +608,9 @@ void LState::gc_minor() {
                         young_ref = true;
                 for (size_t i = 0; !young_ref && i < th->resume_args.count; ++i)
                     if (needs_root(th->resume_args[i]))
+                        young_ref = true;
+                for (size_t i = 0; !young_ref && i < th->shadow_top; ++i)
+                    if (th->shadow[i].val && needs_root(LValue(*th->shadow[i].val, *th->shadow[i].type)))
                         young_ref = true;
                 if (young_ref)
                     gc_remember(th);
@@ -953,6 +959,9 @@ void LState::collect_garbage_full() {
                 push_if_needed(th->yield_args[i]);
             for (size_t i = 0; i < th->resume_args.count; ++i)
                 push_if_needed(th->resume_args[i]);
+            for (size_t i = 0; i < th->shadow_top; ++i)
+                if (th->shadow[i].val)
+                    push_if_needed(LValue(*th->shadow[i].val, *th->shadow[i].type));
         } else if (curr->type == static_cast<uint8_t>(Function)) {
             LCFunction *f = static_cast<LCFunction *>(curr);
             if (f->env)
