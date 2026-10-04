@@ -146,12 +146,40 @@ void Lexer::advance() {
         char quote = src[pos++];
         size_t start = pos;
         while (pos < src.length() && src[pos] != quote) {
-            if (src[pos] == '\n')
-                current_line++;
-            if (src[pos] == '\\' && pos + 1 < src.length())
-                pos++;
+            if (src[pos] == '\\') {
+                if (pos + 1 >= src.length()) {
+                    pos++;
+                    break;
+                }
+                char esc = src[pos + 1];
+                if (esc == '\n' || esc == '\r') {
+                    pos += 2;
+                    if (pos < src.length() && (src[pos] == '\n' || src[pos] == '\r') && src[pos] != esc)
+                        pos++;
+                    current_line++;
+                    continue;
+                }
+                if (esc == 'z') {
+                    pos += 2;
+                    while (pos < src.length() && std::isspace(static_cast<unsigned char>(src[pos]))) {
+                        char ws = src[pos++];
+                        if (ws == '\n' || ws == '\r') {
+                            if (pos < src.length() && (src[pos] == '\n' || src[pos] == '\r') && src[pos] != ws)
+                                pos++;
+                            current_line++;
+                        }
+                    }
+                    continue;
+                }
+                pos += 2;
+                continue;
+            }
+            if (src[pos] == '\n' || src[pos] == '\r')
+                throw std::runtime_error(std::to_string(current_line) + ": unfinished string");
             pos++;
         }
+        if (pos >= src.length())
+            throw std::runtime_error(std::to_string(current_line) + ": unfinished string");
         std::string_view text(src.data() + start, pos - start);
         if (pos < src.length() && src[pos] == quote)
             pos++;
@@ -213,7 +241,7 @@ void Lexer::advance() {
                 if (src.compare(pos, close.size(), close) == 0) {
                     std::string_view text(src.data() + start, pos - start);
                     pos += close.size();
-                    current_token = { TokString, text, 0, current_line };
+                    current_token = { TokString, text, 0, current_line, true };
                     return;
                 }
                 pos++;
@@ -310,7 +338,7 @@ void Lexer::advance() {
         current_token = { TokBitOr, "|", 0, current_line };
         return;
     }
-    current_token = { TokEof, "", 0, current_line };
+    throw std::runtime_error(std::to_string(current_line) + ": unexpected symbol near '" + std::string(1, c) + "'");
 }
 
 //------------------ LEXER: current - returns current token
