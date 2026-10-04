@@ -1,0 +1,1442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blog — clx</title>
+    <meta name="description" content="Articles about clx, a cross-platform ahead-of-time Lua 5.5 compiler that turns your Lua scripts into fast, standalone native executables.">
+    <meta name="keywords" content="clx blog, lua compiler, lua 5.5, ahead of time compiler, aot compiler, native compilation, lua to native, clx">
+    <meta name="author" content="clx">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://samyeyo.github.io/clx/blog.html">
+    <meta name="theme-color" content="#171717">
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com">
+    <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700;14..32,800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <meta name="color-scheme" content="light dark">
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-lua.min.js"></script>
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-c.min.js"></script>
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-cpp.min.js"></script>
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bash.min.js"></script>
+    <meta property="og:title" content="Blog — clx">
+    <meta property="og:description" content="Articles about clx, a cross-platform ahead-of-time Lua 5.5 compiler that turns your Lua scripts into fast, standalone native executables.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://samyeyo.github.io/clx/blog.html">
+    <meta property="og:site_name" content="clx">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="Blog — clx">
+    <meta name="twitter:description" content="Articles about clx, a cross-platform ahead-of-time Lua 5.5 compiler that turns your Lua scripts into fast, standalone native executables.">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23171717'/><text x='5' y='23' font-family='Segoe UI,sans-serif' font-size='16' font-weight='700'><tspan fill='%23fafafa'>cl</tspan><tspan fill='%231A2FB7'>x</tspan></text></svg>">
+
+    <style>
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --bg: #090b14;
+            --card: #14161f;
+            --sidebar: #10121b;
+            --border: #262a3a;
+            --border-hover: #363c52;
+            --accent: #3b82f6;
+            --accent-2: #8b5cf6;
+            --accent-soft: rgba(59, 130, 246, 0.1);
+            --accent-2-soft: rgba(139, 92, 246, 0.12);
+            --accent-medium: rgba(59, 130, 246, 0.16);
+            --accent-strong: rgba(59, 130, 246, 0.28);
+            --halo-blue: rgba(59, 130, 246, 0.32);
+            --halo-violet: rgba(139, 92, 246, 0.30);
+            --text: #e6e6e8;
+            --text-bright: #fbfbfc;
+            --text-muted: #8d8d95;
+            --text-dim: #57575f;
+            --icon-color: #8d8d95;
+            --icon-active: #3b82f6;
+            --code-bg: #0e0f17;
+            --code-header-bg: rgba(255,255,255,0.025);
+            --nav-hover: rgba(255,255,255,0.045);
+            --bar-track: rgba(255,255,255,0.07);
+            --row-border: rgba(255,255,255,0.04);
+            --shadow-card: 0 20px 60px -12px rgba(0,0,0,0.65), 0 0 90px -24px var(--accent-soft);
+            --shadow-card-hover: 0 24px 70px -12px rgba(0,0,0,0.65), 0 0 100px -16px var(--accent-medium);
+        }
+
+        @media (prefers-color-scheme: light) {
+            :root {
+                --bg: #eef0f4;
+                --card: #ffffff;
+                --sidebar: #f7f8fa;
+                --border: #e5e7eb;
+                --border-hover: #d1d5db;
+                --accent: #1A2FB7;
+                --accent-2: #7c3aed;
+                --accent-soft: rgba(26, 47, 183, 0.07);
+                --accent-2-soft: rgba(124, 58, 237, 0.08);
+                --accent-medium: rgba(26, 47, 183, 0.12);
+                --accent-strong: rgba(26, 47, 183, 0.2);
+                --halo-blue: rgba(37, 99, 235, 0.16);
+                --halo-violet: rgba(124, 58, 237, 0.14);
+                --text: #262b36;
+                --text-bright: #0f1420;
+                --text-muted: #667085;
+                --text-dim: #9aa1b0;
+                --icon-color: #667085;
+                --icon-active: #1A2FB7;
+                --code-bg: #f8f9fb;
+                --code-header-bg: rgba(0,0,0,0.02);
+                --nav-hover: rgba(0,0,0,0.045);
+                --bar-track: rgba(0,0,0,0.07);
+                --row-border: rgba(0,0,0,0.05);
+                --shadow-card: 0 20px 50px -14px rgba(20,25,40,0.12), 0 0 0 1px rgba(20,25,40,0.04);
+                --shadow-card-hover: 0 24px 60px -14px rgba(20,25,40,0.16), 0 0 0 1px rgba(20,25,40,0.05), 0 0 24px -6px var(--accent-soft);
+            }
+        }
+
+        html {
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+            font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+            background:
+                radial-gradient(52vw 52vh at 0% 0%, var(--halo-blue), transparent 55%),
+                radial-gradient(48vw 48vh at 100% 0%, var(--halo-violet), transparent 55%),
+                radial-gradient(48vw 48vh at 0% 100%, var(--halo-violet), transparent 55%),
+                radial-gradient(52vw 52vh at 100% 100%, var(--halo-blue), transparent 55%),
+                var(--bg);
+            background-attachment: fixed;
+            color: var(--text);
+            min-height: 100vh;
+            min-height: 100dvh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1.5rem;
+        }
+
+        ::selection { background: var(--accent); color: #fff; }
+
+        .card {
+            width: 100%;
+            max-width: 1100px;
+            height: 720px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            overflow: hidden;
+            display: flex;
+            box-shadow: var(--shadow-card);
+            animation: cardIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            opacity: 0;
+            transition: border-color 0.4s ease, box-shadow 0.4s ease;
+        }
+
+        .card:hover {
+            border-color: var(--border-hover);
+            box-shadow: var(--shadow-card-hover);
+        }
+
+        @keyframes cardIn {
+            from { opacity: 0; transform: translateY(16px) scale(0.98); }
+            to   { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        .sidebar {
+            width: 220px;
+            min-width: 220px;
+            background: var(--sidebar);
+            border-right: 1px solid var(--border);
+            padding: 20px 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .sidebar-brand {
+            padding: 4px 14px 20px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 14px;
+            display: flex;
+            align-items: baseline;
+            gap: 10px;
+        }
+
+        .sidebar-brand h1 {
+            font-size: 2.375rem;
+            font-weight: 800;
+            letter-spacing: -0.04em;
+        }
+
+        .sidebar-brand h1 .clr-main { color: var(--text-bright); }
+        .sidebar-brand h1 .clr-x { color: #1A2FB7; }
+
+        .sidebar-brand .version {
+            font-size: 0.6875rem;
+            color: var(--text-dim);
+        }
+
+        .nav-item {
+            font-family: inherit;
+            font-size: 0.8125rem;
+            font-weight: 500;
+            padding: 9px 14px;
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            text-align: left;
+            border-radius: 7px;
+            position: relative;
+            transition: color 0.18s ease, background-color 0.18s ease;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            text-decoration: none;
+        }
+
+        .nav-item::before {
+            content: '';
+            position: absolute;
+            left: -10px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 3px;
+            height: 0%;
+            background: linear-gradient(180deg, var(--accent), var(--accent-2));
+            border-radius: 0 3px 3px 0;
+            transition: height 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .nav-item.active::before { height: 58%; }
+
+        .nav-item:hover .icon svg { transform: translateX(1px); }
+
+        .nav-item .icon, .section-title-icon, .feature-title .icon, .doc-section h3 .icon {
+            width: 18px;
+            height: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .section-title-icon {
+            width: 24px;
+            height: 24px;
+        }
+
+        .nav-item .icon svg, .section-title-icon svg {
+            width: 100%;
+            height: 100%;
+            color: var(--icon-color);
+            transition: color 0.18s ease, transform 0.18s ease;
+        }
+
+        .feature-title .icon svg, .doc-section h3 .icon svg {
+            width: 100%;
+            height: 100%;
+            transition: color 0.15s;
+        }
+
+        .nav-item:hover {
+            color: var(--text);
+            background: var(--nav-hover);
+        }
+        .nav-item:hover .icon svg { color: var(--text); }
+
+        .nav-item.active {
+            color: var(--accent);
+            background: var(--accent-soft);
+            font-weight: 600;
+        }
+        .nav-item.active .icon svg { color: var(--icon-active); }
+
+        .nav-item:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: -2px;
+        }
+
+        .nav-link-external { margin-top: 4px; }
+        .nav-link-external::after {
+            content: '↗';
+            font-size: 0.7em;
+            margin-left: auto;
+            opacity: 0.5;
+        }
+
+        .sidebar-footer {
+            margin-top: auto;
+            padding: 16px 14px 4px;
+            border-top: 1px solid var(--border);
+            font-size: 0.75rem;
+            color: var(--text-dim);
+        }
+
+        .sidebar-footer a {
+            font-size: 0.75rem;
+            margin-top: 0.75rem;
+            color: var(--text-dim);
+            text-decoration: none;
+            transition: color 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .sidebar-footer a:hover { color: var(--accent); }
+        .sidebar-footer a svg { width: 14px; height: 14px; }
+
+        .content {
+            flex: 1;
+            padding: 36px 40px;
+            overflow-y: auto;
+            overflow-x: hidden;
+            position: relative;
+            min-height: 0;
+        }
+
+        .content::-webkit-scrollbar { width: 4px; }
+        .content::-webkit-scrollbar-track { background: transparent; }
+        .content::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+        .content::-webkit-scrollbar-thumb:hover { background: var(--border-hover); }
+
+        .section { display: none; }
+        .section.active {
+            display: block;
+            animation: sectionIn 0.25s ease forwards;
+        }
+
+        @keyframes sectionIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        .section h2 {
+            font-size: 1.6875rem;
+            font-weight: 700;
+            color: var(--accent);
+            margin-bottom: 3rem;
+            letter-spacing: -0.025em;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .section h2 .section-title-icon svg {
+            color: var(--accent);
+        }
+
+        .section p {
+            font-size: 1rem;
+            line-height: 1.75;
+            color: var(--text-muted);
+            margin-bottom: 20px;
+        }
+        .section p .bright { color: var(--text-bright); font-weight: 600; }
+
+        .tagline {
+            font-size: 2.125rem;
+            font-weight: 800;
+            background: linear-gradient(100deg, var(--accent) 20%, var(--accent-2) 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            margin-bottom: 24px;
+            letter-spacing: -0.035em;
+            line-height: 1.22;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .tagline .section-title-icon svg {
+            color: var(--accent);
+        }
+
+        .subtitle {
+            font-size: 0.9375rem;
+            color: var(--text-dim);
+            margin-bottom: 32px;
+            font-weight: 400;
+        }
+
+        .about-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 2.5rem;
+        }
+
+        .about-stat {
+            padding: 18px;
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            transition: border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease;
+        }
+        .about-stat:hover {
+            border-color: var(--accent-strong);
+            box-shadow: 0 0 24px -6px var(--accent-medium);
+            transform: translateY(-2px);
+        }
+
+        .about-stat .value {
+            font-size: 1.4375rem;
+            font-weight: 600;
+            color: var(--accent);
+            line-height: 1.1;
+            letter-spacing: -0.01em;
+        }
+        .about-stat .label {
+            font-size: 0.6875rem;
+            color: var(--text-dim);
+            margin-top: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+
+        .feature-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .feature-card {
+            margin-top: 1rem;
+            padding: 18px;
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            transition: border-color 0.22s ease, box-shadow 0.22s ease, transform 0.22s ease;
+        }
+        .feature-card:hover {
+            border-color: var(--accent-strong);
+            box-shadow: 0 0 22px -4px var(--accent-medium);
+            transform: translateY(-2px);
+        }
+
+        .feature-title {
+            font-size: 0.8125rem;
+            font-weight: 600;
+            letter-spacing: -0.005em;
+            color: var(--text-bright);
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .feature-desc {
+            font-size: 0.8125rem;
+            color: var(--text-muted);
+            line-height: 1.6;
+        }
+
+        .code-block {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 20px 0;
+            transition: border-color 0.25s ease, box-shadow 0.25s ease;
+        }
+        .code-block:hover {
+            border-color: var(--border-hover);
+            box-shadow: 0 4px 24px -8px rgba(0,0,0,0.25);
+        }
+
+        .code-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 16px;
+            background: var(--code-header-bg);
+            border-bottom: 1px solid var(--border);
+            font-family: inherit;
+            font-size: 0.6875rem;
+            color: var(--text-dim);
+        }
+        .code-header .lang {
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            font-weight: 600;
+            color: var(--accent);
+        }
+
+        .code-body {
+            padding: 14px 18px;
+            font-family: 'JetBrains Mono', 'Cascadia Code', 'SF Mono', 'Consolas', 'Courier New', monospace;
+            font-size: 0.8rem;
+            font-weight: 400;
+            line-height: 1.8;
+            color: var(--text);
+            overflow-x: auto;
+            white-space: pre-wrap;
+        }
+        .code-body pre { margin: 0; white-space: pre; font: inherit; }
+
+
+        .prompt  { color: var(--accent); user-select: none; }
+        .comment { color: var(--text-dim); }
+        .flag    { color: #04682e; }
+        .output  { color: var(--text-muted); }
+
+        .key     { color: var(--accent); }
+
+        /* Manual inline highlighting used by short snippets that skip the Prism pipeline */
+        .kw  { color: var(--accent); }
+        .fn  { color: #6d28d9; }
+        .str { color: #be185d; }
+        .pp  { color: var(--accent-2); }
+
+        .bench-wrap {
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            overflow: hidden;
+            margin-top: 20px;
+        }
+
+        .bench-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8125rem;
+            table-layout: fixed;
+        }
+
+        .bench-table th:nth-child(1), .bench-table td:nth-child(1) { width: 15%; }
+        .bench-table th:nth-child(2), .bench-table td:nth-child(2) { width: 15%; }
+        .bench-table th:nth-child(3), .bench-table td:nth-child(3) { width: 15%; }
+        .bench-table th:nth-child(4), .bench-table td:nth-child(4) { width: 55%; }
+
+        .bench-table th {
+            text-align: left;
+            padding: 10px 16px;
+            font-size: 0.6875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-dim);
+            border-bottom: 1px solid var(--border);
+            font-weight: 500;
+        }
+
+        .bench-table td {
+            padding: 10px 16px;
+            border-bottom: 1px solid var(--row-border);
+            color: var(--text-muted);
+            vertical-align: middle;
+            transition: background-color 0.15s ease;
+        }
+        .bench-table tr:last-child td { border-bottom: none; }
+        .bench-table tbody tr:hover td { background: var(--nav-hover); }
+        .bench-table .winner { color: var(--accent); font-weight: 600; }
+        .bench-table .name   { color: var(--text-bright); font-weight: 600; }
+
+        .bar-track {
+            width: 100%;
+            height: 12px;
+            background: var(--bar-track);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .bar {
+            height: 100%;
+            border-radius: 6px;
+            width: 0%;
+            transition: width 0.9s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .bar.accent { background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+        .bar.yellow { background: #fbbf24; }
+        .bar.red    { background: #f87171; }
+
+        #bench-select {
+            transition: border-color 0.18s ease, box-shadow 0.18s ease;
+        }
+        #bench-select:hover { border-color: var(--border-hover) !important; }
+        #bench-select:focus-visible {
+            border-color: var(--accent) !important;
+            box-shadow: 0 0 0 3px var(--accent-soft);
+        }
+
+        .bench-note {
+            margin-top: 12px;
+            font-size: 0.6875rem;
+            color: var(--text-dim);
+        }
+
+        .doc-section { margin-bottom: 32px; }
+
+        .doc-section h3 {
+            font-size: 1.0625rem;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+            color: var(--accent);
+            margin-top: 44px;
+            margin-bottom: 18px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--border);
+        }
+        .doc-section h3:first-child { margin-top: 0; }
+        .doc-section p {
+            margin: 20px 0;
+        }
+        .doc-section ol, .doc-section ul {
+            margin: 20px 0;
+            padding-left: 24px;
+            font-size: 1rem;
+            line-height: 1.75;
+            color: var(--text-muted);
+        }
+        .doc-section li {
+            margin: 8px 0;
+        }
+        .doc-section li strong {
+            color: var(--text-bright);
+            font-weight: 600;
+        }
+        .doc-section li::marker {
+            color: var(--text-dim);
+        }
+        .doc-section h4 {
+            font-size: 0.9375rem;
+            font-weight: 700;
+            letter-spacing: -0.005em;
+            color: var(--accent-2);
+            margin-top: 36px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Compatibility chip groups */
+        .compat-group { margin-bottom: 28px; }
+        .compat-group:last-child { margin-bottom: 0; }
+        .compat-group-label {
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--accent-2);
+            margin-bottom: 14px;
+        }
+        .compat-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .compat-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.8125rem;
+            color: var(--text);
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            padding: 6px 12px 6px 10px;
+            border-radius: 999px;
+            transition: border-color 0.18s ease, transform 0.18s ease;
+        }
+        .compat-chip:hover {
+            border-color: var(--border-hover);
+            transform: translateY(-1px);
+        }
+        .compat-chip svg {
+            width: 13px;
+            height: 13px;
+            color: #4ade80;
+            flex-shrink: 0;
+        }
+        .compat-chip.partial svg { color: #fbbf24; }
+
+        .inline-code {
+            font-family: 'JetBrains Mono', 'Cascadia Code', 'SF Mono', 'Consolas', 'Courier New', monospace;
+            font-size: 0.8rem;
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            padding: 2px 7px;
+            border-radius: 5px;
+            color: var(--accent);
+        }
+
+        @media (max-width: 960px) {
+            .card {
+                height: 80vh;
+                max-height: 720px;
+                min-height: 480px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            body { 
+                padding: 0; 
+                display: block;
+                overflow-x: hidden; 
+                width: 100vw;
+            }
+            main {
+                display: block;
+                width: 100%;
+            }
+            .card {
+                border-radius: 0;
+                border-left: none;
+                border-right: none;
+                max-width: 100%;
+                width: 100%;
+                height: 100vh;
+                height: 100dvh;
+                max-height: none;
+                min-height: none;
+                flex-direction: column;
+                display: flex;
+            }
+            .sidebar {
+                width: 100%;
+                min-width: 0;
+                flex-direction: row;
+                border-right: none;
+                border-bottom: 1px solid var(--border);
+                padding: 6px 8px;
+                gap: 2px;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                scrollbar-width: none;
+                box-sizing: border-box;
+            }
+            .sidebar::-webkit-scrollbar { display: none; }
+            .sidebar-brand { display: none; }
+            .sidebar-footer { display: none; }
+            .nav-link-external { display: none; }
+            .nav-item {
+                white-space: nowrap;
+                padding: 10px 14px;
+                font-size: 0.8125rem;
+                min-height: 44px;
+                flex-shrink: 0;
+            }
+            .nav-item .icon { display: none; }
+            .nav-item::before { display: none; }
+            .content {
+                flex: 1;
+                padding: 20px 16px;
+                width: 100%;
+                min-width: 0;
+                box-sizing: border-box;
+                overflow-x: hidden;
+            }
+            .about-grid, .feature-grid { grid-template-columns: 1fr; }
+            .tagline { font-size: 1.3rem; white-space: normal; word-break: break-word; }
+            .section-title-icon { display: none; }
+            #bench-select { max-width: none; width: 100%; }
+            .bench-table th:last-child, .bench-table td:last-child { min-width: 0; }
+            .code-block, .bench-wrap { width: 100%; max-width: 100%; box-sizing: border-box; }
+            .code-body { max-width: 100%; overflow-x: auto; }
+        }
+
+        @media (max-width: 480px) {
+            .bench-table { font-size: 0.75rem; }
+            .bench-table th, .bench-table td { padding: 8px 10px; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.01ms !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
+
+        /* ═══ First-visit landing ═══ */
+        main[role="main"] { display: none; }
+        html.returning-visitor #landing { display: none; }
+        html.returning-visitor main[role="main"] { display: flex; }
+
+        #landing {
+            position: fixed;
+            inset: 0;
+            z-index: 50;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden auto;
+            background:
+                radial-gradient(52vw 52vh at 0% 0%, var(--halo-blue), transparent 55%),
+                radial-gradient(48vw 48vh at 100% 0%, var(--halo-violet), transparent 55%),
+                radial-gradient(48vw 48vh at 0% 100%, var(--halo-violet), transparent 55%),
+                radial-gradient(52vw 52vh at 100% 100%, var(--halo-blue), transparent 55%),
+                var(--bg);
+            animation: landingIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+        }
+
+        #landing.landing-exit {
+            animation: landingOut 0.45s cubic-bezier(0.4, 0, 1, 1) both;
+            pointer-events: none;
+        }
+
+        @keyframes landingIn {
+            from { opacity: 0; }
+            to   { opacity: 1; }
+        }
+        @keyframes landingOut {
+            from { opacity: 1; transform: scale(1); }
+            to   { opacity: 0; transform: scale(0.98); }
+        }
+
+        .landing-nav {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 26px clamp(20px, 5vw, 64px);
+            opacity: 0;
+            animation: landingContentIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) both 0.05s;
+        }
+        .landing-nav-logo {
+            font-size: 1.375rem;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+        }
+        .landing-nav-logo .clr-main { color: var(--text-bright); }
+        .landing-nav-logo .clr-x { color: var(--accent); }
+
+        .landing-nav-links {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .landing-nav-github {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            transition: border-color 0.18s ease, color 0.18s ease, background-color 0.18s ease;
+        }
+        .landing-nav-github:hover {
+            border-color: var(--border-hover);
+            color: var(--text-bright);
+            background: var(--nav-hover);
+        }
+        .landing-nav-github svg { width: 17px; height: 17px; }
+
+        .landing-nav-link {
+            display: inline-flex;
+            align-items: center;
+            height: 36px;
+            padding: 0 14px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            font-size: 0.8125rem;
+            font-weight: 500;
+            color: var(--text-muted);
+            text-decoration: none;
+            transition: border-color 0.18s ease, color 0.18s ease, background-color 0.18s ease;
+        }
+        .landing-nav-link:hover {
+            border-color: var(--border-hover);
+            color: var(--text-bright);
+            background: var(--nav-hover);
+        }
+
+        .landing-hero-wrap {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            padding: 20px clamp(20px, 5vw, 64px) 56px;
+        }
+        .landing-hero {
+            width: 100%;
+            max-width: 1160px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1.05fr 1fr;
+            gap: 64px;
+            align-items: center;
+        }
+
+        .landing-hero-text > * {
+            opacity: 0;
+            animation: landingContentIn 0.65s cubic-bezier(0.16, 1, 0.3, 1) both;
+        }
+        .landing-heading    { animation-delay: 0.18s; }
+        .landing-hero-sub   { animation-delay: 0.24s; }
+        .landing-hero-actions { animation-delay: 0.3s; }
+        .landing-hero-visual { opacity: 0; animation: landingContentIn 0.7s cubic-bezier(0.16, 1, 0.3, 1) both 0.22s; }
+
+        @keyframes landingContentIn {
+            from { opacity: 0; transform: translateY(14px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        .landing-heading {
+            margin-top: 18px;
+            font-size: clamp(2.25rem, 3.6vw, 3.25rem);
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            line-height: 1.12;
+            color: var(--text-bright);
+        }
+        .landing-heading-accent {
+            background: linear-gradient(100deg, var(--accent) 20%, var(--accent-2) 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+
+        .landing-hero-sub {
+            margin-top: 20px;
+            max-width: 480px;
+            font-size: 1.0625rem;
+            color: var(--text-muted);
+            line-height: 1.65;
+        }
+
+        .landing-hero-actions {
+            margin-top: 32px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .landing-cta {
+            font-family: inherit;
+            font-size: 0.9375rem;
+            font-weight: 600;
+            color: #fff;
+            background: linear-gradient(100deg, var(--accent) 20%, var(--accent-2) 100%);
+            border: none;
+            padding: 14px 26px;
+            border-radius: 10px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            box-shadow: 0 12px 30px -10px var(--accent-strong);
+            transition: transform 0.18s ease, box-shadow 0.18s ease;
+        }
+        .landing-cta:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 16px 36px -10px var(--accent-strong);
+        }
+        .landing-cta:active { transform: translateY(0); }
+        .landing-cta:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 3px;
+        }
+        .landing-cta svg {
+            width: 16px;
+            height: 16px;
+            transition: transform 0.18s ease;
+        }
+        .landing-cta:hover svg { transform: translateX(3px); }
+
+        .landing-link-inline {
+            font-size: 0.9375rem;
+            font-weight: 600;
+            color: var(--text);
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 2px;
+            transition: color 0.18s ease, border-color 0.18s ease;
+        }
+        .landing-link-inline:hover {
+            color: var(--accent);
+            border-color: var(--accent);
+        }
+
+        /* Terminal window */
+        .landing-terminal {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: var(--shadow-card);
+        }
+        .landing-terminal-body {
+            padding: 22px 24px 26px;
+            font-family: 'JetBrains Mono', 'Cascadia Code', 'SF Mono', 'Consolas', monospace;
+            font-size: 0.85rem;
+            line-height: 2;
+            text-align: left;
+        }
+        .landing-terminal-body .tline {
+            opacity: 0;
+            animation: landingLineIn 0.4s ease both;
+            white-space: pre;
+        }
+        .landing-terminal-body .tline:nth-child(1) { animation-delay: 0.55s; }
+        .landing-terminal-body .tline:nth-child(2) { animation-delay: 0.85s; }
+        .landing-terminal-body .tline:nth-child(3) { animation-delay: 1.1s; }
+        .landing-terminal-body .tline:nth-child(4) { animation-delay: 1.4s; }
+        .landing-terminal-body .tline:nth-child(5) { animation-delay: 1.65s; }
+        @keyframes landingLineIn {
+            from { opacity: 0; transform: translateX(-4px); }
+            to   { opacity: 1; transform: translateX(0); }
+        }
+        .landing-terminal-body .prompt { color: var(--accent); }
+        .landing-terminal-body .out { color: var(--text-dim); }
+        .landing-terminal-body .out.accent { color: var(--accent-2); font-weight: 500; }
+        .landing-terminal-cursor {
+            display: inline-block;
+            width: 7px;
+            height: 1em;
+            margin-left: 2px;
+            background: var(--accent);
+            vertical-align: -0.15em;
+            animation: landingCursorBlink 1s step-end infinite;
+        }
+        @keyframes landingCursorBlink {
+            0%, 49%  { opacity: 1; }
+            50%, 100% { opacity: 0; }
+        }
+
+        @media (max-width: 900px) {
+            .landing-hero { grid-template-columns: 1fr; gap: 44px; text-align: center; }
+            .landing-hero-sub { margin-left: auto; margin-right: auto; }
+            .landing-hero-actions { justify-content: center; }
+        }
+        @media (max-width: 480px) {
+            .landing-hero-actions { flex-direction: column; align-items: stretch; width: 100%; }
+            .landing-cta { justify-content: center; }
+            .landing-link-inline { justify-content: center; border-bottom: none; }
+            .landing-terminal-body { font-size: 0.78rem; padding: 18px 16px 22px; }
+        }
+    </style>
+    <style>
+        .code-body pre { all: unset; display: block; white-space: pre; font-family: inherit; font-size: inherit; line-height: inherit; }
+        .code-body code[class*="language-"] { all: unset; display: inline; white-space: pre; font-family: inherit; font-size: inherit; line-height: inherit; color: var(--text); }
+        .token.comment  { color: var(--text-muted); }
+        .token.keyword  { color: var(--accent); }
+        .token.string   { color: #be185d; }
+        .token.number   { color: #16a34a; }
+        .token.function { color: #6d28d9; }
+        .token.operator { color: var(--text); }
+        .token.builtin  { color: var(--accent); }
+        .token.class-name { color: #0f766e; }
+        .token.punctuation { color: var(--text); }
+        .token.boolean  { color: var(--accent); }
+        .token.nil      { color: var(--accent); }
+        .token.symbol   { color: var(--text); }
+        .token.constant { color: #075985; }
+        .token.regex    { color: #be185d; }
+        .token.selector { color: #6d28d9; }
+        .token.atrule   { color: var(--accent); }
+        .token.url      { color: #be185d; }
+        .token.important { color: var(--accent); font-weight: bold; }
+        .token.bold     { font-weight: bold; }
+        .token.italic   { font-style: italic; }
+        .token.entity   { cursor: help; }
+        .token.inserted { color: #16a34a; }
+        .token.deleted  { color: #be185d; }
+        .token.tag      { color: #6d28d9; }
+        .token.attr-name { color: #075985; }
+        .token.attr-value { color: #be185d; }
+        .token.property { color: #075985; }
+        .token.prolog   { color: var(--text-muted); }
+        .token.doctype  { color: var(--text-muted); }
+        .token.cdata    { color: var(--text-muted); }
+    </style>
+    <style>
+        main[role="main"] { display: flex; }
+        .sidebar-label {
+            font-size: 0.6875rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-dim);
+            padding: 8px 14px 4px;
+        }
+        .post-meta {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.8125rem;
+            color: var(--text-dim);
+            margin: -28px 0 32px;
+        }
+        .post-meta .dot { color: var(--border-hover); }
+    </style>
+</head>
+<body>
+
+<main role="main">
+    <article class="card">
+        <nav class="sidebar" role="tablist" aria-label="Blog navigation">
+            <div class="sidebar-brand">
+                <h1 aria-label="clx — native Lua compiler"><span class="clr-main">cl</span><span class="clr-x">x</span></h1><span class="version">v0.4.0</span>
+            </div>
+
+            <a class="nav-item" href="index.html">
+                <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg></span> Home
+            </a>
+
+            <div class="sidebar-label">Blog</div>
+
+            <button class="nav-item active" data-section="native-lua-compilation" role="tab" aria-selected="true" aria-controls="native-lua-compilation">
+                <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect><path d="M9 2v2"></path><path d="M15 2v2"></path><path d="M9 20v2"></path><path d="M15 20v2"></path><path d="M2 9h2"></path><path d="M2 15h2"></path><path d="M20 9h2"></path><path d="M20 15h2"></path></svg></span> Native Lua Compilation
+            </button>
+
+            <div class="sidebar-footer">
+                Copyright © 2026 - Tine Samir
+                <a href="https://github.com/samyeyo/clx" target="_blank" rel="noopener noreferrer">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+                    GitHub
+                </a>
+            </div>
+        </nav>
+
+        <div class="content">
+            <section id="native-lua-compilation" class="section active" role="tabpanel" aria-labelledby="native-lua-compilation">
+                <h2>
+                    <span class="section-title-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect><path d="M9 2v2"></path><path d="M15 2v2"></path><path d="M9 20v2"></path><path d="M15 20v2"></path><path d="M2 9h2"></path><path d="M2 15h2"></path><path d="M20 9h2"></path><path d="M20 15h2"></path></svg></span>
+                    The Trials and Tribulations of Native Lua Compilation
+                </h2>
+                <div class="post-meta"><span>October 2026</span><span class="dot">·</span><span>12 min read</span></div>
+
+                <div class="doc-section">
+                    <p>I have been working with Lua for a long time, and one of the things I have always liked about the language is how little it needs. It is small, elegant, portable, and remarkably easy to embed. That last property is probably one of the reasons Lua has been so successful: you can put a Lua interpreter inside a game, an application, a tool, or almost anything else and immediately gain a powerful scripting language.</p>
+
+                    <p>But after using Lua for years, I eventually started running into the other side of that design.</p>
+
+                    <p>Whenever I wanted to build and distribute a Lua application, there was always a Lua VM somewhere in the picture. With <a href="https://luart.org">LuaRT</a> and its <span class="inline-code">rtc</span> compiler, I had already solved a large part of the deployment problem, at least on Windows. I could package a Lua application as a standalone executable instead of asking users to install Lua separately.</p>
+
+                    <p>That worked well, but it left me with another question. Even if the interpreter was embedded in the executable, the application was still ultimately running Lua code through a Lua VM. The executable might look like a native application from the outside, but underneath it was still a Lua program being interpreted.</p>
+
+                    <p>I wanted to see what would happen if I went one step further.</p>
+
+                    <p>I wanted a genuinely native Lua experience, without depending on <span class="inline-code">lua55.dll</span>, <span class="inline-code">liblua55.so</span>, or an embedded Lua VM to execute the application. I wasn't trying to eliminate the runtime entirely — a compiled Lua program still needs native support for things like tables, strings, garbage collection, coroutines and the rest of the Lua semantics. What I wanted was to replace the general-purpose Lua VM with a runtime designed specifically to support <strong>compiled native Lua code</strong>.</p>
+
+                    <p>If I could also get some additional performance out of the process, that would be a nice bonus.</p>
+
+                    <p>That idea eventually became <strong>clx</strong>.</p>
+
+                    <h3>Packaging a VM vs compiling a program</h3>
+                    <p>The important difference between <span class="inline-code">rtc</span> and clx is the way they approach the problem.</p>
+
+                    <p>A system based around the Lua VM can package an application very conveniently. The Lua source or bytecode is bundled together with the interpreter, and the interpreter takes care of executing it. From a deployment perspective, that can be perfectly reasonable.</p>
+
+                    <p>clx takes a different approach. It parses Lua 5.5 source code, analyzes it, and generates C++ code representing the program. That generated C++ is then compiled by a regular native compiler such as Clang, GCC, or MSVC.</p>
+
+                    <p>The resulting executable therefore contains native code generated from the Lua program, together with the clx runtime that the program needs. There is no Lua interpreter underneath it executing Lua bytecode.</p>
+
+                    <p>That distinction is important. <strong>clx still has a runtime. It simply isn't a Lua VM.</strong></p>
+
+                    <p>The clx runtime provides the native implementation of the parts of Lua that compiled programs still need: tables, strings, memory management, garbage collection, coroutines, standard libraries and other runtime facilities. The difference is that the application itself has been compiled to native code and calls directly into that runtime.</p>
+
+                    <p>This sounds fairly straightforward when described in a few paragraphs. Building it is another matter entirely.</p>
+
+                    <p>Lua is a deceptively small language. The syntax is compact, but the semantics are not. Tables, multiple return values, closures, coroutines, metatables, environments, numeric conversions, upvalues, iteration, error handling and all the interactions between these features make compiling Lua correctly much more complicated than simply translating its syntax into C++.</p>
+
+                    <p>The further I went, the more I realized that the interesting part of a native Lua compiler wasn't generating code for <span class="inline-code">if</span>, <span class="inline-code">while</span> or arithmetic expressions. The difficult part was preserving Lua's semantics while taking advantage of the fact that the target was now native code.</p>
+
+                    <h3>From Lua source to a native executable</h3>
+                    <p>The basic workflow with clx is deliberately simple.</p>
+
+                    <p>Given a Lua program such as:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span><span>hello.lua</span></div>
+                        <div class="code-body"><span class="comment">-- hello.lua</span>
+print("Hello clx!")</div>
+                    </div>
+
+                    <p>you can compile it with:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">bash</span><span>Compile</span></div>
+                        <div class="code-body">clx hello.lua</div>
+                    </div>
+
+                    <p>and get a native executable.</p>
+
+                    <p>There is no special Lua code adjustements needed. You write Lua, and clx takes care of the compilation process.</p>
+
+                    <p>The compiler can also generate the C++ source instead of immediately invoking the native compiler:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">bash</span><span>C++ output</span></div>
+                        <div class="code-body">clx hello.lua --cpp</div>
+                    </div>
+
+                    <p>This is useful for debugging the compiler itself, as well as for people who want to integrate generated code into their own build systems.</p>
+
+                    <p>clx can also produce object files and static libraries:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">bash</span><span>Object / static</span></div>
+                        <div class="code-body">clx hello.lua --object
+clx hello.lua --static</div>
+                    </div>
+
+                    <p>This was an important part of the design for me. I didn't want clx to be limited to the "Lua script becomes executable" use case. Native compilation opens up possibilities for using compiled Lua code as another component in a larger native application.</p>
+
+                    <h3>Lua modules still work the way you expect</h3>
+                    <p>One thing I didn't want to sacrifice in the process was Lua's module system.</p>
+
+                    <p>A project can contain several Lua files:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">text</span><span>Layout</span></div>
+                        <div class="code-body">main.lua
+greet.lua
+utils.lua</div>
+                    </div>
+
+                    <p>and compile them together:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">bash</span><span>Multi-file build</span></div>
+                        <div class="code-body">clx main.lua greet.lua utils.lua --output app</div>
+                    </div>
+
+                    <p>A normal Lua call such as:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span><span>require</span></div>
+                        <div class="code-body">local greet = require("greet")</div>
+                    </div>
+
+                    <p>continues to work.</p>
+
+                    <p>The difference is that the modules can be compiled into the resulting native program rather than being interpreted from separate Lua source files at runtime.</p>
+
+                    <p>This is one of the nice consequences of compiling the whole program. A <span class="inline-code">require()</span> call doesn't necessarily mean that another Lua file has to be found and interpreted while the program is running. The module can already be part of the native executable.</p>
+
+                    <h3>Native modules</h3>
+                    <p>One of the reasons I chose C++ as the output language is that it gives clx a natural bridge to native libraries.</p>
+
+                    <p>A native module can be written using the clx C++ API. For example, a simple function receiving Lua arguments and returning a Lua value can look like this:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>fastmath.cpp</span></div>
+                        <div class="code-body">static clx::MultiValue add(clx::LState* L, const clx::LValue* args, size_t n)
+{
+    double sum = 0;
+
+    for (size_t i = 0; i &lt; n; i++)
+        sum += clx::check_number(L, args[i]);
+
+    return {clx::number(sum)};
+}</div>
+                    </div>
+
+                    <p>The module can then be compiled and linked with the Lua application:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">bash</span><span>Link module</span></div>
+                        <div class="code-body">clx main.lua --modules fastmath</div>
+                    </div>
+
+                    <p>and loaded normally from Lua:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span><span>require</span></div>
+                        <div class="code-body">local fastmath = require("fastmath")</div>
+                    </div>
+
+                    <p>This is one of the areas where the native approach becomes particularly useful. Instead of treating Lua as an isolated scripting environment, compiled Lua code can live alongside C++ code and call into native libraries directly through the clx API.</p>
+
+                    <p>It also means that libraries written in C or C++ don't need to be translated into some special Lua-specific implementation. They can remain native libraries, with a thin clx binding layer exposing the functionality to Lua.</p>
+
+                    <h3>Compiled Lua libraries</h3>
+                    <p>The same idea works in the other direction.</p>
+
+                    <p>A Lua module can be compiled as a static library:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">bash</span><span>Static library</span></div>
+                        <div class="code-body">clx mylib.lua --static --output mylib</div>
+                    </div>
+
+                    <p>and then exposed to a C++ application through the clx API.</p>
+
+                    <p>The result is that Lua code can become a native component of a larger application rather than simply being a script loaded by that application.</p>
+
+                    <p>That was one of the things I wanted from the beginning: Lua should be able to sit at the same level as the other native components of a program.</p>
+
+                    <h3>But sometimes you still need the Lua VM</h3>
+                    <p>There is another important distinction that became clear while developing clx.</p>
+
+                    <p>Removing the VM from the normal execution path doesn't mean that a Lua VM is never useful.</p>
+
+                    <p>Some applications genuinely need to execute Lua code that wasn't known when the application was compiled. Plugins, user scripts, configuration code, or applications that deliberately expose scripting capabilities are good examples.</p>
+
+                    <p>For that reason, clx also has a <span class="inline-code">--dynamic</span> mode.</p>
+
+                    <p>When this mode is enabled, clx embeds a Lua 5.5 VM and provides the necessary bridge between the compiled program and the interpreter. This makes runtime facilities such as <span class="inline-code">load()</span> possible while keeping the normal AOT compilation model for the rest of the application.</p>
+
+                    <p>So there are really two different execution models.</p>
+
+                    <p>With normal AOT compilation, your Lua code becomes native code and uses the clx runtime. With <span class="inline-code">--dynamic</span>, you can additionally have a real Lua VM available when you actually need to load and execute Lua code dynamically.</p>
+
+                    <p>I think this is a much more useful distinction than simply saying that one approach "has a runtime" and another doesn't. A runtime is necessary either way. The interesting question is <strong>what that runtime is doing</strong>.</p>
+
+                    <h3>Performance was part of the motivation</h3>
+                    <p>Eliminating the Lua VM from the execution path was the main reason I started working on clx, but performance was another motivation.</p>
+
+                    <p>Native compilation gives the compiler considerably more freedom than interpreting Lua bytecode. clx can perform analysis while compiling the program and generate C++ that can then be optimized by the underlying native compiler.</p>
+
+                    <p>There are workloads where this makes a substantial difference, although I don't consider clx universally faster than LuaJIT or every other Lua implementation. The performance characteristics depend heavily on the program and on how effectively the compiler can optimize it.</p>
+
+                    <p>For me, the more interesting part is that performance improvements come from compiling the program itself rather than simply trying to build a faster Lua interpreter.</p>
+
+                    <p>That changes the optimization problem completely.</p>
+
+                    <p>The compiler can reason about the program before it runs, specialize certain operations, eliminate unnecessary work, and leave the native compiler with ordinary C++ code to optimize.</p>
+
+                    <p>There is still plenty of room for improvement, but this direction has already produced meaningful results on several workloads.</p>
+
+                    <h3>Size matters too</h3>
+                    <p>Another thing that surprised me while working on clx was how small the resulting programs could become.</p>
+
+                    <p>A trivial program can produce a surprisingly small executable after native optimization and dead-code elimination, particularly when unnecessary parts of the clx runtime are excluded.</p>
+
+                    <p>The same principle applies to larger applications. A complete Pong game using a native Sokol module can be compiled into a standalone executable of only a few hundred kilobytes, including the required clx runtime and native functionality.</p>
+
+                    <p>For applications where deployment size matters, being able to compile only the functionality that is actually needed is quite useful.</p>
+
+                    <p>Again, the important distinction is that the runtime hasn't disappeared. It has become part of the native program, and the compiler can avoid including functionality that isn't required.</p>
+
+                    <h3>The difficult part is everything in between</h3>
+                    <p>The compiler itself has gone through a lot of iterations to get there.</p>
+
+                    <p>Tables have probably been one of the biggest challenges. Lua tables are simultaneously arrays, hash maps, objects, module containers, environments and the foundation of much of the language. A native representation has to handle all of those roles without making every table operation unnecessarily expensive.</p>
+
+                    <p>Multiple return values are another example. Lua's calling convention is fundamentally different from a conventional C++ function call, and handling things such as <span class="inline-code">return f()</span>, assignments with different numbers of values, varargs, and calls nested inside expressions requires a dedicated representation.</p>
+
+                    <p>Coroutines brought another class of problems because Lua's execution model doesn't map naturally onto ordinary C++ control flow. clx eventually had to use platform-specific mechanisms to implement the required context switching while keeping the Lua coroutine semantics intact.</p>
+
+                    <p>Garbage collection is yet another part that cannot simply be delegated to C++. clx has its own incremental mark-and-sweep garbage collector because compiled Lua programs still need Lua's memory-management semantics.</p>
+
+                    <p>Then there are all the less obvious cases: environments, metatables, integer semantics, string handling, closures, error propagation, iteration, module loading, and the interactions between all of these features.</p>
+
+                    <p>Every time I thought a particular subsystem was finished, another Lua program would find an edge case I hadn't considered.</p>
+
+                    <p>That is probably the most accurate description of developing a native Lua compiler: the individual pieces are manageable, but making all of them behave correctly together is where the real work is.</p>
+
+                    <h3>Why C++?</h3>
+                    <p>I considered the possibility of targeting other forms of native code, but C++ turned out to be a very practical choice.</p>
+
+                    <p>Clang, GCC and MSVC already provide mature optimizing backends for the platforms I care about. By generating modern C++20 rather than implementing an entire machine-code backend, clx can benefit from decades of work that has already gone into native compilers.</p>
+
+                    <p>It also makes integration with existing native software considerably easier.</p>
+
+                    <p>If someone already has a C++ library, writing a thin clx module around it is much more straightforward than creating a completely separate foreign-function interface and code-generation backend.</p>
+
+                    <p>There is a trade-off, of course. Generated C++ can become large, and very large generated translation units can take a significant amount of time to compile. That is one of the problems I am still working on as the compiler grows.</p>
+
+                    <p>Native compilation doesn't make the complexity disappear. It moves some of it into a different part of the toolchain.</p>
+
+                    <h3>Where clx stands today</h3>
+                    <p>clx is still evolving, but it has reached the point where I no longer see it as an experiment that happens to compile a few Lua examples.</p>
+
+                    <p>It supports Lua 5.5 syntax, can compile real multi-file projects, can integrate native modules, can produce standalone executables and libraries, and can optionally embed a Lua VM when runtime code loading is required.</p>
+
+                    <p>There are still rough edges, and there are certainly Lua programs that expose things I haven't implemented or optimized yet. A compiler like this is difficult to declare "finished" because every new program is another opportunity to discover a corner of the language or the runtime that deserves attention.</p>
+
+                    <p>But the fundamental idea works.</p>
+
+                    <p>You can write a Lua program, compile it through clx, and end up with a native executable that doesn't need a separate Lua installation, <span class="inline-code">lua55.dll</span>, or <span class="inline-code">liblua55.so</span> to run. The executable still contains the clx runtime, but that runtime is there to provide native implementations of Lua's runtime semantics rather than to interpret the application.</p>
+
+                    <p>That is what I wanted when I started the project.</p>
+
+                    <h3>Why I built clx</h3>
+                    <p>Looking back, clx didn't really start because I thought Lua needed another compiler.</p>
+
+                    <p>It started because I had spent years using Lua and building tools around it, and I became increasingly curious about what Lua would feel like if it were treated as a native programming language rather than primarily as an embedded scripting language.</p>
+
+                    <p>Lua has spent more than thirty years being one of the best languages to put inside another program. I wanted to see what it would feel like to put Lua at the center of the program instead.</p>
+
+                    <p>That turned out to be considerably harder than I expected.</p>
+
+                    <p>There were plenty of moments where the simplest solution would have been to fall back to the interpreter model, or to accept another VM dependency, or to stop worrying about a particular corner case because "Lua is dynamic anyway."</p>
+
+                    <p>Instead, I kept pushing the compiler a little further.</p>
+
+                    <p>And that's really what clx is today: the result of that process.</p>
+
+                    <p>It isn't an attempt to replace every Lua implementation, and it isn't a claim that native compilation is always the right answer. It is simply an attempt to explore what Lua can become when the language is compiled directly into a native program and supported by a dedicated native runtime.</p>
+
+                    <p>After spending years packaging Lua VMs into applications, there is something genuinely satisfying about being able to compile a Lua program and know that, when I hand somebody the resulting executable, I'm handing them a native program rather than an application whose execution still depends on a Lua interpreter.</p>
+                </div>
+            </section>
+        </div>
+    </article>
+</main>
+
+<script>
+(function () {
+    'use strict';
+
+    // --- Transform .code-body divs to Prism <pre><code> blocks ---
+    document.addEventListener('DOMContentLoaded', function() {
+        if (typeof Prism === 'undefined') return;
+        var bodies = document.querySelectorAll('.code-body');
+        for (var i = 0; i < bodies.length; i++) {
+            var el = bodies[i];
+            var block = el.closest('.code-block');
+            if (!block) continue;
+            var langEl = block.querySelector('.code-header .lang');
+            if (!langEl) continue;
+            var lang = langEl.textContent.trim().toLowerCase();
+            var prismLang = { sh:'bash', bash:'bash', cpp:'cpp', lua:'lua', c:'c' }[lang];
+            if (!prismLang) continue;
+            var text = el.textContent || el.innerText;
+            var pre = document.createElement('pre');
+            var code = document.createElement('code');
+            code.className = 'language-' + prismLang;
+            code.textContent = text;
+            pre.appendChild(code);
+            el.textContent = '';
+            el.appendChild(pre);
+            Prism.highlightElement(code);
+        }
+    });
+
+    // --- Navigation Logic ---
+    var navItems = document.querySelectorAll('.nav-item[data-section]');
+    var sections = document.querySelectorAll('.section');
+
+    function switchSection(id) {
+        navItems.forEach(function(btn) {
+            var active = btn.dataset.section === id;
+            btn.classList.toggle('active', active);
+            btn.setAttribute('aria-selected', active);
+        });
+
+        sections.forEach(function(s) { s.classList.remove('active'); });
+
+        var target = document.getElementById(id);
+        if (!target) return;
+
+        requestAnimationFrame(function() {
+            target.classList.add('active');
+            target.closest('.content').scrollTop = 0;
+        });
+    }
+
+    navItems.forEach(function(btn) {
+        btn.addEventListener('click', function() { switchSection(btn.dataset.section); });
+    });
+
+    document.querySelectorAll('a[href^="#"]').forEach(function(a) {
+        a.addEventListener('click', function(e) {
+            var id = this.getAttribute('href').slice(1);
+            if (document.getElementById(id)) {
+                e.preventDefault();
+                switchSection(id);
+            }
+        });
+    });
+
+    var hash = location.hash.replace('#', '');
+    if (hash && document.getElementById(hash)) switchSection(hash);
+
+    window.addEventListener('hashchange', function() {
+        var h = location.hash.replace('#', '');
+        if (h && document.getElementById(h)) switchSection(h);
+    });
+
+})();
+</script>
+
+</body>
+</html>
