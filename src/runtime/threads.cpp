@@ -48,6 +48,26 @@ LThread::~LThread() {
 #endif
 }
 
+//---------- shadow_stash: move LState's live shadow region into a thread that is about to stop running
+static inline void shadow_stash(LState *L, LThread *t) {
+    t->shadow.data = L->shadow_stack.data;
+    t->shadow.cap = L->shadow_stack.cap;
+    t->shadow_top = L->shadow_top;
+    L->shadow_stack.data = nullptr;
+    L->shadow_stack.cap = 0;
+    L->shadow_top = 0;
+}
+
+//---------- shadow_load: move a thread's shadow region back into LState, leaving the thread's copy empty
+static inline void shadow_load(LState *L, LThread *t) {
+    L->shadow_stack.data = t->shadow.data;
+    L->shadow_stack.cap = t->shadow.cap;
+    L->shadow_top = t->shadow_top;
+    t->shadow.data = nullptr;
+    t->shadow.cap = 0;
+    t->shadow_top = 0;
+}
+
 static void fiber_entry_impl(LThread *t) {
     LState *L = t->state;
     for (;;) {
@@ -80,6 +100,8 @@ static void fiber_entry_impl(LThread *t) {
     }
 
     LThread *caller = t->caller;
+    shadow_stash(L, t);
+    shadow_load(L, caller);
     L->running_thread = caller;
     caller->status = THREAD_RUNNING;
 
@@ -135,8 +157,12 @@ LValue create_thread(LState *L, const LValue &func, double stack_size) {
     t->close_requested = false;
     t->caller = nullptr;
     t->status = THREAD_SUSPENDED;
+    t->shadow_top = 0;
+    t->started = false;
     t->marked = 0;
     t->age = AGE_YOUNG;
+    if (t->luaapi && L->luaapi_thread_reset)
+        L->luaapi_thread_reset(L, t->luaapi);
     if (recycled && prev_age_th != AGE_YOUNG && (L->gc_phase == LState::GCPhase::Sweeping || L->gc_minor_active)) {
 
         t->flags |= LFLAG_GC_PIN;
@@ -188,6 +214,8 @@ LValue create_thread(LState *L, const LValue &func, double stack_size) {
 MultiValue resume(LState *L, const LValue &thread, const LValue *args, size_t count) {
     LThread *t = static_cast<LThread *>(thread.as_pointer());
     t->resume_args = MultiValue(args, count, L);
+    t->has_error = false;
+    t->started = true;
     if (L->gc_mode == LState::GCMode::Generational && t->age == AGE_OLD) {
         for (size_t i = 0; i < t->resume_args.count; ++i)
             gc_barrier_header(L, t, t->resume_args[i]);
@@ -195,6 +223,8 @@ MultiValue resume(LState *L, const LValue &thread, const LValue *args, size_t co
     t->caller = L->running_thread;
     t->caller->status = THREAD_NORMAL;
     t->status = THREAD_RUNNING;
+    shadow_stash(L, L->running_thread);
+    shadow_load(L, t);
     L->running_thread = t;
 
 #if defined(_WIN32)
@@ -218,7 +248,6 @@ MultiValue resume(LState *L, const LValue &thread, const LValue *args, size_t co
     buf[0] = boolean(!t->has_error);
     for (size_t i = 0; i < t->yield_args.count; ++i)
         buf[1 + i] = t->yield_args[i];
-    t->has_error = false;
     return MultiValue(buf, total, L);
 }
 
@@ -235,6 +264,8 @@ MultiValue yield(LState *L, const LValue *args, size_t count) {
     t->status = THREAD_SUSPENDED;
 
     LThread *caller = t->caller;
+    shadow_stash(L, t);
+    shadow_load(L, caller);
     L->running_thread = caller;
     caller->status = THREAD_RUNNING;
 
