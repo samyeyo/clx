@@ -13,11 +13,14 @@
 #include "../../include/clx.h"
 #include "../optimizer/optimizer.h"
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <iomanip>
 #include <map>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -353,11 +356,22 @@ bool local_register_friendly(
     return !res.materialized;
 }
 
+//------------------ hex_digit_value: numeric value of a single hexadecimal digit character
+static int hex_digit_value(unsigned char c) {
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    return (c | 0x20) - 'a' + 10;
+}
+
 std::string lua_decode_string(std::string_view s) {
     std::string r;
     r.reserve(s.length());
     for (size_t i = 0; i < s.length(); ++i) {
-        if (s[i] == '\\' && i + 1 < s.length()) {
+        if (s[i] == '\n' || s[i] == '\r')
+            throw std::runtime_error("unfinished string");
+        if (s[i] == '\\') {
+            if (i + 1 >= s.length())
+                throw std::runtime_error("unfinished string");
             unsigned char c = static_cast<unsigned char>(s[i + 1]);
             switch (c) {
             case 'a':
@@ -400,68 +414,78 @@ std::string lua_decode_string(std::string_view s) {
                 r += '\'';
                 i++;
                 break;
+            case '\n':
+            case '\r': {
+                unsigned char first = c;
+                r += '\n';
+                i++;
+                if (i + 1 < s.length() && (s[i + 1] == '\n' || s[i + 1] == '\r')
+                    && static_cast<unsigned char>(s[i + 1]) != first)
+                    i++;
+                break;
+            }
+            case 'z': {
+                i += 2;
+                while (i < s.length() && std::isspace(static_cast<unsigned char>(s[i])))
+                    i++;
+                i--;
+                break;
+            }
             case 'x': {
-                if (i + 3 < s.length()) {
-                    char hex[3] = { s[i + 2], s[i + 3], 0 };
-                    char *end;
-                    long val = std::strtol(hex, &end, 16);
-                    if (end == hex + 2) {
-                        r += static_cast<char>(val);
-                        i += 3;
-                    } else {
-                        r += s[i];
-                    }
-                } else {
-                    r += s[i];
-                }
+                if (i + 3 >= s.length() || !std::isxdigit(static_cast<unsigned char>(s[i + 2]))
+                    || !std::isxdigit(static_cast<unsigned char>(s[i + 3])))
+                    throw std::runtime_error("hexadecimal digit expected");
+                r += static_cast<char>((hex_digit_value(static_cast<unsigned char>(s[i + 2])) << 4)
+                    | hex_digit_value(static_cast<unsigned char>(s[i + 3])));
+                i += 3;
                 break;
             }
             case 'u': {
-                if (i + 2 < s.length() && s[i + 2] == '{') {
-                    size_t end = s.find('}', i + 3);
-                    if (end != std::string_view::npos) {
-                        std::string hx(s.data() + i + 3, end - i - 3);
-                        unsigned long cp = std::strtoul(hx.c_str(), nullptr, 16);
-                        if (cp < 0x80) {
-                            r += static_cast<char>(cp);
-                        } else if (cp < 0x800) {
-                            r += static_cast<char>(0xC0 | (cp >> 6));
-                            r += static_cast<char>(0x80 | (cp & 0x3F));
-                        } else if (cp < 0x10000) {
-                            r += static_cast<char>(0xE0 | (cp >> 12));
-                            r += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
-                            r += static_cast<char>(0x80 | (cp & 0x3F));
-                        } else {
-                            r += static_cast<char>(0xF0 | (cp >> 18));
-                            r += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
-                            r += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
-                            r += static_cast<char>(0x80 | (cp & 0x3F));
-                        }
-                        i = end;
-                    } else {
-                        r += s[i];
-                    }
-                } else {
-                    r += s[i];
+                if (i + 2 >= s.length() || s[i + 2] != '{')
+                    throw std::runtime_error("missing '{'");
+                size_t j = i + 3;
+                if (j >= s.length() || !std::isxdigit(static_cast<unsigned char>(s[j])))
+                    throw std::runtime_error("hexadecimal digit expected");
+                unsigned long cp = 0;
+                while (j < s.length() && std::isxdigit(static_cast<unsigned char>(s[j]))) {
+                    if (cp > 0x07FFFFFFul)
+                        throw std::runtime_error("UTF-8 value too large");
+                    cp = (cp << 4) | static_cast<unsigned long>(hex_digit_value(static_cast<unsigned char>(s[j])));
+                    j++;
                 }
+                if (j >= s.length() || s[j] != '}')
+                    throw std::runtime_error("missing '}'");
+                if (cp < 0x80) {
+                    r += static_cast<char>(cp);
+                } else {
+                    unsigned char cont[8];
+                    int k = 0;
+                    unsigned long mfb = 0x3f;
+                    do {
+                        cont[k++] = static_cast<unsigned char>(0x80 | (cp & 0x3f));
+                        cp >>= 6;
+                        mfb >>= 1;
+                    } while (cp > mfb);
+                    r += static_cast<char>((~mfb << 1) | cp);
+                    while (k > 0)
+                        r += static_cast<char>(cont[--k]);
+                }
+                i = j;
                 break;
             }
             default: {
-
                 if (c >= '0' && c <= '9') {
                     size_t j = i + 1;
-                    while (j < s.length() && j - i <= 3 && s[j] >= '0' && s[j] <= '7')
+                    while (j < s.length() && j - i <= 3 && s[j] >= '0' && s[j] <= '9')
                         j++;
-                    if (j > i + 1) {
-                        std::string oct(s.data() + i + 1, j - i - 1);
-                        long val = std::strtol(oct.c_str(), nullptr, 8);
-                        r += static_cast<char>(val);
-                        i = j - 1;
-                    } else {
-                        r += s[i];
-                    }
+                    std::string dec(s.data() + i + 1, j - i - 1);
+                    long val = std::strtol(dec.c_str(), nullptr, 10);
+                    if (val > 255)
+                        throw std::runtime_error("decimal escape too large");
+                    r += static_cast<char>(val);
+                    i = j - 1;
                 } else {
-                    r += s[i];
+                    throw std::runtime_error("invalid escape sequence");
                 }
                 break;
             }
@@ -507,7 +531,7 @@ std::string cpp_escape(std::string_view s) {
             r += "\\v";
             break;
         default:
-            if (c < 0x20) {
+            if (c < 0x20 || c >= 0x80) {
                 char buf[8];
                 bool next_is_hex = (i + 1 < s.length()
                     && ((s[i + 1] >= '0' && s[i + 1] <= '9') || (s[i + 1] >= 'a' && s[i + 1] <= 'f')
