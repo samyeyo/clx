@@ -1041,34 +1041,6 @@ private:
 //------------------ Coroutine thread status enum
 enum ThreadStatus { THREAD_SUSPENDED = 0, THREAD_RUNNING = 1, THREAD_DEAD = 2, THREAD_NORMAL = 3 };
 
-//------------------ Coroutine thread
-struct LThread : public LHeader {
-    LState *state;
-    LValue function;
-    int status;
-    LThread *caller;
-    MultiValue yield_args;
-    MultiValue resume_args;
-    bool is_main;
-    bool has_error;
-    bool close_requested;
-    size_t stack_bytes = 0;
-    bool fiber_started = false;
-    bool pre_unwind = false;
-#if defined(_WIN32)
-    LPVOID fiber;
-#elif (defined(__APPLE__) || defined(__linux__)) && (defined(__aarch64__) || defined(__x86_64__))
-    CoroutineContext ctx;
-    char *stack_memory;
-#else
-    ucontext_t ctx;
-    char *stack_memory;
-#endif
-
-    LThread();
-    ~LThread();
-};
-
 //------------------ Shadow stack (growable, replaced fixed MAX_SHADOW_STACK array)
 struct ShadowStack {
     TypedSlot *data = nullptr;
@@ -1097,6 +1069,41 @@ struct ShadowStack {
     }
 
     ~ShadowStack() { reset(); }
+};
+
+//------------------ Coroutine thread
+struct LThread : public LHeader {
+    LState *state;
+    LValue function;
+    int status;
+    LThread *caller;
+    MultiValue yield_args;
+    MultiValue resume_args;
+    bool is_main;
+    bool has_error;
+    bool close_requested;
+    size_t stack_bytes = 0;
+    bool fiber_started = false;
+    bool pre_unwind = false;
+    //---------- started: true once the thread has been resumed at least once in its current incarnation
+    bool started = false;
+    //---------- luaapi: backing ApiBundle for the Lua 5.5 C API (owned by libclx_capi)
+    void *luaapi = nullptr;
+    //---------- shadow: this thread's own GC-root region; empty while the thread is running (its region lives in LState)
+    ShadowStack shadow;
+    size_t shadow_top = 0;
+#if defined(_WIN32)
+    LPVOID fiber;
+#elif (defined(__APPLE__) || defined(__linux__)) && (defined(__aarch64__) || defined(__x86_64__))
+    CoroutineContext ctx;
+    char *stack_memory;
+#else
+    ucontext_t ctx;
+    char *stack_memory;
+#endif
+
+    LThread();
+    ~LThread();
 };
 
 //------------------ VM state
@@ -1132,6 +1139,14 @@ struct LState {
 
     const char *current_file;
     int current_line;
+
+    //---------- luaapi: backing ApiBundle for the Lua 5.5 C API (src/runtime/luaapi.cpp)
+    void *luaapi = nullptr;
+
+    //---------- luaapi_cleanup: teardown hook installed by the optional clx_capi bridge archive
+    void (*luaapi_cleanup)(LState *) = nullptr;
+    //---------- luaapi_thread_reset: recycle hook installed by the optional clx_capi bridge archive
+    void (*luaapi_thread_reset)(LState *, void *) = nullptr;
 
     size_t object_count;
     size_t gc_bytes_threshold;

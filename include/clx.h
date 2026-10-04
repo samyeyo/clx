@@ -11,6 +11,9 @@
 #include "clx_simd.h"
 #include <clx_runtime.h>
 
+//---------- lua_State: opaque target of the Lua 5.5 C API (defined in include/lua.h)
+struct lua_State;
+
 namespace clx {
 
 //------------------ Creates a nil LValue
@@ -874,6 +877,9 @@ CLX_INLINE table_iterator iterate(LState* L, const LValue& table)
     std::snprintf(buf, sizeof(buf), "bad argument #%d (%s expected, got %s)", argnum, expected, got);
     throw LRuntimeException(LValue(L->intern_string(buf)));
 }
+
+//------------------ luaapi_c_module_open: run a C module's luaopen_*, return its module value
+CLX_API LValue luaapi_c_module_open(LState* L, int (*openf)(struct ::lua_State*), const char* modname);
 
 }
 
