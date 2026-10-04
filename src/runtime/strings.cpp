@@ -419,24 +419,24 @@ MultiValue str_format(LState* L, const LValue* args, size_t count)
         case 'q': {
             size_t slen;
             const char* ss = get_string(L, args, count, slen, arg++);
-            buf[0] = '"';
-            size_t pos = 1;
-            for (size_t i = 0; i < slen && pos < sizeof(buf) - 4; i++) {
-                if (ss[i] == '"' || ss[i] == '\\') {
-                    buf[pos++] = '\\';
-                    buf[pos++] = ss[i];
-                } else if (ss[i] == '\n') {
-                    buf[pos++] = '\\';
-                    buf[pos++] = 'n';
-                } else if ((unsigned char)ss[i] < 32) {
-                    int nw = std::snprintf(buf + pos, sizeof(buf) - pos, "\\%03d", (unsigned char)ss[i]);
+            result.append("\"", 1);
+            for (size_t i = 0; i < slen; i++) {
+                unsigned char qc = (unsigned char)ss[i];
+                if (qc == '"' || qc == '\\' || qc == '\n') {
+                    char esc[2] = { '\\', (char)qc };
+                    result.append_owned(esc, 2);
+                } else if (std::iscntrl(qc)) {
+                    int nextc = (i + 1 < slen) ? (unsigned char)ss[i + 1] : 0;
+                    char esc[8];
+                    int nw = std::snprintf(esc, sizeof(esc), std::isdigit(nextc) ? "\\%03d" : "\\%d", (int)qc);
                     if (nw > 0)
-                        pos += nw;
-                } else
-                    buf[pos++] = ss[i];
+                        result.append_owned(esc, (uint32_t)nw);
+                } else {
+                    result.append(ss + i, 1);
+                }
             }
-            buf[pos++] = '"';
-            written = (int)pos;
+            result.append("\"", 1);
+            written = 0;
             break;
         }
         default:
@@ -928,9 +928,19 @@ static MultiValue str_find_aux(LState* L, const LValue* args, size_t count, int 
     int64_t init_i = (count >= 3 && args[2].type != Nil) ? get_integer(L, args, count, 3) : 1;
     size_t init = posrelat(init_i, ls) - 1;
     if (init > ls)
-        return MultiValue();
+        return MultiValue(LValue());
 
     bool plain = (count >= 4) ? args[3].as_bool() : false;
+
+    if (lp == 5 && p[0] == '%' && p[1] == 's' && p[2] == '*' && p[3] == '(' && p[4] == ')' && !(find && plain)) {
+        size_t e = init;
+        while (e < ls && std::isspace((unsigned char)s[e]))
+            e++;
+        if (find)
+            return MultiValue(LValue(static_cast<int64_t>(init + 1)), LValue(static_cast<int64_t>(e)),
+                              LValue(static_cast<int64_t>(e + 1)));
+        return MultiValue(LValue(static_cast<int64_t>(e + 1)));
+    }
 
     if (find && (plain || nospecials(p, lp))) {
         const char* s2 = lmemfind(s + init, ls - init, p, lp);
@@ -958,7 +968,7 @@ static MultiValue str_find_aux(LState* L, const LValue* args, size_t count, int 
                     size_t rc = 0;
                     results[rc++] = LValue(static_cast<int64_t>((s1 - s) + 1));
                     results[rc++] = LValue(static_cast<int64_t>(res - s));
-                    int nlevels = (ms.level == 0) ? 1 : ms.level;
+                    int nlevels = ms.level;
                     for (int ci = 0; ci < nlevels; ci++) {
                         const char* cap;
                         ptrdiff_t capl = get_onecapture(&ms, ci, s1, res, &cap);
@@ -989,7 +999,7 @@ static MultiValue str_find_aux(LState* L, const LValue* args, size_t count, int 
             }
         } while (s1 <= ms.src_end && !anchor);
     }
-    return MultiValue();
+    return MultiValue(LValue());
 }
 
 //------------------ str_find — string.find: locate pattern in string
