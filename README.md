@@ -40,7 +40,7 @@ Hello clx !
 - **Standalone binaries** — no interpreter or extra runtime to install alongside your program.
 - **Small outputs** — size-friendly builds can create very compact executables.
 - **Cross-platform** — works on Linux, macOS, and Windows.
-- **Extensible** — add native C++ modules when you need extra performance.
+- **Extensible** — Compatible with the Lua 5.5 C API: just recompile your existing binary modules and clx links them into the final executable seamlessly — no code changes.
 
 ## Examples built with clx
 
@@ -91,7 +91,7 @@ clx --help                 # see all options
 ```
 
 - **`load()` / `loadfile()` / `dofile()`** run on an embedded Lua engine and are only available when you compile with `--dynamic`. See [Dynamic Lua](./doc/dynamic-lua.md).
-- To write native modules, clx uses its own **C++ API** (the classic Lua C API is not supported). See [Modules](./doc/modules.md).
+- To write native modules, clx supports both its own **clx C++ API** and the **standard Lua 5.5 C API** (`lua.h`, `lauxlib.h`, `lualib.h`) — existing C modules compile and run unchanged. See [Modules](./doc/modules.md) and the [Lua C API](./doc/luacapi.md).
 
 ## Benchmarks
 
@@ -117,7 +117,9 @@ Detailed guides live in the `doc/` directory:
 - [CLI Reference](./doc/cli.md)
 - [Dynamic Lua](./doc/dynamic-lua.md)
 - [Compatibility](./doc/compatibility.md)
-- [Modules & C++ API](./doc/modules.md)
+- [Modules](./doc/modules.md)
+- [Clx C++ API](./doc/api.md)
+- [Lua C API](./doc/luacapi.md)
 - [Migration Guide](./doc/migration-guide.md)
 - [Benchmarks](./doc/benchmarks.md)
 
