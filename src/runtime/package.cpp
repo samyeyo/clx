@@ -35,7 +35,11 @@ static LValue get_package_field(LState *L, const char *key, size_t keylen) {
 
 //------------------ Checks whether a file is readable (fopen probe, closed immediately)
 static bool file_readable(const std::string &filename) {
+#if defined(_WIN32)
+    FILE *f = std::fopen(filename.c_str(), "r");
+#else
     FILE *f = std::fopen(filename.c_str(), "re");
+#endif
     if (!f)
         return false;
     std::fclose(f);
