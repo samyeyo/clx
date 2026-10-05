@@ -27,20 +27,33 @@ end
 ## Build
 
 ```bash
-./build.sh
+./build.sh        # Linux / macOS
 ```
 
-The script:
+```bat
+:: Windows — run from an "x64 Native Tools Command Prompt"
+build.bat
+```
 
-1. Fetches luasocket 3.1.0 (pinned release tarball, cached in `build/`).
-2. Compiles the C cores (`socket.core`, `mime.core`) against clx's Lua C API
-   headers and archives them as `socket.core.a` / `mime.core.a`.
-3. Stages the Lua side (`socket.lua`, `socket/http.lua`, `ltn12.lua`, ...) —
+Both scripts:
+
+1. Fetch luasocket 3.1.0 (pinned release tarball, cached in `build/`).
+2. Compile the C cores (`socket.core`, `mime.core`) against clx's Lua C API
+   headers and archive them as `socket.core.a` / `mime.core.a` (`.lib` on
+   Windows).
+3. Stage the Lua side (`socket.lua`, `socket/http.lua`, `ltn12.lua`, ...) —
    the directory layout gives the dotted `require` names.
-4. Compiles and links `weather` with clx using a probed smallest-binary flag
+4. Compile and link `weather` with clx using a probed smallest-binary flag
    set (`-Oz -finline-functions -flto=auto`, plus
    `-Wl,-exported_symbols_list,/dev/null` on macOS), producing a ~890 KB
    executable.
+
+`build.bat` follows the same steps on Windows: it compiles the `wsocket.c`
+Winsock backend instead of `usocket.c`, archives `socket.core.lib` /
+`mime.core.lib`, compiles the C cores with MSVC smallest-code flags
+(`/O1 /GL /Gw /Oi`), and links with clx passing `/Os /Oi /Zc:inline` — the
+MSVC equivalents of build.sh's `-Oz -finline-functions -flto=auto` — plus
+`ws2_32.lib` for Winsock.
 
 Environment overrides:
 
@@ -48,8 +61,8 @@ Environment overrides:
 | --- | --- | --- |
 | `LUASOCKET_VERSION` | `3.1.0` | luasocket release to fetch |
 | `CLX_INCLUDE` | `../../include` | path to clx's headers (`lua.h`) |
-| `CC` | `cc` | C compiler for the luasocket cores |
-| `AR` | `ar` | archiver for the `.a` module archives |
+| `CC` | `cc` / `cl.exe` | C compiler for the luasocket cores (`build.bat` detects `cl.exe`, else `gcc`/`clang`) |
+| `AR` | `ar` / `lib` | archiver for the module archives (`.a` on POSIX, `.lib` on Windows) |
 
 ## Run
 
