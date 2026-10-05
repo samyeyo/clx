@@ -240,6 +240,37 @@ std::string execute(const std::string& cmd, int& out_code)
     return result;
 }
 
+#ifdef _WIN32
+//------------------ CLX: find_on_path - true if exe_name exists in one of the PATH directories
+static bool find_on_path(const char* exe_name)
+{
+    const char* path = std::getenv("PATH");
+    if (!path || !*path)
+        return false;
+    std::string entries(path);
+    size_t start = 0;
+    while (start <= entries.size()) {
+        size_t end = entries.find(';', start);
+        if (end == std::string::npos)
+            end = entries.size();
+        std::string dir = entries.substr(start, end - start);
+        if (dir.size() >= 2 && dir.front() == '"' && dir.back() == '"')
+            dir = dir.substr(1, dir.size() - 2);
+        if (dir.empty()) {
+            start = end + 1;
+            continue;
+        }
+        if (dir.back() != '\\' && dir.back() != '/')
+            dir += '\\';
+        std::error_code ec;
+        if (fs::exists(dir + exe_name, ec))
+            return true;
+        start = end + 1;
+    }
+    return false;
+}
+#endif
+
 //------------------ CLX: get_compiler - resolve the C++ compiler: CLX_CXX environment
 Compiler get_compiler()
 {
@@ -257,6 +288,16 @@ Compiler get_compiler()
         return { msvc_style ? std::string("MSVC") : std::string("Clang"), std::string(env) };
     }
     fs::path embedded(CLX_DEFAULT_CXX);
+#ifdef _WIN32
+    std::string embedded_name = embedded.filename().string();
+    for (auto& c : embedded_name)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (embedded_name == "cl" || embedded_name == "cl.exe") {
+        const char* include_env = std::getenv("INCLUDE");
+        if (find_on_path("cl.exe") || !include_env || !*include_env)
+            return { "MSVC", "cl" };
+    }
+#endif
     if (embedded.is_absolute() && !fs::exists(embedded)) {
 #ifdef _WIN32
         return { "MSVC", "cl" };
@@ -415,6 +456,20 @@ int main(int argc, char* argv[])
         ;
     std::string msvc_dce_cl = dce_mode ? " /Gy" : "";
     std::string msvc_dce_link = dce_mode ? " /link /LTCG /OPT:REF /OPT:ICF" : "";
+
+    std::string msvc_stack;
+    std::string gcc_stack;
+    if (mode == BuildMode::Executable) {
+        std::string lower_opts = cc_options_str;
+        for (auto& c : lower_opts)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        bool user_stack = lower_opts.find("/stack") != std::string::npos
+            || lower_opts.find("--stack") != std::string::npos;
+        if (!user_stack) {
+            msvc_stack = (dce_mode || link_seen) ? " /STACK:0x800000" : " /link /STACK:0x800000";
+            gcc_stack = " -Wl,--stack,8388608";
+        }
+    }
 
     if (debug_mode) {
         opt_flags = "-O0 -g";
@@ -937,7 +992,7 @@ int main(int argc, char* argv[])
                 + msvc_obj_files;
         } else {
             cmd = cc.cmd + " /nologo " + msvc_opt_flags + msvc_dce_cl + " /std:c++20" + include_opt + cc_compile_str
-                + " " + all_cpp_files + fo_arg + lib_link + fe_arg + " " + msvc_dce_link + cc_link_str;
+                + " " + all_cpp_files + fo_arg + lib_link + fe_arg + " " + msvc_dce_link + cc_link_str + msvc_stack;
         }
     } else {
         if (mode == BuildMode::Object)
@@ -959,11 +1014,12 @@ int main(int argc, char* argv[])
             std::string ext = ".exe";
             if (output_name.size() >= ext.size()
                 && output_name.compare(output_name.size() - ext.size(), ext.size(), ext) == 0)
-                cmd = cc.cmd + " " + opt_flags + gcc_dce_cl + " -std=c++20" + include_opt + " " + all_cpp_files
-                    + cc_options_str + lib_link + gcc_dce_link + gcc_strip_link + " -o " + output_name;
+                cmd = cc.cmd + " " + opt_flags + gcc_dce_cl + " -std:c++20" + include_opt + " " + all_cpp_files
+                    + cc_options_str + lib_link + gcc_stack + gcc_dce_link + gcc_strip_link + " -o " + output_name;
             else
-                cmd = cc.cmd + " " + opt_flags + gcc_dce_cl + " -std=c++20" + include_opt + " " + all_cpp_files
-                    + cc_options_str + lib_link + gcc_dce_link + gcc_strip_link + " -o " + output_name + ".exe";
+                cmd = cc.cmd + " " + opt_flags + gcc_dce_cl + " -std:c++20" + include_opt + " " + all_cpp_files
+                    + cc_options_str + lib_link + gcc_stack + gcc_dce_link + gcc_strip_link + " -o " + output_name
+                    + ".exe";
 #else
             cmd = cc.cmd + " " + opt_flags + gcc_dce_cl + " -std=c++20" + include_opt + " " + all_cpp_files
 #ifdef __APPLE__
@@ -994,6 +1050,14 @@ int main(int argc, char* argv[])
 #endif
         } else {
             std::cerr << output << std::endl;
+#ifdef _WIN32
+            if (cc.name == "MSVC" && output.find("C1083") != std::string::npos) {
+                const char* include_env = std::getenv("INCLUDE");
+                if (!include_env || !*include_env)
+                    std::cerr << "clx: no MSVC header environment found. Run from an \"x64 Native Tools Command"
+                                 " Prompt\" (or \"Developer Command Prompt\") for your Visual Studio version.\n";
+            }
+#endif
         }
         for (const auto& f : cpp_files) {
             fs::remove(f);
