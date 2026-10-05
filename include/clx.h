@@ -565,10 +565,12 @@ CLX_INLINE MultiValue next(LState* L, const LValue& table, const LValue& key)
     if (scan_start < ex->hash_size) {
         if (ex->hash_bitmap) {
             size_t bm_words = (ex->hash_size + 63) / 64;
-            size_t word = scan_start / 64;
-            size_t shift = scan_start % 64;
-            uint64_t bits = ex->hash_bitmap[word] & ~((1ULL << shift) - 1);
-            for (; word < bm_words; ++word, bits = ex->hash_bitmap[word]) {
+            size_t first = scan_start / 64;
+            uint64_t keep = ~((1ULL << (scan_start % 64)) - 1);
+            for (size_t word = first; word < bm_words; ++word) {
+                uint64_t bits = ex->hash_bitmap[word];
+                if (word == first)
+                    bits &= keep;
                 while (bits) {
                     size_t idx = word * 64 + clx_ctzll(bits);
                     if (idx >= ex->hash_size)
