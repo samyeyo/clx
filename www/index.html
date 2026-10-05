@@ -556,6 +556,61 @@
         .bench-table .winner { color: var(--accent); font-weight: 600; }
         .bench-table .name   { color: var(--text-bright); font-weight: 600; }
 
+        .doc-table-wrap {
+            overflow-x: auto;
+            margin-top: 16px;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+        }
+
+        .doc-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8125rem;
+        }
+
+        .doc-table th {
+            text-align: left;
+            padding: 10px 16px;
+            font-size: 0.6875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-dim);
+            border-bottom: 1px solid var(--border);
+            font-weight: 500;
+            background: var(--code-header-bg);
+        }
+
+        .doc-table td {
+            padding: 10px 16px;
+            border-bottom: 1px solid var(--row-border);
+            color: var(--text-muted);
+            vertical-align: top;
+            line-height: 1.65;
+            transition: background-color 0.15s ease;
+        }
+        .doc-table tr:last-child td { border-bottom: none; }
+        .doc-table tbody tr:hover td { background: var(--nav-hover); }
+        .doc-table td:first-child { color: var(--text-bright); }
+        .doc-table td strong { color: var(--text-bright); font-weight: 600; }
+        .doc-table .inline-code { display: inline-block; }
+        .doc-table .ok   { color: var(--accent); font-weight: 600; }
+
+        .doc-table-split { table-layout: fixed; }
+        .doc-table-split th:nth-child(1), .doc-table-split td:nth-child(1) { width: 66%; }
+        .doc-table-split th:nth-child(2), .doc-table-split td:nth-child(2) { width: 34%; }
+
+        .doc-mono {
+            display: block;
+            margin-top: 3px;
+            font-family: 'JetBrains Mono', 'Cascadia Code', 'SF Mono', 'Consolas', monospace;
+            font-size: 0.75rem;
+            line-height: 1.6;
+            color: var(--text-dim);
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+
         .bar-track {
             width: 100%;
             height: 12px;
@@ -761,6 +816,10 @@
         @media (max-width: 480px) {
             .bench-table { font-size: 0.75rem; }
             .bench-table th, .bench-table td { padding: 8px 10px; }
+            .doc-table { font-size: 0.75rem; }
+            .doc-table th, .doc-table td { padding: 8px 10px; }
+            .doc-table-split th:nth-child(1), .doc-table-split td:nth-child(1) { width: 56%; }
+            .doc-table-split th:nth-child(2), .doc-table-split td:nth-child(2) { width: 44%; }
         }
 
         @media (prefers-reduced-motion: reduce) {
@@ -1138,6 +1197,12 @@
             <button class="nav-item" data-section="doc-modules" role="tab">
                 <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg></span> Modules
             </button>
+            <button class="nav-item" data-section="doc-api" role="tab">
+                <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg></span> Clx C++ API
+            </button>
+            <button class="nav-item" data-section="doc-luacapi" role="tab">
+                <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg></span> Lua C API
+            </button>
             <button class="nav-item" data-section="doc-compatibility" role="tab">
                 <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg></span> Compatibility
             </button>
@@ -1165,7 +1230,7 @@
                 </p>
                 <p style="margin-bottom: 8rem;">
                     Everything you already know about Lua just works: the full language, standard libraries, and coroutines. When you need to load code at runtime, clx's optional dynamic mode will run a Lua virtual machine alongside your compiled code, giving you the best of both worlds: speed and flexibility.
-                    <br><br>Binary modules are supported, but must be compiled with the clx C++ API. See the <a href="#doc-modules">Modules</a> section for more information.
+                    <br><br>Native modules are supported: write them against the <a href="#doc-api">clx C++ API</a> or against the standard Lua 5.5 C API (<span class="inline-code">lua.h</span>, <span class="inline-code">lauxlib.h</span>, <span class="inline-code">lualib.h</span>) and link them with <span class="inline-code">--modules</span>. See the <a href="#doc-modules">Modules</a> and <a href="#doc-luacapi">Lua C API</a> sections for more information.
                 </p>
                 <div class="about-grid">
                     <div class="about-stat">
@@ -1238,9 +1303,9 @@
                     </div>
                     <div class="feature-card">
                         <div class="feature-title">
-                            <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="#d946ef" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="8" height="8" rx="1" ry="1"></rect><rect x="14" y="14" width="8" height="8" rx="1" ry="1"></rect><line x1="6" y1="18" x2="6" y2="10"></line><line x1="18" y1="14" x2="18" y2="6"></line><path d="M6 6h6"></path><path d="M18 18h-6"></path></svg></span> Extendable C++ API
+                            <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="#d946ef" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="8" height="8" rx="1" ry="1"></rect><rect x="14" y="14" width="8" height="8" rx="1" ry="1"></rect><line x1="6" y1="18" x2="6" y2="10"></line><line x1="18" y1="14" x2="18" y2="6"></line><path d="M6 6h6"></path><path d="M18 18h-6"></path></svg></span> Extendable API
                         </div>
-                        <div class="feature-desc">Build third party modules using the clx C++ library</div>
+                        <div class="feature-desc">Build third-party modules with the clx C++ library or the standard Lua 5.5 C API.</div>
                     </div>
                 </div>
             </section>
@@ -1262,7 +1327,7 @@
 <span class="prompt">$</span> cd clx
 <span class="prompt">$</span> ./build.sh install</div>
                     </div>
-                    <p>This installs the <span class="inline-code">clx</span> compiler to <span class="inline-code">/usr/local/bin</span>, the runtime libraries (<span class="inline-code">libclx.a</span>, <span class="inline-code">libclx_size.a</span>, <span class="inline-code">libclx_lua.a</span>) to <span class="inline-code">/usr/local/lib</span>, and the headers to <span class="inline-code">/usr/local/include</span>. Run <span class="inline-code">./build.sh uninstall</span> to remove it.</p>
+                    <p>This installs the <span class="inline-code">clx</span> compiler to <span class="inline-code">/usr/local/bin</span>, the runtime libraries (<span class="inline-code">libclx.a</span>, <span class="inline-code">libclx_size.a</span>, <span class="inline-code">libclx_capi.a</span>, <span class="inline-code">libclx_capi_size.a</span>, <span class="inline-code">libclx_lua.a</span>) to <span class="inline-code">/usr/local/lib</span>, and the headers to <span class="inline-code">/usr/local/include</span>. Run <span class="inline-code">./build.sh uninstall</span> to remove it.</p>
 
                     <h4>Windows</h4>
                     <div class="code-block">
@@ -1271,7 +1336,7 @@
 <span class="prompt">&gt;</span> cd clx
 <span class="prompt">&gt;</span> build.bat install</div>
                     </div>
-                    <p>This installs the compiler to <span class="inline-code">%ProgramFiles%\clx\bin</span>, the libraries (<span class="inline-code">clx.lib</span>, <span class="inline-code">clx_size.lib</span>) to <span class="inline-code">%ProgramFiles%\clx\lib</span>, and the headers to <span class="inline-code">%ProgramFiles%\clx\include</span>. Run <span class="inline-code">build.bat uninstall</span> to remove it.</p>
+                    <p>This installs the compiler to <span class="inline-code">%ProgramFiles%\clx\bin</span>, the libraries (<span class="inline-code">clx.lib</span>, <span class="inline-code">clx_size.lib</span>, <span class="inline-code">clx_capi.lib</span>, <span class="inline-code">clx_capi_size.lib</span>) to <span class="inline-code">%ProgramFiles%\clx\lib</span>, and the headers to <span class="inline-code">%ProgramFiles%\clx\include</span>. Run <span class="inline-code">build.bat uninstall</span> to remove it.</p>
 
                     <p>On either platform, override the install location with <span class="inline-code">-DCMAKE_INSTALL_PREFIX=&lt;dir&gt;</span> when configuring.</p>
                 </div>
@@ -1816,9 +1881,9 @@ end
 <span class="flag">--size</span>        Optimize for size (default)
 <span class="flag">--fast</span>        Optimize for speed
 <span class="flag">--cpp</span>         Generate C++ source files, don't compile
-<span class="flag">--minimal</span>   Exclude non-essential modules (string, table, io, os, math, utf8, coroutine); keeps base + package
+<span class="flag">--minimal</span>   Exclude non-essential modules (table, io, os, math, utf8, coroutine); keeps base + package + string
 <span class="flag">--dynamic</span>   Link the embedded Lua 5.5 VM and enable load, loadfile, and dofile
-<span class="flag">--modules</span> &lt;list&gt;  Precompiled modules to link (comma-separated)</div>
+<span class="flag">--modules</span> &lt;list&gt;  Precompiled C++/C modules to link (comma-separated)</div>
                     </div>
                 </div>
                 <div class="doc-section">
@@ -1913,8 +1978,8 @@ end
                 </h2>
 
                 <div class="doc-section">
-                    <p>clx supports three ways to organize and load modules: Lua source modules compiled alongside your entry point (static preload), statically linked C++ modules with <span class="inline-code">--modules</span>, and — with <span class="inline-code">--dynamic</span> — Lua files loaded at runtime through <span class="inline-code">package.path</span>, which execute on the embedded Lua 5.5 VM. All three are consumed via Lua's <span class="inline-code">require()</span>.</p>
-                    <p>Binary modules must be compiled with the clx C++ API, as the Lua C API is not supported.</p>
+                    <p>clx supports four ways to organize and load modules: Lua source modules compiled alongside your entry point (static preload), statically linked native modules — C++ or C — with <span class="inline-code">--modules</span>, and — with <span class="inline-code">--dynamic</span> — Lua files loaded at runtime through <span class="inline-code">package.path</span>, which execute on the embedded Lua 5.5 VM. All four are consumed via Lua's <span class="inline-code">require()</span>.</p>
+                    <p>A native module is either a <strong>C++ module</strong> built against the clx C++ API, or a <strong>C module</strong> built against the standard Lua 5.5 C API (<span class="inline-code">lua.h</span>, <span class="inline-code">lauxlib.h</span>, <span class="inline-code">lualib.h</span>). clx classifies each archive by scanning its symbols, so both kinds link with the same <span class="inline-code">--modules</span> argument.</p>
                 </div>
 
                 <div class="doc-section">
@@ -2043,6 +2108,78 @@ utils.help()</div>
                 </div>
 
                 <div class="doc-section">
+                    <h3>Native C Modules (Standard Lua 5.5 C API)</h3>
+                    <p>clx ships the standard Lua 5.5 C API headers — <span class="inline-code">lua.h</span>, <span class="inline-code">lauxlib.h</span> and <span class="inline-code">lualib.h</span> — plus a bridge that implements that API on top of the clx runtime, so existing C modules written against the official API compile and run unchanged:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">sh</span><span>Build and link</span></div>
+                        <div class="code-body"><span class="comment"># fetch a module such as luafilesystem, then:</span>
+<span class="prompt">$</span> cc -c -O2 -I/path/to/clx/include lfs.c -o lfs.o
+<span class="prompt">$</span> ar rcs lfs.a lfs.o
+
+<span class="prompt">$</span> clx main.lua --modules lfs -o main
+<span class="prompt">$</span> ./main</div>
+                    </div>
+                    <p>The <span class="inline-code">--modules</span> argument is the archive filename without its extension, and the module must export a C <span class="inline-code">luaopen_&lt;name&gt;</span> symbol:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">c</span><span>Declaration</span></div>
+                        <div class="code-body"><span class="pp">#include "lua.h"</span>
+<span class="pp">#include "lauxlib.h"</span>
+<span class="pp">#include "lualib.h"</span>
+
+<span class="kw">int</span> luaopen_lfs(<span class="kw">lua_State</span> *L);   <span class="comment">/* declared by lfs.h */</span></div>
+                    </div>
+                    <p>clx classifies each archive before code generation by scanning its symbols:</p>
+                    <ul>
+                        <li>An Itanium/MSVC-mangled <span class="inline-code">luaopen_&lt;name&gt;</span> is treated as a <strong>C++ module</strong> and declared as <span class="inline-code">clx::LValue luaopen_&lt;name&gt;(clx::LState*)</span>.</li>
+                        <li>A plain, unmangled <span class="inline-code">luaopen_&lt;name&gt;</span> is treated as a <strong>C module</strong>; clx emits <span class="inline-code">extern "C" int luaopen_&lt;name&gt;(struct lua_State*)</span> and a small adapter that runs it and seeds <span class="inline-code">package.loaded</span> for <span class="inline-code">require</span>.</li>
+                        <li><span class="inline-code">clx_luaopen_&lt;name&gt;</span> (the prefixed form some wrappers emit) is also treated as a <strong>C module</strong>, declared under that symbol.</li>
+                    </ul>
+                    <p>Names are resolved in the current directory first, then in clx's own <span class="inline-code">lib/clx</span> install locations and any <span class="inline-code">-L</span> flags you pass. An input <span class="inline-code">.lua</span> file whose stem collides with a precompiled C module name is rejected.</p>
+                    <p>Two things to know when writing C modules:</p>
+                    <ul>
+                        <li><span class="inline-code">luaL_checkoption</span> returns the <strong>index</strong> of the chosen option in <span class="inline-code">lst</span>, not the string (this is a Lua 5.5 change).</li>
+                        <li><span class="inline-code">luaL_openlibs</span> and <span class="inline-code">luaL_openselectedlibs</span> live in <span class="inline-code">lualib.h</span>, not <span class="inline-code">lauxlib.h</span> — include it if you call them.</li>
+                    </ul>
+                    <p>How to write a module against this API, what the bridge implements, and where it differs from stock Lua are covered in the <a href="#doc-luacapi">Lua C API</a> section.</p>
+                </div>
+
+                <div class="doc-section">
+                    <h4>Linking: the C API wrapper is its own archive</h4>
+                    <p>The C API bridge is <strong>not</strong> part of <span class="inline-code">libclx.a</span> / <span class="inline-code">libclx_size.a</span>. It is built into a dedicated archive installed alongside them:</p>
+                    <div class="doc-table-wrap">
+                        <table class="doc-table">
+                            <thead>
+                                <tr><th>Archive</th><th>Contents</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td><span class="inline-code">libclx.a</span> / <span class="inline-code">clx.lib</span></td><td>core runtime — values, tables, GC, stdlibs, coroutines</td></tr>
+                                <tr><td><span class="inline-code">libclx_size.a</span> / <span class="inline-code">clx_size.lib</span></td><td>the same core runtime, <span class="inline-code">-Os</span> (default)</td></tr>
+                                <tr><td><span class="inline-code">libclx_capi.a</span> / <span class="inline-code">clx_capi.lib</span></td><td>Lua 5.5 C API wrapper — <span class="inline-code">lua_*</span>, <span class="inline-code">luaL_*</span>, <span class="inline-code">luaopen_*</span> adapters</td></tr>
+                                <tr><td><span class="inline-code">libclx_capi_size.a</span> / <span class="inline-code">clx_capi_size.lib</span></td><td>the same wrapper, <span class="inline-code">-Os</span> (default)</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p>clx links <span class="inline-code">libclx_capi*.a</span> <strong>only</strong> when <span class="inline-code">--modules</span> pulls in an archive that classifies as a C module. C++ modules and plain Lua programs never pull it in, so they pay nothing for the wrapper.</p>
+                    <p>The core archive and the wrapper always come as a matched pair — pick the variant once with <span class="inline-code">--size</span> (default) or <span class="inline-code">--fast</span>:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">sh</span><span>Matched pairs</span></div>
+                        <div class="code-body"><span class="prompt">$</span> clx main.lua --modules lfs -o main          <span class="comment"># libclx_size.a + libclx_capi_size.a</span>
+<span class="prompt">$</span> clx main.lua --modules lfs --fast -o main   <span class="comment"># libclx.a      + libclx_capi.a</span></div>
+                    </div>
+                    <p>Both archives are resolved together, in the same places, in order: <span class="inline-code">build/</span>, <span class="inline-code">lib/</span> and <span class="inline-code">lib64/</span> next to the <span class="inline-code">clx</span> binary, then the install prefix's libdir (the one used at <span class="inline-code">cmake --install</span> time). If the wrapper archive cannot be found the link stops with a "library not found" error; if it is found but stale, the link fails with undefined <span class="inline-code">lua_*</span> or <span class="inline-code">clx::luaapi_c_module_open</span> symbols.</p>
+                    <p>If you link by hand instead of going through the driver:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">sh</span><span>Manual link</span></div>
+                        <div class="code-body"><span class="comment"># default (--size) build</span>
+<span class="prompt">$</span> c++ main.o lfs.a -L/path/to/clx/lib -lclx_size -lclx_capi_size -o main
+
+<span class="comment"># --fast build</span>
+<span class="prompt">$</span> c++ main.o lfs.a -L/path/to/clx/lib -lclx -lclx_capi -o main</div>
+                    </div>
+                    <p>Keep the pair consistent: <span class="inline-code">-Os</span> and <span class="inline-code">-O3</span> objects are interchangeable at link time, but only one core/wrapper variant should be pulled into a given binary.</p>
+                </div>
+
+                <div class="doc-section">
                     <h3>Compiling Lua to Libraries</h3>
 
                     <h4>Static Library</h4>
@@ -2091,17 +2228,585 @@ utils.help()</div>
                 <div class="doc-section">
                     <h3>Options Reference</h3>
                     <div class="code-block">
-                        <div class="code-body"><span class="flag">--modules</span> &lt;list&gt;   Comma-separated list of precompiled C++ modules
-<span class="flag">--minimal</span>          Exclude non-essential modules (string, table, io, os, math, utf8, coroutine); keeps base + package
+                        <div class="code-body"><span class="flag">--modules</span> &lt;list&gt;   Comma-separated list of precompiled C++/C modules
+<span class="flag">--fast</span>             Link <span class="fn">libclx.a</span> + <span class="fn">libclx_capi.a</span> (optimize for speed)
+<span class="flag">--size</span>             Link <span class="fn">libclx_size.a</span> + <span class="fn">libclx_capi_size.a</span> (default)
+<span class="flag">--minimal</span>          Exclude non-essential modules (table, io, os, math, utf8, coroutine); keeps base + package + string
 <span class="flag">--dynamic</span>          Link the embedded Lua 5.5 VM and enable load, loadfile, and dofile
-<span class="flag">--static</span>            Compile to static library (exports <span class="fn">luaopen_</span>*)
-<span class="flag">--object</span>            Compile to object file (exports <span class="fn">luaopen_</span>*)</div>
+<span class="flag">--static</span>           Compile to static library (exports <span class="fn">luaopen_</span>*)
+<span class="flag">--object</span>           Compile to object file (exports <span class="fn">luaopen_</span>*)</div>
                     </div>
                 </div>
 
                 <div class="doc-section">
                     <h3>Writing native modules</h3>
-                    <p>A native module is a C++ file that exports one <span class="inline-code">luaopen_&lt;name&gt;</span> function returning a table, then gets linked with <span class="inline-code">--modules</span>. The full worked example and the complete C++ API live in <span class="inline-code">doc/modules.md</span> and <span class="inline-code">doc/api.md</span>.</p>
+                    <p>A native module is a C or C++ file that exports one <span class="inline-code">luaopen_&lt;name&gt;</span> function returning a table, then gets linked with <span class="inline-code">--modules</span>. Write it against the clx <a href="#doc-api">C++ API</a> (see <span class="inline-code">doc/modules.md</span>) or against the standard Lua 5.5 C API — see the <a href="#doc-luacapi">Lua C API</a> section for the worked example, what the bridge implements, and how it differs from stock Lua.</p>
+                </div>
+            </section>
+
+            <!-- ═══ Doc: C++ API ═══ -->
+            <section id="doc-api" class="section doc-section" role="tabpanel">
+                <h2>
+                    <span class="section-title-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg></span>
+                    Clx C++ API
+                </h2>
+
+                <div class="doc-section">
+                    <p>If you want to extend <span class="bright">clx</span> with native C++ code — for example a high-performance library module — this page shows you the API. Everything lives in <span class="inline-code">namespace clx</span> and starts with <span class="inline-code">#include &lt;clx.h&gt;</span>.</p>
+                    <p>One thing sets clx apart from the classic Lua C API: <strong>there is no stack</strong>. You work directly with <span class="inline-code">LValue</span> objects, which is closer to normal C++. That makes the API smaller and less error-prone. If you would rather keep an existing C module written against the standard API, see <a href="#doc-luacapi">Lua C API</a>.</p>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Setting up and tearing down</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Open and close</span></div>
+                        <div class="code-body">clx::LState* L = clx::open();   <span class="comment">// create a runtime</span>
+clx::openlibs(L);               <span class="comment">// load the standard libraries</span>
+<span class="comment">// ... your code ...</span>
+clx::close(L);                  <span class="comment">// clean up</span></div>
+                    </div>
+                    <p><span class="inline-code">L</span> owns all the memory (strings, tables, threads). Call <span class="inline-code">close()</span> exactly once when you are done.</p>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Values: LValue</h3>
+                    <p>An <span class="inline-code">LValue</span> can hold any Lua value: <span class="inline-code">nil</span>, boolean, number, string, table, function, userdata, or thread. You create values with factory functions rather than pushing them onto a stack:</p>
+                    <div class="doc-table-wrap">
+                        <table class="doc-table">
+                            <thead>
+                                <tr><th>Function</th><th>Gives you</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td><span class="inline-code">nil()</span></td><td><span class="inline-code">nil</span></td></tr>
+                                <tr><td><span class="inline-code">boolean(bool)</span></td><td>a boolean</td></tr>
+                                <tr><td><span class="inline-code">number(double)</span></td><td>a floating-point number</td></tr>
+                                <tr><td><span class="inline-code">integer(int64_t)</span></td><td>an integer</td></tr>
+                                <tr><td><span class="inline-code">string(L, s)</span></td><td>a string (short strings are stored in place, no allocation)</td></tr>
+                                <tr><td><span class="inline-code">table(L)</span></td><td>a table</td></tr>
+                                <tr><td><span class="inline-code">cfunction(L, func)</span></td><td>a function</td></tr>
+                                <tr><td><span class="inline-code">lightuserdata(void*)</span></td><td>an opaque pointer</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p>Read values back with the <span class="inline-code">as_*</span> helpers:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Reading a value</span></div>
+                        <div class="code-body"><span class="kw">double</span> n = v.<span class="fn">as_number</span>();      <span class="comment">// as a number</span>
+<span class="kw">int64_t</span> i = v.<span class="fn">as_integer</span>();    <span class="comment">// as an integer</span>
+<span class="kw">const char</span>* s = v.<span class="fn">as_string</span>(); <span class="comment">// as a string</span></div>
+                    </div>
+
+                    <h4>Quick type checking</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Type predicates</span></div>
+                        <div class="code-body">clx::<span class="fn">is_number</span>(v);   clx::<span class="fn">is_string</span>(v);   clx::<span class="fn">is_table</span>(v);
+clx::<span class="fn">is_function</span>(v); clx::<span class="fn">is_integer</span>(v);  clx::<span class="fn">is_nil</span>(v);
+clx::<span class="fn">is_bool</span>(v);     clx::<span class="fn">is_userdata</span>(v);
+clx::<span class="fn">type_name</span>(v);   <span class="comment">// "number", "string", ...</span></div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Conversions</h3>
+                    <p>Two families help you read arguments safely.</p>
+                    <p><strong><span class="inline-code">to_*</span></strong> — lenient. Use a default when the value is not what you expect:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Lenient</span></div>
+                        <div class="code-body"><span class="kw">double</span> d = clx::<span class="fn">to_number</span>(v, 0.0);   <span class="comment">// v, or 0.0 if v isn't a number</span></div>
+                    </div>
+                    <p><strong><span class="inline-code">check_*</span></strong> — strict. Throw a <span class="inline-code">LRuntimeException</span> on mismatch:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Strict</span></div>
+                        <div class="code-body"><span class="kw">double</span> d = clx::<span class="fn">check_number</span>(L, args[0]);
+<span class="kw">const char</span>* s = clx::<span class="fn">check_string</span>(L, args[1]);</div>
+                    </div>
+                    <p><strong><span class="inline-code">opt_*</span></strong> — treat <span class="inline-code">nil</span> as the default, otherwise throw on mismatch:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Optional</span></div>
+                        <div class="code-body"><span class="kw">double</span> d = clx::<span class="fn">opt_number</span>(L, args[0], 1.0);</div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Globals</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Reading and writing globals</span></div>
+                        <div class="code-body">clx::<span class="kw">LValue</span> g = clx::<span class="fn">get_global</span>(L, <span class="str">"name"</span>);
+clx::<span class="fn">set_global</span>(L, <span class="str">"name"</span>, val);
+clx::<span class="fn">set_global</span>(L, <span class="str">"price"</span>, 3.14);        <span class="comment">// numbers auto-wrapped</span>
+clx::<span class="fn">set_global</span>(L, <span class="str">"count"</span>, <span class="kw">int64_t</span>(42)); <span class="comment">// integers</span>
+clx::<span class="fn">set_global</span>(L, <span class="str">"greeting"</span>, <span class="str">"hi"</span>);     <span class="comment">// strings auto-interned</span></div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Tables</h3>
+                    <p>Read and write with the <span class="inline-code">get_field</span> / <span class="inline-code">set_field</span> helpers (which respect <span class="inline-code">__index</span> / <span class="inline-code">__newindex</span>), or use <span class="inline-code">raw_get</span> / <span class="inline-code">raw_set</span> to bypass metatables:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Field access</span></div>
+                        <div class="code-body">clx::<span class="kw">LValue</span> v = clx::<span class="fn">get_field</span>(L, t, <span class="str">"key"</span>);     <span class="comment">// t["key"], with __index</span>
+clx::<span class="fn">set_field</span>(L, t, <span class="str">"key"</span>, val);                <span class="comment">// t["key"] = val</span>
+clx::<span class="kw">LValue</span> v = clx::<span class="fn">raw_get</span>(L, t, 7);            <span class="comment">// raw access, any key type</span></div>
+                    </div>
+                    <p>Iterate a table with a C++ range loop:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Iteration</span></div>
+                        <div class="code-body"><span class="kw">for</span> (<span class="kw">auto</span> it = clx::<span class="fn">iterate</span>(L, t); it; ++it) {
+    <span class="kw">auto</span> [key, value] = *it;
+    <span class="comment">// use key and value</span>
+}</div>
+                    </div>
+                    <p>Length and concatenation:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>len and concat</span></div>
+                        <div class="code-body">clx::<span class="fn">len</span>(L, v);       <span class="comment">// # operator</span>
+clx::<span class="fn">concat</span>(L, a, b); <span class="comment">// string concatenation</span></div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Calling functions</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>call throws on error</span></div>
+                        <div class="code-body">clx::<span class="kw">LValue</span> f = clx::<span class="fn">get_global</span>(L, <span class="str">"myfunc"</span>);
+clx::<span class="kw">LValue</span> args[] = { clx::<span class="fn">number</span>(1.0), clx::<span class="fn">number</span>(2.0) };
+clx::<span class="kw">MultiValue</span> r = clx::<span class="fn">call</span>(L, f, args, 2);   <span class="comment">// throws on error</span></div>
+                    </div>
+                    <p>Or use <span class="inline-code">pcall</span> to catch errors instead of throwing:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>pcall returns a status</span></div>
+                        <div class="code-body">clx::<span class="kw">MultiValue</span> r = clx::<span class="fn">pcall</span>(L, f, args, 2);  <span class="comment">// {true, ...} or {false, err}</span></div>
+                    </div>
+                    <p>A variadic form accepts native C++ values directly:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Variadic call</span></div>
+                        <div class="code-body">clx::<span class="kw">MultiValue</span> r = clx::<span class="fn">call</span>(L, f, clx::<span class="fn">number</span>(1), <span class="str">"hello"</span>, 3.14);</div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Coroutines</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Threads</span></div>
+                        <div class="code-body">clx::<span class="kw">LValue</span> t = clx::<span class="fn">create_thread</span>(L, func);
+clx::<span class="kw">MultiValue</span> r = clx::<span class="fn">resume</span>(L, t, args, 1);  <span class="comment">// resume a coroutine</span>
+clx::<span class="kw">MultiValue</span> r = clx::<span class="fn">yield</span>(args, 1);        <span class="comment">// yield from a coroutine</span></div>
+                    </div>
+                    <p><span class="inline-code">resume</span> returns <span class="inline-code">{true, ...results}</span> or <span class="inline-code">{false, error_message}</span>.</p>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Errors</h3>
+                    <p>Throw errors as exceptions:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Raising an error</span></div>
+                        <div class="code-body">clx::<span class="fn">error</span>(L, <span class="str">"something went wrong"</span>);
+<span class="comment">// or</span>
+<span class="kw">throw</span> clx::<span class="kw">LRuntimeException</span>(clx::<span class="fn">string</span>(L, <span class="str">"oops"</span>));</div>
+                    </div>
+                    <p>There are helpers for common argument errors:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>Argument errors</span></div>
+                        <div class="code-body">clx::<span class="fn">arg_error</span>(L, 1, <span class="str">"number"</span>); <span class="comment">// "bad argument #1 (number expected)"</span>
+clx::<span class="fn">type_error</span>(L, 1, <span class="str">"number"</span>); <span class="comment">// "bad argument #1 (number expected, got X)"</span></div>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Writing a module</h3>
+                    <p>A native module is a C++ source file that exports one function (<span class="inline-code">luaopen_&lt;name&gt;</span>) which returns a table. See <a href="#doc-modules">Modules</a> for the full worked example and how to compile and link it.</p>
+                    <p>A complete example using lazy registration:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">cpp</span><span>mylib.cpp</span></div>
+                        <div class="code-body"><span class="pp">#include &lt;clx.h&gt;</span>
+
+<span class="kw">static</span> <span class="kw">clx::MultiValue</span> <span class="fn">add</span>(<span class="kw">clx::LState</span>* L, <span class="kw">const</span> <span class="kw">clx::LValue</span>* args, <span class="kw">size_t</span> n) {
+    <span class="kw">double</span> sum = 0;
+    <span class="kw">for</span> (<span class="kw">size_t</span> i = 0; i &lt; n; i++)
+        sum += clx::<span class="fn">check_number</span>(L, args[i]);
+    <span class="kw">return</span> {clx::<span class="fn">number</span>(sum)};
+}
+
+<span class="kw">static constexpr</span> <span class="kw">clx::LazyReg</span> my_funcs[] = {
+    {<span class="str">"add"</span>, add},
+};
+
+<span class="kw">CLX_API</span> <span class="kw">clx::LValue</span> <span class="fn">luaopen_mylib</span>(<span class="kw">clx::LState</span>* L) {
+    <span class="kw">clx::LValue</span> t = clx::<span class="fn">table</span>(L);
+    clx::<span class="fn">set_lazy_funcs</span>(L, t, my_funcs, 1);
+    clx::<span class="fn">set_global</span>(L, <span class="str">"mylib"</span>, t);
+    <span class="kw">return</span> <span class="kw">clx::LValue</span>();
+}</div>
+                    </div>
+                    <p>Compile this into an object or library, then link it with:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">sh</span><span>Link</span></div>
+                        <div class="code-body"><span class="prompt">$</span> clx main.lua --modules mylib</div>
+                    </div>
+                    <p>Your module then becomes available as <span class="inline-code">require("mylib")</span>.</p>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Porting an existing Lua C module?</h3>
+                    <p>The migration guide (<span class="inline-code">doc/migration-guide.md</span>) walks you through converting a module written against the classic Lua C API. If you would rather keep it as C, link it with <span class="inline-code">--modules</span> as described in <a href="#doc-luacapi">Lua C API</a>.</p>
+                </div>
+            </section>
+
+            <!-- ═══ Doc: Lua C API ═══ -->
+            <section id="doc-luacapi" class="section doc-section" role="tabpanel">
+                <h2>
+                    <span class="section-title-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg></span>
+                    The Lua C API
+                </h2>
+
+                <div class="doc-section">
+                    <p><span class="bright">clx</span> ships the standard Lua 5.5 headers — <span class="inline-code">lua.h</span>, <span class="inline-code">lauxlib.h</span> and <span class="inline-code">lualib.h</span> — plus a bridge that implements them on top of the clx runtime. C modules written against the official API compile and run unchanged: no source port, no Lua library to link against.</p>
+                    <p>This page is for people <em>using</em> the C API from C or C++. It covers how to write a module, what the bridge implements, and where it behaves differently from stock Lua. For compiling, finding and linking archives, see <a href="#doc-modules">Modules</a>. If you would rather write native code in C++, see the <a href="#doc-api">C++ API</a> section.</p>
+                </div>
+
+                <div class="doc-section">
+                    <h3>A first module</h3>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">c</span><span>demo.c</span></div>
+                        <div class="code-body"><span class="pp">#include "lua.h"</span>
+<span class="pp">#include "lauxlib.h"</span>
+<span class="pp">#include "lualib.h"</span>
+
+<span class="kw">static int</span> <span class="fn">l_add</span>(<span class="kw">lua_State</span> *L)
+{
+    <span class="kw">lua_Integer</span> a = <span class="fn">luaL_checkinteger</span>(L, 1);
+    <span class="kw">lua_Integer</span> b = <span class="fn">luaL_checkinteger</span>(L, 2);
+    <span class="fn">lua_pushinteger</span>(L, a + b);
+    <span class="kw">return</span> 1;
+}
+
+<span class="kw">int</span> <span class="fn">luaopen_demo</span>(<span class="kw">lua_State</span> *L)
+{
+    <span class="kw">static const</span> <span class="kw">luaL_Reg</span> funcs[] = {
+        {<span class="str">"add"</span>, l_add},
+        {<span class="kw">NULL</span>, <span class="kw">NULL</span>}
+    };
+    <span class="fn">luaL_newlib</span>(L, funcs);
+    <span class="kw">return</span> 1;
+}</div>
+                    </div>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span><span>main.lua</span></div>
+                        <div class="code-body"><span class="kw">local</span> demo = <span class="fn">require</span>(<span class="str">"demo"</span>)
+<span class="fn">assert</span>(demo.add(2, 3) == 5)</div>
+                    </div>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">sh</span><span>Build, link, run</span></div>
+                        <div class="code-body"><span class="prompt">$</span> cc -c -O2 -I/path/to/clx/include demo.c -o demo.o
+<span class="prompt">$</span> ar rcs demo.a demo.o
+
+<span class="prompt">$</span> clx main.lua --modules demo -o main
+<span class="prompt">$</span> ./main</div>
+                    </div>
+                    <p>Three things follow from how clx links modules:</p>
+                    <ul>
+                        <li>The archive must be named after the module — <span class="inline-code">demo.a</span> (<span class="inline-code">demo.lib</span> on Windows) — and export a plain <span class="inline-code">extern "C" int luaopen_demo(lua_State*)</span>.</li>
+                        <li>Compile the module <strong>as C</strong>, or wrap its opener in <span class="inline-code">extern "C"</span> if you compile it as C++. clx decides how to call the opener by scanning the archive's symbols: a <em>mangled</em> <span class="inline-code">luaopen_demo</span> is treated as a C++ module and expected to have the signature <span class="inline-code">clx::LValue luaopen_demo(clx::LState*)</span>, which a stock Lua module does not have.</li>
+                        <li>The opener runs <strong>once, eagerly, when the program starts</strong> — before your entry chunk runs. <span class="inline-code">require("demo")</span> then returns the value already cached in <span class="inline-code">package.loaded</span>.</li>
+                    </ul>
+                    <p>The headers work from C99 onwards and from C++. Put clx's <span class="inline-code">include/</span> directory on your C compiler's include path and do <strong>not</strong> link <span class="inline-code">-llua</span> — the <span class="inline-code">lua_*</span>/<span class="inline-code">luaL_*</span> symbols come from clx's own wrapper archive (see <a href="#doc-modules">Linking</a>).</p>
+                </div>
+
+                <div class="doc-section">
+                    <h3>The state</h3>
+                    <p>There is exactly one <span class="inline-code">lua_State</span> per program, created by <span class="inline-code">clx::open()</span> and destroyed by <span class="inline-code">clx::close()</span>.</p>
+                    <div class="doc-table-wrap">
+                        <table class="doc-table">
+                            <thead>
+                                <tr><th>Stock Lua</th><th>clx</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td><span class="inline-code">lua_newstate(alloc, ud, seed)</span></td><td>returns <span class="inline-code">NULL</span> — you cannot create a state</td></tr>
+                                <tr><td><span class="inline-code">luaL_newstate()</span></td><td>returns <span class="inline-code">NULL</span></td></tr>
+                                <tr><td><span class="inline-code">lua_close(L)</span></td><td>does nothing; the runtime owns the lifetime</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p>Everything else about the state is real. The registry, the global table and <span class="inline-code">package.loaded</span> / <span class="inline-code">package.preload</span> are the <em>same tables</em> the compiled Lua code uses:</p>
+                    <ul>
+                        <li><span class="inline-code">lua_pushglobaltable(L)</span> gives you <span class="inline-code">_G</span>;</li>
+                        <li><span class="inline-code">registry[LUA_RIDX_GLOBALS]</span> is <span class="inline-code">_G</span>, <span class="inline-code">registry[LUA_RIDX_MAINTHREAD]</span> is the main thread;</li>
+                        <li><span class="inline-code">registry["_LOADED"]</span> is <span class="inline-code">package.loaded</span> and <span class="inline-code">registry["_PRELOAD"]</span> is <span class="inline-code">package.preload</span>, so <span class="inline-code">luaL_requiref()</span> and Lua's <span class="inline-code">require()</span> see each other's entries;</li>
+                        <li><span class="inline-code">lua_getextraspace(L)</span> works — clx reserves <span class="inline-code">LUA_EXTRASPACE</span> bytes in front of every <span class="inline-code">lua_State</span>.</li>
+                    </ul>
+                </div>
+
+                <div class="doc-section">
+                    <h3>What is implemented</h3>
+                    <p>Every function in <span class="inline-code">lua.h</span>, <span class="inline-code">lauxlib.h</span> and <span class="inline-code">lualib.h</span> is declared and has a definition (147 API names in total). The list below is by area; the <em>Not implemented</em> section names every stub explicitly.</p>
+                    <div class="doc-table-wrap">
+                        <table class="doc-table doc-table-split">
+                            <thead>
+                                <tr><th>Area</th><th>Status</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td><strong>Stack</strong><span class="doc-mono">lua_gettop, lua_settop, lua_pushvalue, lua_rotate, lua_copy, lua_absindex, lua_pop, lua_insert, lua_remove, lua_replace</span></td><td><span class="ok">Supported</span></td></tr>
+                                <tr><td><span class="inline-code">lua_checkstack</span></td><td>Always returns <span class="inline-code">1</span> — see Other stubs</td></tr>
+                                <tr><td><strong>Types and conversion</strong><span class="doc-mono">lua_type, lua_typename, lua_is*, lua_tonumberx, lua_tointegerx, lua_toboolean, lua_tolstring, lua_rawlen, lua_tocfunction, lua_touserdata, lua_tothread, lua_topointer</span></td><td><span class="ok">Supported</span></td></tr>
+                                <tr><td><strong>Pushing</strong><span class="doc-mono">lua_pushnil, lua_pushnumber, lua_pushinteger, lua_pushlstring, lua_pushstring, lua_pushfstring, lua_pushvfstring, lua_pushboolean, lua_pushlightuserdata, lua_pushcclosure, lua_pushthread, lua_pushexternalstring</span></td><td><span class="ok">Supported</span></td></tr>
+                                <tr><td><strong>Tables</strong><span class="doc-mono">lua_createtable, lua_newtable, lua_get{table,field,i,global}, lua_set{table,field,i,global}, lua_raw{get,geti,getp,set,seti,setp}, lua_getmetatable, lua_setmetatable, lua_next, lua_len</span></td><td><span class="ok">Supported</span></td></tr>
+                                <tr><td><strong>Userdata</strong><span class="doc-mono">lua_newuserdatauv, lua_getiuservalue, lua_setiuservalue</span></td><td><span class="ok">Supported</span></td></tr>
+                                <tr><td><strong>Arithmetic and comparison</strong><span class="doc-mono">lua_arith, lua_compare, lua_rawequal, lua_concat</span></td><td><span class="ok">Supported</span></td></tr>
+                                <tr><td><strong>Calls</strong><span class="doc-mono">lua_callk / lua_call, lua_pcallk / lua_pcall</span></td><td><span class="ok">Supported</span> — but the continuation argument is ignored</td></tr>
+                                <tr><td><strong>Coroutines</strong><span class="doc-mono">lua_newthread, lua_closethread, lua_xmove, lua_pushthread, lua_resume, lua_yieldk / lua_yield, lua_status, lua_isyieldable</span></td><td><span class="ok">Supported</span> — see Coroutines</td></tr>
+                                <tr><td><strong>Registry and references</strong><span class="doc-mono">luaL_ref, luaL_unref, luaL_getsubtable, luaL_requiref</span></td><td><span class="ok">Supported</span></td></tr>
+                                <tr><td><strong>Auxiliary library</strong><span class="doc-mono">luaL_check*, luaL_opt*, luaL_argerror, luaL_typeerror, luaL_error, luaL_where, luaL_tolstring, luaL_newmetatable, luaL_testudata, luaL_checkudata, luaL_setfuncs, luaL_setmetatable, luaL_callmeta, luaL_getmetafield, luaL_fileresult, luaL_execresult</span></td><td><span class="ok">Supported</span></td></tr>
+                                <tr><td><span class="inline-code">luaL_traceback</span></td><td>Header only — no frames</td></tr>
+                                <tr><td><strong>Strings and buffers</strong><span class="doc-mono">luaL_buffinit, luaL_prepbuffsize, luaL_buffinitsize, luaL_addstring, luaL_addlstring, luaL_addvalue, luaL_addgsub, luaL_pushresult, luaL_pushresultsize, luaL_gsub, lua_numbertocstring, lua_stringtonumber, lua_pushvfstring</span></td><td><span class="ok">Supported</span></td></tr>
+                                <tr><td><strong>GC</strong><span class="doc-mono">lua_gc with LUA_GCSTOP, LUA_GCRESTART, LUA_GCCOLLECT, LUA_GCCOUNT, LUA_GCCOUNTB, LUA_GCSTEP, LUA_GCISRUNNING, LUA_GCGEN, LUA_GCINC, LUA_GCPARAM</span></td><td><span class="ok">Supported</span></td></tr>
+                                <tr><td><strong>Warnings</strong><span class="doc-mono">lua_setwarnf, lua_warning</span></td><td><span class="ok">Supported</span> — only reachable from C code</td></tr>
+                                <tr><td><strong>Standard library openers</strong><span class="doc-mono">luaopen_base, luaopen_package, luaopen_coroutine, luaopen_debug, luaopen_io, luaopen_math, luaopen_os, luaopen_string, luaopen_table, luaopen_utf8</span></td><td><span class="ok">Supported</span> — they push the table clx already loaded</td></tr>
+                                <tr><td><strong>Upvalues</strong><span class="doc-mono">lua_upvalueindex, lua_getupvalue, lua_setupvalue, lua_upvalueid, lua_upvaluejoin</span></td><td><span class="ok">Supported</span></td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Not implemented</h3>
+                    <p>These functions exist but do nothing useful. A module that relies on any of them will misbehave silently rather than fail to link.</p>
+
+                    <h4>No state creation</h4>
+                    <div class="doc-table-wrap">
+                        <table class="doc-table">
+                            <thead>
+                                <tr><th>Function</th><th>Behaviour</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td><span class="inline-code">lua_newstate</span></td><td>returns <span class="inline-code">NULL</span></td></tr>
+                                <tr><td><span class="inline-code">luaL_newstate</span></td><td>returns <span class="inline-code">NULL</span></td></tr>
+                                <tr><td><span class="inline-code">lua_close</span></td><td>no-op — the runtime stays alive</td></tr>
+                                <tr><td><span class="inline-code">lua_setallocf</span></td><td>no-op</td></tr>
+                                <tr><td><span class="inline-code">lua_getallocf</span></td><td>always returns <span class="inline-code">luaL_alloc</span>, writes <span class="inline-code">NULL</span> to <span class="inline-code">ud</span></td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <h4>Loading and dumping bytecode</h4>
+                    <p>clx compiles Lua to native code ahead of time, so there is no runtime compiler and no bytecode.</p>
+                    <div class="doc-table-wrap">
+                        <table class="doc-table">
+                            <thead>
+                                <tr><th>Function</th><th>Behaviour</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td><span class="inline-code">lua_load</span></td><td>pushes <span class="inline-code">"clx: lua_load is not supported (chunk '...')"</span> and returns <span class="inline-code">LUA_ERRSYNTAX</span></td></tr>
+                                <tr><td><span class="inline-code">luaL_loadbufferx</span></td><td>pushes <span class="inline-code">"clx: cannot load '&lt;name&gt;' at runtime"</span> and returns <span class="inline-code">LUA_ERRSYNTAX</span></td></tr>
+                                <tr><td><span class="inline-code">luaL_loadstring</span></td><td>same as <span class="inline-code">luaL_loadbufferx</span></td></tr>
+                                <tr><td><span class="inline-code">luaL_loadfilex</span></td><td>returns <span class="inline-code">LUA_ERRFILE</span> if the file cannot be opened, otherwise <span class="inline-code">LUA_ERRSYNTAX</span> as above — the file is never compiled</td></tr>
+                                <tr><td><span class="inline-code">lua_dump</span></td><td>always returns <span class="inline-code">1</span> (failure); <span class="inline-code">writer</span> is never called</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p>If you need to run Lua source at runtime, build with <span class="inline-code">--dynamic</span> and use <span class="inline-code">load()</span> from Lua — see <a href="#doc-dynamic-lua">Dynamic execution</a>.</p>
+
+                    <h4>Debug and hooks</h4>
+                    <div class="doc-table-wrap">
+                        <table class="doc-table">
+                            <thead>
+                                <tr><th>Function</th><th>Behaviour</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td><span class="inline-code">lua_getinfo</span></td><td>always returns <span class="inline-code">0</span></td></tr>
+                                <tr><td><span class="inline-code">lua_getlocal</span> / <span class="inline-code">lua_setlocal</span></td><td>always returns <span class="inline-code">NULL</span></td></tr>
+                                <tr><td><span class="inline-code">lua_sethook</span></td><td>no-op</td></tr>
+                                <tr><td><span class="inline-code">lua_gethook</span></td><td>returns <span class="inline-code">NULL</span></td></tr>
+                                <tr><td><span class="inline-code">lua_gethookmask</span> / <span class="inline-code">lua_gethookcount</span></td><td>returns <span class="inline-code">0</span></td></tr>
+                                <tr><td><span class="inline-code">lua_getstack</span></td><td>returns <span class="inline-code">1</span> <strong>only</strong> for <span class="inline-code">level == 0</span> on a running thread, and zeroes <span class="inline-code">lua_Debug</span>; every other level returns <span class="inline-code">0</span>. Since <span class="inline-code">lua_getinfo</span> then returns <span class="inline-code">0</span>, there is no usable frame inspection</td></tr>
+                                <tr><td><span class="inline-code">luaL_traceback</span></td><td>pushes only <span class="inline-code">msg</span> (if given), a newline and the literal <span class="inline-code">stack traceback:</span> — no frames</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p>This matches the compiled-code side of clx: the <span class="inline-code">debug</span> library is not exposed as a compiled-code global either (see <a href="#doc-compatibility">Lua 5.5 Compatibility</a>).</p>
+
+                    <h4>To-be-closed variables</h4>
+                    <div class="doc-table-wrap">
+                        <table class="doc-table">
+                            <thead>
+                                <tr><th>Function</th><th>Behaviour</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td><span class="inline-code">lua_toclose</span></td><td>no-op — the slot is never closed</td></tr>
+                                <tr><td><span class="inline-code">lua_closeslot</span></td><td>no-op</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <h4>Other stubs</h4>
+                    <div class="doc-table-wrap">
+                        <table class="doc-table">
+                            <thead>
+                                <tr><th>Function</th><th>Behaviour</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td><span class="inline-code">lua_checkstack</span></td><td>always returns <span class="inline-code">1</span>; there is no fixed stack limit, so runaway recursion can exhaust memory instead of raising <span class="inline-code">"stack overflow"</span></td></tr>
+                                <tr><td><span class="inline-code">luaL_openselectedlibs</span></td><td>no-op, which makes the <span class="inline-code">luaL_openlibs(L)</span> macro a no-op. Standard libraries are already open (unless you build with <span class="inline-code">--minimal</span>)</td></tr>
+                                <tr><td><span class="inline-code">luaL_register</span></td><td>not present — removed from Lua in 5.2</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Coroutines</h3>
+                    <p>The coroutine API works: <span class="inline-code">lua_newthread</span>, <span class="inline-code">lua_resume</span>, <span class="inline-code">lua_yieldk</span>, <span class="inline-code">lua_status</span>, <span class="inline-code">lua_xmove</span> and friends are covered by clx's test suite. A minimal round trip:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">c</span><span>coro.c</span></div>
+                        <div class="code-body"><span class="kw">static int</span> <span class="fn">l_work</span>(<span class="kw">lua_State</span> *L)
+{
+    <span class="kw">lua_Integer</span> n = <span class="fn">luaL_checkinteger</span>(L, 1);
+    <span class="fn">lua_pushinteger</span>(L, n + 1);
+    <span class="fn">lua_yield</span>(L, 1);            <span class="comment">/* hand 42 to whoever resumed us */</span>
+    <span class="fn">lua_pushinteger</span>(L, 100);    <span class="comment">/* runs on the second resume */</span>
+    <span class="kw">return</span> 1;
+}
+
+<span class="kw">static int</span> <span class="fn">l_run</span>(<span class="kw">lua_State</span> *L)
+{
+    <span class="kw">lua_State</span> *co = <span class="fn">lua_newthread</span>(L);        <span class="comment">/* L: [co] */</span>
+
+    <span class="fn">lua_pushcfunction</span>(co, l_work);           <span class="comment">/* co: [l_work] */</span>
+    <span class="fn">lua_pushinteger</span>(co, 41);                 <span class="comment">/* co: [l_work, 41] */</span>
+
+    <span class="kw">int</span> nres = 0;
+    <span class="kw">int</span> st = <span class="fn">lua_resume</span>(co, L, 1, &amp;nres);    <span class="comment">/* LUA_YIELD, nres == 1 (42) */</span>
+    <span class="kw">if</span> (st == LUA_YIELD)
+        st = <span class="fn">lua_resume</span>(co, L, 0, &amp;nres);    <span class="comment">/* LUA_OK,    nres == 1 (100) */</span>
+
+    <span class="fn">lua_xmove</span>(co, L, nres);                  <span class="comment">/* L: [co, 100] */</span>
+    <span class="fn">lua_remove</span>(L, -2);                       <span class="comment">/* L: [100] — drop the thread */</span>
+    <span class="fn">lua_pushinteger</span>(L, st);
+    <span class="fn">lua_pushinteger</span>(L, nres);
+    <span class="kw">return</span> 3;
+}
+
+<span class="kw">int</span> <span class="fn">luaopen_coro</span>(<span class="kw">lua_State</span> *L)
+{
+    <span class="kw">static const</span> <span class="kw">luaL_Reg</span> funcs[] = {
+        {<span class="str">"run"</span>, l_run},
+        {<span class="kw">NULL</span>, <span class="kw">NULL</span>}
+    };
+    <span class="fn">luaL_newlib</span>(L, funcs);
+    <span class="kw">return</span> 1;
+}</div>
+                    </div>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span><span>main.lua</span></div>
+                        <div class="code-body"><span class="kw">local</span> coro = <span class="fn">require</span>(<span class="str">"coro"</span>)
+<span class="kw">local</span> v, st, nres = coro.run()
+<span class="fn">assert</span>(st == 0 <span class="kw">and</span> nres == 1 <span class="kw">and</span> v == 100)</div>
+                    </div>
+                    <p>As in stock Lua, <span class="inline-code">lua_yield(L, n)</span> hands its top <span class="inline-code">n</span> values to the resumer and the values passed to the next <span class="inline-code">lua_resume</span> become the values <span class="inline-code">lua_yield</span> "returns" (their count is what <span class="inline-code">lua_yield</span> evaluates to).</p>
+                    <p>Notes on the contract:</p>
+                    <ul>
+                        <li><strong><span class="inline-code">lua_resume(L, from, narg, nres)</span> expects the arguments to already be on <span class="inline-code">L</span>'s stack.</strong> Stock usage moves them there first with <span class="inline-code">lua_xmove(from, L, narg)</span>; <span class="inline-code">from</span> is only used to check that both states belong to the same runtime.</li>
+                        <li>Results and error objects are pushed onto <span class="inline-code">L</span>'s stack; <span class="inline-code">*nres</span> is set to their count. On <span class="inline-code">LUA_ERRRUN</span> exactly one value is pushed.</li>
+                        <li><span class="inline-code">lua_status</span> returns <span class="inline-code">LUA_OK</span> for the main thread and for a freshly created thread, <span class="inline-code">LUA_YIELD</span> after a yield, <span class="inline-code">LUA_OK</span> for a coroutine that finished normally, and <span class="inline-code">LUA_ERRRUN</span> for one that died with an error.</li>
+                        <li><span class="inline-code">lua_isyieldable</span> returns <span class="inline-code">0</span> on the main thread and inside <span class="inline-code">lua_pcallk</span>, matching stock's "cannot yield across a C-call boundary" rule.</li>
+                        <li><span class="inline-code">lua_yieldk(L, n, ctx, k)</span> yields like <span class="inline-code">lua_yield</span>, then runs <span class="inline-code">k(L, LUA_YIELD, ctx)</span> after the coroutine is next resumed and returns whatever <span class="inline-code">k</span> returns. If <span class="inline-code">k</span> is <span class="inline-code">NULL</span>, it returns the number of values the resumer passed.</li>
+                        <li><span class="inline-code">lua_newthread</span> shares the single runtime — same globals, same registry, same GC. <span class="inline-code">lua_xmove</span> between threads of <em>different</em> states is impossible because there is only one state; it raises <span class="inline-code">"moving among independent states is not supported"</span>.</li>
+                        <li><span class="inline-code">lua_closethread(L, from)</span> on a still-suspended coroutine runs clx's <span class="inline-code">close_thread</span>, which releases the fiber rather than silently dropping it; the thread ends up <span class="inline-code">DEAD</span>.</li>
+                        <li>Threads created by clx's own <span class="inline-code">coroutine.create</span> are resumable from C too: <span class="inline-code">lua_tothread</span> on a Lua thread value gives you a <span class="inline-code">lua_State*</span> whose function is already set.</li>
+                    </ul>
+
+                    <h4>Known deviations</h4>
+                    <div class="doc-table-wrap">
+                        <table class="doc-table">
+                            <thead>
+                                <tr><th>Behaviour</th><th>Stock Lua</th><th>clx</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td><span class="inline-code">lua_yieldk</span> with a continuation</td><td>never returns to the caller of <span class="inline-code">lua_yieldk</span></td><td>returns <span class="inline-code">k(L, LUA_YIELD, ctx)</span>'s value; with <span class="inline-code">k == NULL</span> it returns the number of resumed values, so it "returns" like <span class="inline-code">lua_yield</span> does in Lua code</td></tr>
+                                <tr><td>Resuming the main thread</td><td>runs the main function if not yet started</td><td><span class="inline-code">"cannot resume non-suspended coroutine"</span></td></tr>
+                                <tr><td><span class="inline-code">lua_resume</span> on a never-started thread with neither a stack function nor <span class="inline-code">t-&gt;function</span></td><td>error</td><td><span class="inline-code">"cannot resume dead coroutine"</span></td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Errors</h3>
+                    <p>Errors are C++ exceptions (<span class="inline-code">clx::LRuntimeException</span>) unwinding through your C frames, not <span class="inline-code">longjmp</span>:</p>
+                    <ul>
+                        <li><span class="inline-code">lua_error(L)</span> and <span class="inline-code">luaL_error(L, fmt, ...)</span> never return — they throw. Both <span class="inline-code">return luaL_error(...)</span> and bare <span class="inline-code">luaL_error(...)</span> work.</li>
+                        <li><span class="inline-code">lua_pcallk</span> / <span class="inline-code">lua_pcall</span> catch the exception, run your error handler if you passed one, and return <span class="inline-code">LUA_ERRRUN</span> (or <span class="inline-code">LUA_ERRERR</span> if the handler itself fails). Use them exactly as you would in stock Lua.</li>
+                        <li>An error escaping an unprotected <span class="inline-code">lua_call</span> propagates out to the nearest <span class="inline-code">pcall</span> in your Lua code, or to the program's top level if there is none.</li>
+                        <li><strong><span class="inline-code">lua_atpanic</span> is stored but never called.</strong> clx has no panic path: an unrecoverable error prints the message and exits with status 1. Do not write a panic function that is expected to <span class="inline-code">longjmp</span> or <span class="inline-code">exit</span> for you.</li>
+                        <li><span class="inline-code">luaL_where(L, 1)</span> prefixes the message with <span class="inline-code">file:line: </span> taken from the most recent <em>Lua</em> call site, when clx knows it; otherwise it pushes <span class="inline-code">""</span>. Inside a <span class="inline-code">luaopen_*</span> at startup there is usually no position yet, so <span class="inline-code">luaL_error</span> messages come out unprefixed.</li>
+                        <li>Error <em>objects</em> behave as in stock: any Lua value can be raised, and <span class="inline-code">lua_tolstring</span> on a raised value gives you the message. <span class="inline-code">lua_pushvfstring</span> supports the same conversions as stock — <span class="inline-code">%s %c %d %I %f %p %U %%</span> — and copies unknown specifiers through unchanged.</li>
+                    </ul>
+                </div>
+
+                <div class="doc-section">
+                    <h3>What differs from stock Lua</h3>
+
+                    <h4>You must rebuild against clx's headers</h4>
+                    <p><span class="inline-code">lua.h</span> renames every <span class="inline-code">lua_*</span> and <span class="inline-code">luaL_*</span> symbol to <span class="inline-code">clx_lua_*</span> through <span class="inline-code">#define</span>s placed above the declarations. That keeps the bridge from colliding with a real Lua library that some other dependency might link.</p>
+                    <p>The consequence: an object file compiled against stock Lua's headers <strong>cannot</strong> be linked into a clx program. Rebuild every C module from source with <span class="inline-code">-I/path/to/clx/include</span>. Your own <span class="inline-code">luaopen_&lt;name&gt;</span> symbols are <em>not</em> renamed, which is how <span class="inline-code">--modules</span> finds them.</p>
+                    <p><span class="inline-code">luaopen_base</span>, <span class="inline-code">luaopen_math</span> and friends <strong>are</strong> renamed (<span class="inline-code">clx_luaopen_math</span>) because clx defines them itself; include <span class="inline-code">lualib.h</span> and call them normally.</p>
+
+                    <h4>The stack is per-bundle and per-frame</h4>
+                    <p>Each <span class="inline-code">lua_State*</span> owns its own value stack. Inside a <span class="inline-code">lua_CFunction</span> you see only your own arguments, as in stock Lua. Strings returned by <span class="inline-code">lua_pushlstring</span>/<span class="inline-code">lua_pushstring</span>/<span class="inline-code">lua_tolstring</span> point into clx's interned string arena and stay valid as long as the value is reachable — and <span class="inline-code">lua_tolstring</span> converts numbers in place, exactly like stock.</p>
+                    <p>Short strings (six bytes or fewer) are stored inline in the value. <span class="inline-code">lua_tolstring</span> re-interns them before returning a pointer, so the usual "the pointer is valid while the value stays on the stack" guarantee holds.</p>
+
+                    <h4>Notes and differences</h4>
+                    <div class="doc-table-wrap">
+                        <table class="doc-table">
+                            <thead>
+                                <tr><th>Area</th><th>Note</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td><span class="inline-code">luaL_checkoption</span></td><td>returns the <strong><span class="inline-code">int</span> index</strong> of the chosen option, not a pointer — this is a Lua 5.5 change, not a clx quirk</td></tr>
+                                <tr><td><span class="inline-code">lua_callk</span> / <span class="inline-code">lua_pcallk</span></td><td>the <span class="inline-code">lua_KFunction</span> continuation argument is accepted and <strong>never called</strong>. clx coroutines are stackful, so a C frame suspended by a yield resumes where it left off and the call simply completes instead of running <span class="inline-code">k(L, LUA_YIELD, ctx)</span>. <span class="inline-code">lua_yieldk</span>'s own continuation <em>does</em> work and is the one to use</td></tr>
+                                <tr><td>yield through <span class="inline-code">lua_callk</span></td><td>stock allows it only when <span class="inline-code">k != NULL</span>; clx always allows it</td></tr>
+                                <tr><td>yield through <span class="inline-code">lua_pcallk</span></td><td>stock allows it when <span class="inline-code">k != NULL</span>; clx never allows it — you get <span class="inline-code">"attempt to yield across a C-call boundary"</span></td></tr>
+                                <tr><td><span class="inline-code">luaL_pushfail</span></td><td>a header macro, so identical to stock: pushes <span class="inline-code">nil</span>, or <span class="inline-code">false</span> if you define <span class="inline-code">LUA_FAILISFALSE</span></td></tr>
+                                <tr><td><span class="inline-code">lua_newuserdatauv(L, sz, nuvalue)</span></td><td><span class="inline-code">nuvalue</span> is ignored — you can store any number of user values, and out-of-range <span class="inline-code">lua_getiuservalue</span>/<span class="inline-code">lua_setiuservalue</span> indices return <span class="inline-code">LUA_TNONE</span> / <span class="inline-code">0</span> instead of failing</td></tr>
+                                <tr><td><span class="inline-code">lua_pushexternalstring(L, s, len, falloc, ud)</span></td><td>clx copies the bytes into its own arena and calls <span class="inline-code">falloc(ud, s, len+1, 0)</span> <strong>immediately</strong>, so your buffer must be freeable right away and must not be reused</td></tr>
+                                <tr><td><span class="inline-code">luaL_testudata(L, idx, "FILE*")</span></td><td>returns a pointer to a <strong>single shared scratch slot</strong> in the state, overwritten by the next such call. Copy the <span class="inline-code">FILE*</span> out before calling it again</td></tr>
+                                <tr><td><span class="inline-code">luaL_openlibs</span></td><td>no-op; libraries are opened by the runtime. With <span class="inline-code">--minimal</span> they are absent and the C API cannot bring them back</td></tr>
+                                <tr><td>Warnings</td><td><span class="inline-code">lua_setwarnf</span>/<span class="inline-code">lua_warning</span> work for C-to-C calls, but clx's own runtime warnings do not route through them</td></tr>
+                                <tr><td>Module initialisation</td><td>openers run at program startup, before the entry chunk, and all of them run regardless of whether anything calls <span class="inline-code">require</span></td></tr>
+                                <tr><td><span class="inline-code">lua_getextraspace</span></td><td>backed by real reserved bytes in front of every <span class="inline-code">lua_State</span>, so the macro behaves as in stock</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="doc-section">
+                    <h3>Checking your module</h3>
+                    <p>A quick smoke test is enough to catch most wiring problems:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">sh</span><span>Smoke test</span></div>
+                        <div class="code-body"><span class="comment"># 1. build the module archive</span>
+<span class="prompt">$</span> cc -c -O2 -I/path/to/clx/include lfs.c -o lfs.o &amp;&amp; ar rcs lfs.a lfs.o
+
+<span class="comment"># 2. link and run</span>
+<span class="prompt">$</span> clx check.lua --modules lfs -o check &amp;&amp; ./check</div>
+                    </div>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">lua</span><span>check.lua</span></div>
+                        <div class="code-body"><span class="kw">local</span> m = <span class="fn">require</span>(<span class="str">"lfs"</span>)
+<span class="fn">assert</span>(<span class="fn">type</span>(m) == <span class="str">"table"</span>, <span class="str">"opener did not return a module table"</span>)
+<span class="fn">print</span>(<span class="str">"ok"</span>)</div>
+                    </div>
+                    <p>If clx reports <span class="inline-code">input module "lfs" collides with the precompiled C module</span>, your <span class="inline-code">.lua</span> file shares its stem with the archive — rename one of them. If the archive is treated as a C++ module, check that <span class="inline-code">luaopen_lfs</span> was not mangled (<span class="inline-code">nm -g lfs.a | grep luaopen</span>).</p>
+                </div>
+
+                <div class="doc-section">
+                    <h3>See also</h3>
+                    <ul>
+                        <li><a href="#doc-modules">Modules</a> — building, finding and linking module archives, and the <span class="inline-code">libclx_capi</span> wrapper archive</li>
+                        <li><a href="#doc-api">C++ API</a> — the native, stack-free C++ API for new code</li>
+                        <li><span class="inline-code">doc/migration-guide.md</span> — porting a C module to the C++ API</li>
+                        <li><a href="#doc-compatibility">Lua 5.5 Compatibility</a> — language and library support</li>
+                        <li><a href="#doc-dynamic-lua">Dynamic execution</a> — running Lua source at runtime</li>
+                    </ul>
                 </div>
             </section>
 
@@ -2375,114 +3080,114 @@ utils.help()</div>
         },
         arm64: {
         "3ddist": [
-            { name: "clx", time: 0.014, factor: "28.29x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.042, factor: "9.43x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.396, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.015, factor: "27.07x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.043, factor: "9.44x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.406, factor: "1.00x", class: "red", winner: false }
         ],
         "ackermann": [
-            { name: "clx", time: 0.050, factor: "3.22x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.026, factor: "6.19x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.161, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.050, factor: "3.44x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.030, factor: "5.73x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.172, factor: "1.00x", class: "red", winner: false }
         ],
         "arraysum": [
-            { name: "clx", time: 0.054, factor: "3.76x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.063, factor: "3.22x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.203, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.053, factor: "4.08x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.056, factor: "3.86x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.216, factor: "1.00x", class: "red", winner: false }
         ],
         "binarytrees": [
-            { name: "clx", time: 0.127, factor: "3.14x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.113, factor: "3.53x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.399, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.124, factor: "3.19x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.111, factor: "3.56x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.395, factor: "1.00x", class: "red", winner: false }
         ],
         "bubble": [
-            { name: "clx", time: 0.057, factor: "5.05x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.014, factor: "20.57x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.288, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.051, factor: "5.61x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.013, factor: "22.00x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.286, factor: "1.00x", class: "red", winner: false }
         ],
         "canada": [
-            { name: "clx", time: 0.163, factor: "1.08x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.089, factor: "1.98x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.176, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.144, factor: "1.19x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.091, factor: "1.89x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.172, factor: "1.00x", class: "red", winner: false }
         ],
         "coro": [
-            { name: "clx", time: 0.312, factor: "1.71x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.099, factor: "5.38x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.533, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.325, factor: "1.62x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.101, factor: "5.22x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.527, factor: "1.00x", class: "red", winner: false }
         ],
         "fannkuchredux": [
-            { name: "clx", time: 0.743, factor: "2.66x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.289, factor: "6.84x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 1.977, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.797, factor: "2.48x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.302, factor: "6.53x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 1.973, factor: "1.00x", class: "red", winner: false }
         ],
         "fasta": [
-            { name: "clx", time: 0.141, factor: "1.72x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.087, factor: "2.78x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.242, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.147, factor: "1.71x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.086, factor: "2.92x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.251, factor: "1.00x", class: "red", winner: false }
         ],
         "fib": [
-            { name: "clx", time: 0.026, factor: "10.04x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.033, factor: "7.91x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.261, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.026, factor: "9.77x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.039, factor: "6.51x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.254, factor: "1.00x", class: "red", winner: false }
         ],
         "hashtable": [
-            { name: "clx", time: 0.205, factor: "1.99x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.108, factor: "3.78x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.408, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.191, factor: "2.37x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.147, factor: "3.08x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.453, factor: "1.00x", class: "red", winner: false }
         ],
         "json": [
-            { name: "clx", time: 0.019, factor: "7.74x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.592, factor: "0.25x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.147, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.019, factor: "7.42x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.600, factor: "0.23x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.141, factor: "1.00x", class: "red", winner: false }
         ],
         "knucleotide": [
-            { name: "clx", time: 0.045, factor: "1.69x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.039, factor: "1.95x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.076, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.044, factor: "1.75x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.038, factor: "2.03x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.077, factor: "1.00x", class: "red", winner: false }
         ],
         "life": [
-            { name: "clx", time: 0.072, factor: "4.57x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.031, factor: "10.61x", class: "yellow", winner: true },
+            { name: "clx", time: 0.046, factor: "7.15x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.030, factor: "10.97x", class: "yellow", winner: true },
             { name: "Lua 5.5", time: 0.329, factor: "1.00x", class: "red", winner: false }
         ],
         "mandelbrot": [
-            { name: "clx", time: 0.027, factor: "10.63x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.025, factor: "11.48x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.287, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.023, factor: "12.43x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.025, factor: "11.44x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.286, factor: "1.00x", class: "red", winner: false }
         ],
         "nbody": [
-            { name: "clx", time: 0.059, factor: "3.71x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.014, factor: "15.64x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.219, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.062, factor: "3.55x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.014, factor: "15.71x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.220, factor: "1.00x", class: "red", winner: false }
         ],
         "pi": [
-            { name: "clx", time: 0.011, factor: "34.00x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.552, factor: "0.68x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.374, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.009, factor: "41.89x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.575, factor: "0.66x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.377, factor: "1.00x", class: "red", winner: false }
         ],
         "regexdna": [
             { name: "clx", time: 0.035, factor: "1.34x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.045, factor: "1.04x", class: "yellow", winner: false },
+            { name: "LuaJIT", time: 0.046, factor: "1.02x", class: "yellow", winner: false },
             { name: "Lua 5.5", time: 0.047, factor: "1.00x", class: "red", winner: false }
         ],
         "sieve": [
-            { name: "clx", time: 0.115, factor: "1.76x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.235, factor: "0.86x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.202, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.112, factor: "1.84x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.221, factor: "0.93x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.206, factor: "1.00x", class: "red", winner: false }
         ],
         "skynet": [
-            { name: "clx", time: 0.196, factor: "2.31x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.123, factor: "3.68x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.453, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.243, factor: "1.88x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.124, factor: "3.68x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.456, factor: "1.00x", class: "red", winner: false }
         ],
         "spectralnorm": [
-            { name: "clx", time: 0.019, factor: "19.47x", class: "accent", winner: false },
-            { name: "LuaJIT", time: 0.015, factor: "24.67x", class: "yellow", winner: true },
-            { name: "Lua 5.5", time: 0.370, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.019, factor: "20.26x", class: "accent", winner: false },
+            { name: "LuaJIT", time: 0.016, factor: "24.06x", class: "yellow", winner: true },
+            { name: "Lua 5.5", time: 0.385, factor: "1.00x", class: "red", winner: false }
         ],
         "warmup": [
-            { name: "clx", time: 0.004, factor: "1.25x", class: "accent", winner: true },
-            { name: "LuaJIT", time: 0.005, factor: "1.00x", class: "yellow", winner: false },
-            { name: "Lua 5.5", time: 0.005, factor: "1.00x", class: "red", winner: false }
+            { name: "clx", time: 0.005, factor: "1.20x", class: "accent", winner: true },
+            { name: "LuaJIT", time: 0.005, factor: "1.20x", class: "yellow", winner: false },
+            { name: "Lua 5.5", time: 0.006, factor: "1.00x", class: "red", winner: false }
         ]
         }
     };
