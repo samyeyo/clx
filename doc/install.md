@@ -28,7 +28,7 @@ set CLX_ARCH=avx2 && build.bat
 set CLX_ARCH=avx2 && build.bat install
 ```
 
-This installs the compiler to `%ProgramFiles%\clx\bin`, the libraries (`clx.lib`, `clx_size.lib`) to `%ProgramFiles%\clx\lib`, and the headers to `%ProgramFiles%\clx\include`. Run `build.bat uninstall` to remove it.
+This installs the compiler to `%ProgramFiles%\clx\bin`, the libraries (`clx.lib`, `clx_size.lib`, `clx_capi.lib`, `clx_capi_size.lib`) to `%ProgramFiles%\clx\lib`, and the headers to `%ProgramFiles%\clx\include`. Run `build.bat uninstall` to remove it.
 
 On either platform, override the install location with `-DCMAKE_INSTALL_PREFIX=<dir>` when configuring.
 
