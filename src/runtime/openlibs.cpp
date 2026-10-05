@@ -39,4 +39,10 @@ void openlibs(LState *L) {
     luastd_coroutine(L);
     register_loaded_builtins(L);
 }
+
+//------------------ openlibs_minimal: opens only the string library (--minimal keeps base + package + string)
+void openlibs_minimal(LState *L) {
+    luastd_string(L);
+    register_loaded_builtins(L);
+}
 }

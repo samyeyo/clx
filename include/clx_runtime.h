@@ -2932,6 +2932,8 @@ MultiValue close_thread(LState *L, const LValue &thread);
 LState *open(int argc = 0, char *argv[] = nullptr);
 //------------------ Opens all standard libraries
 void openlibs(LState *L);
+//------------------ Opens only the string library (--minimal)
+void openlibs_minimal(LState *L);
 //------------------ Closes CLX state
 void close(LState *L);
 
