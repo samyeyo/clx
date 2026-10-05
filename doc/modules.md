@@ -1,7 +1,7 @@
 # Modules in clx
 
-Modules help you split your Lua project across multiple files. clx supports two
-ways to organize and load them, both used through Lua's familiar `require()`:
+Modules help you split your Lua project across multiple files. clx supports three
+ways to organize and load them, all used through Lua's familiar `require()`:
 
 - **Lua source modules** — other `.lua` files compiled together with your entry point
 - **Native C++ modules** — precompiled code you link with `--modules`
@@ -164,6 +164,11 @@ clx classifies each archive before code generation by scanning its symbols:
 - `clx_luaopen_<name>` (the prefixed form some wrappers emit) is also treated
   as a **C module**, declared under that symbol.
 
+Dotted require names work too: for `--modules socket.core` clx looks for the
+archive `socket.core.a` and the symbol `luaopen_socket_core` — dots become
+underscores, exactly like stock Lua's `luaopen_a_b_c` naming for
+`require("a.b.c")`.
+
 Names are resolved in the current directory first, then in clx's own `lib/clx`
 install locations and any `-L` flags you pass. An input `.lua` file whose stem
 collides with a precompiled C module name is rejected.
@@ -251,7 +256,7 @@ local proc = require("native_processor")  -- native C++ module
 | `--modules <list>` | Link prebuilt C++/C modules (comma-separated) |
 | `--fast` | Link `libclx.a` + `libclx_capi.a` (optimize for speed) |
 | `--size` | Link `libclx_size.a` + `libclx_capi_size.a` (default) |
-| `--minimal` | Leave out non-essential libraries (string, table, io, os, math, utf8, coroutine) |
+| `--minimal` | Leave out non-essential libraries (table, io, os, math, utf8, coroutine); keeps base + package + string |
 | `--static` | Build a static library that exports `luaopen_*` |
 | `--object` | Build an object file that exports `luaopen_*` |
 

@@ -35,7 +35,7 @@ compiler underneath (see [Pass-through options](#pass-through-options)).
 | `--size` | Optimize for a small binary (default) |
 | `--fast` | Optimize for speed instead of size |
 | `--cpp` | Write out the generated C++ files without compiling (for debugging) |
-| `--minimal` | Leave out the non-essential libraries (string, table, io, os, math, utf8, coroutine) |
+| `--minimal` | Leave out the non-essential libraries (table, io, os, math, utf8, coroutine); keeps base + package + string |
 | `--dynamic` | Enable `load`, `loadfile`, and `dofile` so code can run at runtime |
 | `--modules <list>` | Link prebuilt native modules (comma-separated) |
 

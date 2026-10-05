@@ -14,7 +14,7 @@ print("Hello clx!")
 clx hello.lua
 ```
 
-> Use --minimal flag to compile with only base and package modules, it will reduce executable size
+> Use --minimal flag to compile with only base, package and string modules, it will reduce executable size
 
 ## Run
 
