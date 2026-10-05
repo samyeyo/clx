@@ -1828,6 +1828,48 @@ void pass_arena(const ASTContext &ctx, AnalysisState &state, uint32_t root_node)
                             }
                             return false;
                         }
+                        if (n.type == NodeType::TableConstructor) {
+                            for (uint32_t ei = 0; ei < n.as.table_cons.count; ++ei) {
+                                if (refs_var(ctx.block_statements[n.as.table_cons.first_item + ei * 2])
+                                    || refs_var(ctx.block_statements[n.as.table_cons.first_item + ei * 2 + 1]))
+                                    return true;
+                            }
+                            return false;
+                        }
+                        if (n.type == NodeType::IntrinsicCall) {
+                            for (uint32_t ai = 0; ai < n.as.intrinsic_call.arg_count; ++ai) {
+                                if (refs_var(ctx.block_statements[n.as.intrinsic_call.first_arg + ai]))
+                                    return true;
+                            }
+                            return false;
+                        }
+                        return false;
+                    };
+                    std::function<bool(uint32_t)> flows_ref = [&](uint32_t n_idx) -> bool {
+                        if (n_idx >= ctx.nodes.size())
+                            return false;
+                        const auto &n = ctx.nodes[n_idx];
+                        if (n.type == NodeType::Identifier)
+                            return std::string_view(n.as.ident.name, n.as.ident.length) == lt.name;
+                        if (n.type == NodeType::ParenExpression)
+                            return flows_ref(n.as.paren_expr.expr);
+                        if (n.type == NodeType::TableConstructor) {
+                            for (uint32_t ei = 0; ei < n.as.table_cons.count; ++ei) {
+                                if (flows_ref(ctx.block_statements[n.as.table_cons.first_item + ei * 2])
+                                    || flows_ref(ctx.block_statements[n.as.table_cons.first_item + ei * 2 + 1]))
+                                    return true;
+                            }
+                            return false;
+                        }
+                        if (n.type == NodeType::CallExpression) {
+                            if (flows_ref(n.as.call_expr.target))
+                                return true;
+                            for (uint32_t ai = 0; ai < n.as.call_expr.arg_count; ++ai) {
+                                if (flows_ref(ctx.block_statements[n.as.call_expr.first_arg + ai]))
+                                    return true;
+                            }
+                            return false;
+                        }
                         return false;
                     };
 
@@ -1907,12 +1949,17 @@ void pass_arena(const ASTContext &ctx, AnalysisState &state, uint32_t root_node)
                                                                             : sn.as.assign.first_value;
                         for (uint32_t vi = 0; vi < v_count; ++vi) {
                             uint32_t v_idx = ctx.block_statements[first_v + vi];
-                            if (v_idx < ctx.nodes.size()) {
-                                const auto &vn = ctx.nodes[v_idx];
-                                if (vn.type == NodeType::CallExpression) {
-                                    for (uint32_t ai = 0; ai < vn.as.call_expr.arg_count; ++ai) {
-                                        uint32_t a_idx = ctx.block_statements[vn.as.call_expr.first_arg + ai];
-                                        if (refs_var(a_idx)) {
+                            if (flows_ref(v_idx)) {
+                                escapes = true;
+                                return;
+                            }
+                        }
+                        if (sn.type == NodeType::Assignment) {
+                            for (uint32_t ti = 0; ti < sn.as.assign.target_count; ++ti) {
+                                uint32_t tgt = ctx.block_statements[sn.as.assign.first_target + ti];
+                                if (tgt < ctx.nodes.size() && ctx.nodes[tgt].type == NodeType::TableAccess) {
+                                    for (uint32_t vi = 0; vi < v_count; ++vi) {
+                                        if (flows_ref(ctx.block_statements[first_v + vi])) {
                                             escapes = true;
                                             return;
                                         }
