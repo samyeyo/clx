@@ -140,6 +140,16 @@ static bool clx_archive_has_c_symbol(const std::string& data, const std::string&
     return false;
 }
 
+//------------------ clx_mod_symbol: C identifier for a require-name, dots become underscores like stock luaopen_a_b_c
+static std::string clx_mod_symbol(const std::string& mod)
+{
+    std::string s = mod;
+    for (auto& c : s)
+        if (c == '.')
+            c = '_';
+    return s;
+}
+
 //------------------ clx_scan_module_kind: classify an archive as C++, C, or a clx-renamed C opener
 static ModuleLinkKind clx_scan_module_kind(const fs::path& lib, const std::string& mod)
 {
@@ -147,12 +157,13 @@ static ModuleLinkKind clx_scan_module_kind(const fs::path& lib, const std::strin
     if (data.empty())
         return ModuleLinkKind::Cpp;
 
-    std::string raw = "luaopen_" + mod;
+    std::string sym = clx_mod_symbol(mod);
+    std::string raw = "luaopen_" + sym;
     if (data.find("_Z" + std::to_string(raw.size()) + raw) != std::string::npos)
         return ModuleLinkKind::Cpp;
-    if (data.find("?luaopen_" + mod + "@@") != std::string::npos)
+    if (data.find("?luaopen_" + sym + "@@") != std::string::npos)
         return ModuleLinkKind::Cpp;
-    if (clx_archive_has_c_symbol(data, "clx_luaopen_" + mod))
+    if (clx_archive_has_c_symbol(data, "clx_luaopen_" + sym))
         return ModuleLinkKind::CPrefixed;
     if (clx_archive_has_c_symbol(data, raw))
         return ModuleLinkKind::C;
@@ -268,8 +279,7 @@ void print_help()
               << "  --debug               Enable debug symbols\n"
               << "  --size                Optimize for size (default)\n"
               << "  --fast                Optimize for speed\n"
-              << "  --cpp                 Generate C++ source file and exit\n"
-              << "  --minimal             Exclude non-essential Lua modules; keeps base + package\n"
+              << "  --cpp                 Generate C++ source file and exit\n"               << "  --minimal             Exclude non-essential Lua modules; keeps base + package + string\n"
               << "  --dynamic             Link the embedded Lua 5.5 VM (load/loadfile/dofile)\n"
               << "  --version             Print version and exit\n"
               << "  --help                Display this help message\n\n"
@@ -598,11 +608,11 @@ int main(int argc, char* argv[])
         for (const auto& mod : precompiled_modules) {
             ModuleLinkKind kind = module_kinds.at(mod);
             if (kind == ModuleLinkKind::Cpp) {
-                appender << "\nextern clx::LValue luaopen_" << mod << "(clx::LState* L);\n";
+                appender << "\nextern clx::LValue luaopen_" << clx_mod_symbol(mod) << "(clx::LState* L);\n";
             } else {
-                std::string sym = (kind == ModuleLinkKind::CPrefixed) ? "clx_luaopen_" + mod : "luaopen_" + mod;
+                std::string sym = (kind == ModuleLinkKind::CPrefixed) ? "clx_luaopen_" + clx_mod_symbol(mod) : "luaopen_" + clx_mod_symbol(mod);
                 appender << "\nextern \"C\" int " << sym << "(struct lua_State*);\n";
-                appender << "static clx::LValue clx_cmod_" << mod << "(clx::LState* L) { return clx::luaapi_c_module_open(L, " << sym
+                appender << "static clx::LValue clx_cmod_" << clx_mod_symbol(mod) << "(clx::LState* L) { return clx::luaapi_c_module_open(L, " << sym
                          << ", \"" << mod << "\"); }\n";
             }
         }
@@ -614,6 +624,8 @@ int main(int argc, char* argv[])
 
         if (!minimal_active)
             appender << "    clx::openlibs(L);\n";
+        else
+            appender << "    clx::openlibs_minimal(L);\n";
         if (dynamic_loading_enabled && !minimal_active) {
             appender << "    // --dynamic enabled: link libclx_lua.a (POSIX) or clx_lua.lib (Windows)\n";
             appender << "    //   In-tree: build/clx_lua/libclx_lua.a (or build/clx_lua/clx_lua.lib)\n";
@@ -639,13 +651,13 @@ int main(int argc, char* argv[])
             ModuleLinkKind kind = module_kinds.at(mod);
             appender << "        {\n";
             if (kind == ModuleLinkKind::Cpp) {
-                appender << "            clx::LValue _m = luaopen_" << mod << "(L);\n";
+                appender << "            clx::LValue _m = luaopen_" << clx_mod_symbol(mod) << "(L);\n";
                 appender << "            L->register_loaded_module(\"" << mod << "\", _m);\n";
-                appender << "            L->register_module(\"" << mod << "\", luaopen_" << mod << ");\n";
+                appender << "            L->register_module(\"" << mod << "\", luaopen_" << clx_mod_symbol(mod) << ");\n";
             } else {
-                appender << "            clx::LValue _m = clx_cmod_" << mod << "(L);\n";
+                appender << "            clx::LValue _m = clx_cmod_" << clx_mod_symbol(mod) << "(L);\n";
                 appender << "            L->register_loaded_module(\"" << mod << "\", _m);\n";
-                appender << "            L->register_module(\"" << mod << "\", clx_cmod_" << mod << ");\n";
+                appender << "            L->register_module(\"" << mod << "\", clx_cmod_" << clx_mod_symbol(mod) << ");\n";
             }
             appender << "        }\n";
         }
