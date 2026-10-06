@@ -31,7 +31,7 @@ set FAIL=0
 :: Walk through subdirectories
 for %%D in (conformance regression stress compiler_killers edge_cases) do (
     if exist "%%D" (
-        for /f "delims=" %%F in ('dir /b "%%D\*.lua" 2^>nul ^| findstr /v /i "^package\.lua$ ^mymod\.lua$ ^test_native_mod\.lua$ ^load\.lua$"') do (
+        for /f "delims=" %%F in ('dir /b "%%D\*.lua" 2^>nul ^| findstr /v /i "^package\.lua$ ^mymod\.lua$ ^test_native_mod\.lua$ ^test_capi_mod\.lua$ ^load\.lua$"') do (
             set "name=%%~nF"
             set "prefix=%%D_!name!"
 
@@ -180,6 +180,68 @@ if exist "%NATIVE_SRC%" if exist "%NATIVE_TEST%" (
         del /f /q "%SCRIPT_DIR%\native_mod_out.log" >nul 2>&1
     ) else (
         echo [FAIL] native_mod
+        set /a FAIL+=1
+    )
+)
+
+:: ----------------------------------------------------------------------
+:: Lua C API module test (--modules, lua_pcallk yieldability)
+:: ----------------------------------------------------------------------
+echo.
+echo --- capi_mod (Lua C API --modules) ---
+
+set "CAPI_SRC=%SCRIPT_DIR%\conformance\capi_mod.cpp"
+set "CAPI_TEST=%SCRIPT_DIR%\conformance\test_capi_mod.lua"
+set "CAPI_BIN=%SCRIPT_DIR%\capi_mod_test.exe"
+
+if exist "%CAPI_SRC%" if exist "%CAPI_TEST%" (
+    set "CAPI_OK="
+    :: Try MSVC first, then MinGW g++
+    where cl.exe >nul 2>&1
+    if !errorlevel! equ 0 (
+        cl /c /std:c++20 /MD /EHsc /I"%ROOT_DIR%\include" "%CAPI_SRC%" /Fo"%SCRIPT_DIR%\capi_mod.obj" 2>&1
+        if exist "%SCRIPT_DIR%\capi_mod.obj" (
+            lib /OUT:"%SCRIPT_DIR%\capi_mod.lib" "%SCRIPT_DIR%\capi_mod.obj" >nul 2>&1
+            "%COMPILER%" "%CAPI_TEST%" --modules capi_mod --output "%CAPI_BIN%" 2>&1
+            if exist "%CAPI_BIN%" (
+                set "CAPI_OK=1"
+            ) else (
+                echo [FAIL] capi_mod -- linking with clx compiler failed
+            )
+        ) else (
+            echo [FAIL] capi_mod -- MSVC compilation of capi_mod.cpp failed
+        )
+        del /f /q "%SCRIPT_DIR%\capi_mod.obj" "%SCRIPT_DIR%\capi_mod.lib" >nul 2>&1
+    ) else (
+        g++ -c -std=c++20 -I"%ROOT_DIR%\include" "%CAPI_SRC%" -o "%SCRIPT_DIR%\capi_mod.o" 2>&1
+        if exist "%SCRIPT_DIR%\capi_mod.o" (
+            ar rcs "%SCRIPT_DIR%\capi_mod.a" "%SCRIPT_DIR%\capi_mod.o" >nul 2>&1
+            "%COMPILER%" "%CAPI_TEST%" --modules capi_mod --output "%CAPI_BIN%" 2>&1
+            if exist "%CAPI_BIN%" (
+                set "CAPI_OK=1"
+            ) else (
+                echo [FAIL] capi_mod -- linking with clx compiler failed
+            )
+        ) else (
+            echo [FAIL] capi_mod -- g++ compilation of capi_mod.cpp failed
+        )
+        del /f /q "%SCRIPT_DIR%\capi_mod.o" "%SCRIPT_DIR%\capi_mod.a" >nul 2>&1
+    )
+    if defined CAPI_OK (
+        "%CAPI_BIN%" > "%SCRIPT_DIR%\capi_mod_out.log" 2>&1
+        set "CAPI_EXIT=!errorlevel!"
+        type "%SCRIPT_DIR%\capi_mod_out.log"
+        if !CAPI_EXIT! neq 0 (
+            echo [FAIL] capi_mod -- runtime exit code !CAPI_EXIT!
+            set /a FAIL+=1
+        ) else (
+            findstr /c:"[FAIL]" "%SCRIPT_DIR%\capi_mod_out.log" >nul 2>&1
+            if !errorlevel! equ 0 ( echo [FAIL] capi_mod & set /a FAIL+=1 ) else ( echo [PASS] capi_mod & set /a PASS+=1 )
+        )
+        del /f /q "%CAPI_BIN%" >nul 2>&1
+        del /f /q "%SCRIPT_DIR%\capi_mod_out.log" >nul 2>&1
+    ) else (
+        echo [FAIL] capi_mod
         set /a FAIL+=1
     )
 )

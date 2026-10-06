@@ -28,7 +28,7 @@ for dir in conformance regression stress edge_cases; do
         name=$(basename "$file" .lua)
         # Skip files handled by dedicated tests below
         case "$file" in
-            conformance/package.lua|conformance/mymod.lua|conformance/test_native_mod.lua) continue ;;
+            conformance/package.lua|conformance/mymod.lua|conformance/test_native_mod.lua|conformance/test_capi_mod.lua) continue ;;
         esac
         if [ "$(basename "$file")" = "load.lua" ]; then
             echo "SKIP: $file (run tests/test-load.sh to exercise --dynamic)"
@@ -139,6 +139,45 @@ if [ -f "$NATIVE_SRC" ] && [ -f "$NATIVE_TEST_LUA" ]; then
         fi
 
         rm -f "$NATIVE_A" "$SCRIPT_DIR/native_mod.o"
+    fi
+fi
+
+# Lua C API module test (--modules, lua_pcallk yieldability)
+CAPI_SRC="$SCRIPT_DIR/conformance/capi_mod.cpp"
+CAPI_TEST_LUA="$SCRIPT_DIR/conformance/test_capi_mod.lua"
+CAPI_BIN="$SCRIPT_DIR/capi_mod_test"
+if [ -f "$CAPI_SRC" ] && [ -f "$CAPI_TEST_LUA" ]; then
+    g++ -c -std=c++20 -fPIC -I "$ROOT_DIR/include" -o "$SCRIPT_DIR/capi_mod.o" "$CAPI_SRC" 2>/dev/null
+    if [ -f "$SCRIPT_DIR/capi_mod.o" ]; then
+        CAPI_A="$SCRIPT_DIR/capi_mod.a"
+        ar rcs "$CAPI_A" "$SCRIPT_DIR/capi_mod.o" 2>/dev/null
+
+        CAPI_OUT="$SCRIPT_DIR/capi_mod_out.log"
+        "$COMPILER" "$CAPI_TEST_LUA" --modules capi_mod --output "$CAPI_BIN" 2>/dev/null
+        if [ -f "$CAPI_BIN" ]; then
+            "$CAPI_BIN" > "$CAPI_OUT" 2>&1
+            capi_exit=$?
+            cat "$CAPI_OUT"
+            if [ "$capi_exit" -ne 0 ]; then
+                echo "[FAIL] capi_mod -- runtime exit code $capi_exit"
+                FAIL=$((FAIL + 1))
+            elif grep -q "\[FAIL\]" "$CAPI_OUT"; then
+                echo "[FAIL] capi_mod"
+                FAIL=$((FAIL + 1))
+            else
+                echo "[PASS] capi_mod"
+                PASS=$((PASS + 1))
+            fi
+            rm -f "$CAPI_BIN" "$CAPI_OUT"
+        else
+            echo "[FAIL] capi_mod -- linking with clx compiler failed"
+            FAIL=$((FAIL + 1))
+        fi
+
+        rm -f "$CAPI_A" "$SCRIPT_DIR/capi_mod.o"
+    else
+        echo "[FAIL] capi_mod -- g++ compilation of capi_mod.cpp failed"
+        FAIL=$((FAIL + 1))
     fi
 fi
 
