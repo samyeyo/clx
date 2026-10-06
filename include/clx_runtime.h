@@ -1087,6 +1087,8 @@ struct LThread : public LHeader {
     bool pre_unwind = false;
     //---------- started: true once the thread has been resumed at least once in its current incarnation
     bool started = false;
+    //---------- yield_count: how often this thread continued after a yield; lua_callk/lua_pcallk diff it across a call to detect one
+    int yield_count = 0;
     //---------- luaapi: backing ApiBundle for the Lua 5.5 C API (owned by libclx_capi)
     void *luaapi = nullptr;
     //---------- shadow: this thread's own GC-root region; empty while the thread is running (its region lives in LState)
@@ -1361,92 +1363,64 @@ struct LState {
     void register_loaded_module(const std::string &name, const LValue &module);
 };
 
+//------------------ Stack scope guard
+struct ScopeGuard {
+    LState *L;
+    size_t prev_top;
+
+    CLX_INLINE_HOT ScopeGuard(LState *state)
+        : L(state)
+        , prev_top(state->shadow_top) { }
+
+    ~ScopeGuard() { L->shadow_top = prev_top; }
+};
+
 //------------------ Rooted call wrappers: push func + args on the shadow stack (GC rooting) around a call, then restore
 CLX_INLINE_HOT MultiValue call_function_rooted(
     LState *L, const LValue &func, const LValue *args, size_t count, const char *file, int line) {
-    size_t base = L->shadow_top;
+    ScopeGuard sg(L);
     L->shadow_stack[L->shadow_top++] = TypedSlot(const_cast<TValue *>(&func.val), const_cast<ValueType *>(&func.type));
     for (size_t i = 0; i < count; ++i)
         L->shadow_stack[L->shadow_top++]
             = TypedSlot(const_cast<TValue *>(&args[i].val), const_cast<ValueType *>(&args[i].type));
-    MultiValue ret;
-    try {
-        ret = call_function(L, func, args, count, file, line);
-    } catch (...) {
-        L->shadow_top = base;
-        throw;
-    }
-    L->shadow_top = base;
-    return ret;
+    return call_function(L, func, args, count, file, line);
 }
 
 CLX_INLINE_HOT MultiValue call_direct_rooted(
     LState *L, const LValue &func, const LValue *args, size_t count, const char *file, int line) {
-    size_t base = L->shadow_top;
+    ScopeGuard sg(L);
     L->shadow_stack[L->shadow_top++] = TypedSlot(const_cast<TValue *>(&func.val), const_cast<ValueType *>(&func.type));
     for (size_t i = 0; i < count; ++i)
         L->shadow_stack[L->shadow_top++]
             = TypedSlot(const_cast<TValue *>(&args[i].val), const_cast<ValueType *>(&args[i].type));
-    MultiValue ret;
-    try {
-        ret = call_direct(L, func, args, count, file, line);
-    } catch (...) {
-        L->shadow_top = base;
-        throw;
-    }
-    L->shadow_top = base;
-    return ret;
+    return call_direct(L, func, args, count, file, line);
 }
 
 //------------------ Rooted call wrapper for direct C function pointers (hoisted builtins, direct impls)
 CLX_INLINE_HOT MultiValue call_cfunc_rooted(LState *L, CFunctionType f, const LValue *args, size_t count) {
-    size_t base = L->shadow_top;
+    ScopeGuard sg(L);
     for (size_t i = 0; i < count; ++i)
         L->shadow_stack[L->shadow_top++]
             = TypedSlot(const_cast<TValue *>(&args[i].val), const_cast<ValueType *>(&args[i].type));
-    MultiValue ret;
-    try {
-        ret = f(L, args, count);
-    } catch (...) {
-        L->shadow_top = base;
-        throw;
-    }
-    L->shadow_top = base;
-    return ret;
+    return f(L, args, count);
 }
 
 //------------------ Raw pointer overload: skips std::function construction on hot builtin calls
 CLX_INLINE_HOT MultiValue call_cfunc_rooted(LState *L, RawCFunction f, const LValue *args, size_t count) {
-    size_t base = L->shadow_top;
+    ScopeGuard sg(L);
     for (size_t i = 0; i < count; ++i)
         L->shadow_stack[L->shadow_top++]
             = TypedSlot(const_cast<TValue *>(&args[i].val), const_cast<ValueType *>(&args[i].type));
-    MultiValue ret;
-    try {
-        ret = f(L, args, count);
-    } catch (...) {
-        L->shadow_top = base;
-        throw;
-    }
-    L->shadow_top = base;
-    return ret;
+    return f(L, args, count);
 }
 
 //------------------ Roots args[] across the direct-call fast path; else collections inside the callee miss survivor-aged args.
 CLX_INLINE_HOT MultiValue call_cfunc_direct(LState *L, const CFunctionType &f, const LValue *args, size_t count) {
-    size_t base = L->shadow_top;
+    ScopeGuard sg(L);
     for (size_t i = 0; i < count; ++i)
         L->shadow_stack[L->shadow_top++]
             = TypedSlot(const_cast<TValue *>(&args[i].val), const_cast<ValueType *>(&args[i].type));
-    MultiValue ret;
-    try {
-        ret = f(L, args, count);
-    } catch (...) {
-        L->shadow_top = base;
-        throw;
-    }
-    L->shadow_top = base;
-    return ret;
+    return f(L, args, count);
 }
 
 //------------------ Metatabled-tables list (protect-pass fast path)
@@ -1783,18 +1757,6 @@ const char *intern_error_message(const char *msg, size_t len);
     std::string msg = std::string("attempt to index a ") + VALUE_TYPE_NAMES[static_cast<size_t>(obj.type)] + " value";
     throw LRuntimeException(LValue(intern_error_message(msg.data(), msg.size())));
 }
-
-//------------------ Stack scope guard
-struct ScopeGuard {
-    LState *L;
-    size_t prev_top;
-
-    CLX_INLINE_HOT ScopeGuard(LState *state)
-        : L(state)
-        , prev_top(state->shadow_top) { }
-
-    ~ScopeGuard() { L->shadow_top = prev_top; }
-};
 
 //------------------ Per-function bump-pointer arena
 #ifndef CLX_ARENA_DEFAULT_FIELDS

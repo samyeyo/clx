@@ -285,6 +285,8 @@ MultiValue yield(LState *L, const LValue *args, size_t count) {
         throw LRuntimeException(clx::string(L, "thread is being closed"));
     }
 
+    ++t->yield_count;
+
     return t->resume_args;
 }
 
