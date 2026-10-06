@@ -39,6 +39,11 @@ struct ApiFrame {
     size_t shadow_base = 0;
 };
 
+//---------- CFrameReturn: abandons a C function once its continuation ran; n becomes the function's result count
+struct CFrameReturn {
+    int n;
+};
+
 //---------- C closure payload: a lua_CFunction plus its shared upvalue cells.
 struct CFuncAdapter {
     lua_CFunction fn = nullptr;
@@ -54,6 +59,8 @@ struct lua_State {
     clx::LThread *thread;
     //---------- pcall_depth: nested lua_pcallk frames, reproducing stock's non-yieldable C boundary
     int pcall_depth;
+    //---------- catching_frames: live CFuncAdapter/luaopen frames able to catch a CFrameReturn
+    int catching_frames;
     std::deque<ApiFrame> frames;
     clx::LValue registry;
     clx::LValue uservalues;
@@ -229,6 +236,7 @@ static lua_State *luaapi_fetch(clx::LState *L) {
         b->st.L = L;
         b->st.thread = nullptr;
         b->st.pcall_depth = 0;
+        b->st.catching_frames = 0;
         b->st.registry = clx::LValue();
         b->st.uservalues = clx::LValue();
         b->st.file_scratch.f = nullptr;
@@ -277,6 +285,7 @@ static lua_State *luaapi_fetch_thread(clx::LThread *t) {
         b->st.L = t->state;
         b->st.thread = t;
         b->st.pcall_depth = 0;
+        b->st.catching_frames = 0;
         b->st.registry = root->registry;
         b->st.uservalues = root->uservalues;
         b->st.file_scratch.f = nullptr;
@@ -380,11 +389,13 @@ public:
         m_base = *luaapi_region(ls).top;
         m_ls->frames.emplace_back();
         m_ls->frames.back().shadow_base = m_base;
+        m_ls->catching_frames++;
     }
 
     ~ApiFrameGuard() {
         *luaapi_region(m_ls).top = m_base;
         m_ls->frames.pop_back();
+        m_ls->catching_frames--;
     }
 
     ApiFrameGuard(const ApiFrameGuard &) = delete;
@@ -403,7 +414,12 @@ clx::MultiValue CFuncAdapter::operator()(clx::LState *L, const clx::LValue *args
         ls->frames.back().ups = ups;
         for (size_t i = 0; i < count; ++i)
             luaapi_push(ls, args[i]);
-        int n = fn(ls);
+        int n;
+        try {
+            n = fn(ls);
+        } catch (const CFrameReturn &ret) {
+            n = ret.n;
+        }
         ApiFrame &f = ls->frames.back();
         size_t sz = f.stack.size();
         size_t keep = (n <= 0) ? 0 : (static_cast<size_t>(n) > sz ? sz : static_cast<size_t>(n));
@@ -475,7 +491,12 @@ LValue luaapi_c_module_open(LState *L, int (*openf)(struct ::lua_State *), const
     LValue mod;
     {
         ApiFrameGuard guard(L, ls);
-        int n = openf(ls);
+        int n;
+        try {
+            n = openf(ls);
+        } catch (const CFrameReturn &ret) {
+            n = ret.n;
+        }
         ApiFrame &f = ls->frames.back();
         size_t sz = f.stack.size();
         size_t want = (n <= 0) ? 0 : (static_cast<size_t>(n) > sz ? sz : static_cast<size_t>(n));
@@ -523,6 +544,7 @@ void luaapi_reset_thread_bundle(LState *L, void *bundle) {
     ApiBundle *b = static_cast<ApiBundle *>(bundle);
     b->st.frames.clear();
     b->st.pcall_depth = 0;
+    b->st.catching_frames = 0;
 }
 
 }
@@ -1475,8 +1497,8 @@ int lua_setiuservalue(lua_State *L, int idx, int n) {
 //=========================== load and call ===========================
 
 //---------- luaapi_call: shared body of lua_callk / lua_pcallk
-static int luaapi_call(lua_State *L, int nargs, int nresults, int errfunc, bool protect) {
-    //---------- PcallDepthGuard: stock marks protected frames non-yieldable, which lua_yieldk must reproduce
+static int luaapi_call(lua_State *L, int nargs, int nresults, int errfunc, bool protect, bool yieldable) {
+    //---------- PcallDepthGuard: stock marks protected frames without a continuation non-yieldable, which lua_yieldk must reproduce
     struct PcallDepthGuard {
         lua_State *ls;
         bool armed;
@@ -1492,7 +1514,7 @@ static int luaapi_call(lua_State *L, int nargs, int nresults, int errfunc, bool 
             if (armed)
                 ls->pcall_depth--;
         }
-    } guard(L, protect);
+    } guard(L, protect && !yieldable);
 
     clx::LState *S = L->L;
     ApiFrame &f = luaapi_frame(L);
@@ -1591,15 +1613,26 @@ static int luaapi_call(lua_State *L, int nargs, int nresults, int errfunc, bool 
 }
 
 void lua_callk(lua_State *L, int nargs, int nresults, lua_KContext ctx, lua_KFunction k) {
-    (void)ctx;
-    (void)k;
-    luaapi_call(L, nargs, nresults, 0, false);
+    clx::LState *S = L->L;
+    clx::LThread *self = S->running_thread;
+    int y0 = self ? self->yield_count : 0;
+    luaapi_call(L, nargs, nresults, 0, false, true);
+    if (k && self && self->yield_count != y0 && L->catching_frames > 0 && L == luaapi_fetch_current(S)) {
+        int n = k(L, LUA_YIELD, ctx);
+        throw CFrameReturn { n };
+    }
 }
 
 int lua_pcallk(lua_State *L, int nargs, int nresults, int errfunc, lua_KContext ctx, lua_KFunction k) {
-    (void)ctx;
-    (void)k;
-    return luaapi_call(L, nargs, nresults, errfunc, true);
+    clx::LState *S = L->L;
+    clx::LThread *self = S->running_thread;
+    int y0 = self ? self->yield_count : 0;
+    int st = luaapi_call(L, nargs, nresults, errfunc, true, k != nullptr);
+    if (k && self && self->yield_count != y0 && L->catching_frames > 0 && L == luaapi_fetch_current(S)) {
+        st = k(L, st == LUA_OK ? LUA_YIELD : st, ctx);
+        throw CFrameReturn { st };
+    }
+    return st;
 }
 
 int lua_load(lua_State *L, lua_Reader reader, void *dt, const char *chunkname, const char *mode) {
