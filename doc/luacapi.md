@@ -108,7 +108,7 @@ definition (147 API names in total). The list below is by area; the
 | Tables: `lua_createtable`, `lua_newtable`, `lua_get{table,field,i,global}`, `lua_set{table,field,i,global}`, `lua_raw{get,geti,getp,set,seti,setp}`, `lua_getmetatable`, `lua_setmetatable`, `lua_next`, `lua_len` | ✅ |
 | Userdata: `lua_newuserdatauv`, `lua_getiuservalue`, `lua_setiuservalue` | ✅ |
 | Arithmetic and comparison: `lua_arith`, `lua_compare`, `lua_rawequal`, `lua_concat` | ✅ |
-| Calls: `lua_callk` / `lua_call`, `lua_pcallk` / `lua_pcall` | ✅ — but the continuation argument is ignored, see [Differences](#what-differs-from-stock-lua) |
+| Calls: `lua_callk` / `lua_call`, `lua_pcallk` / `lua_pcall` | ✅ — the continuation runs when the call yields, see [Differences](#what-differs-from-stock-lua) |
 | Coroutines: `lua_newthread`, `lua_closethread`, `lua_xmove`, `lua_tothread`, `lua_pushthread`, `lua_resume`, `lua_yieldk` / `lua_yield`, `lua_status`, `lua_isyieldable` | ✅ — see [Coroutines](#coroutines) |
 | Registry and references: `luaL_ref`, `luaL_unref`, `luaL_getsubtable`, `luaL_requiref` | ✅ |
 | Auxiliary library: `luaL_check*/opt*`, `luaL_argerror`, `luaL_typeerror`, `luaL_error`, `luaL_where`, `luaL_tolstring`, `luaL_newmetatable`, `luaL_testudata`, `luaL_checkudata`, `luaL_setfuncs`, `luaL_setmetatable`, `luaL_callmeta`, `luaL_getmetafield`, `luaL_traceback` (header only), `luaL_fileresult`, `luaL_execresult` | ✅ |
@@ -249,8 +249,9 @@ Notes on the contract:
 - `lua_status` returns `LUA_OK` for the main thread and for a freshly created
   thread, `LUA_YIELD` after a yield, `LUA_OK` for a coroutine that finished
   normally, and `LUA_ERRRUN` for one that died with an error.
-- `lua_isyieldable` returns `0` on the main thread and inside `lua_pcallk`,
-  matching stock's "cannot yield across a C-call boundary" rule.
+- `lua_isyieldable` returns `0` on the main thread and inside `lua_pcallk`
+  with `k == NULL`, matching stock's "cannot yield across a C-call boundary"
+  rule.
 - `lua_yieldk(L, n, ctx, k)` yields like `lua_yield`, then runs
   `k(L, LUA_YIELD, ctx)` after the coroutine is next resumed and returns
   whatever `k` returns. If `k` is `NULL`, it returns the number of values the
@@ -331,9 +332,9 @@ while the value stays on the stack" guarantee holds.
 | Area | Note |
 |---|---|
 | `luaL_checkoption` | returns the **`int` index** of the chosen option, not a pointer — this is a Lua 5.5 change, not a clx quirk |
-| `lua_callk` / `lua_pcallk` | the `lua_KFunction` continuation argument is accepted and **never called**. clx coroutines are stackful, so a C frame suspended by a yield resumes where it left off and the call simply completes instead of running `k(L, LUA_YIELD, ctx)`. `lua_yieldk`'s own continuation *does* work and is the one to use |
+| `lua_callk` / `lua_pcallk` | the `lua_KFunction` continuation runs exactly when the call yields: after the call completes, clx runs `k(L, LUA_YIELD, ctx)` (or `k(L, status, ctx)` if it failed after the yield) and abandons the C function, using `k`'s return value as its result count — as stock does. If the call never yields, `k` is not called and `lua_pcallk` returns normally |
 | yield through `lua_callk` | stock allows it only when `k != NULL`; clx always allows it |
-| yield through `lua_pcallk` | stock allows it when `k != NULL`; clx never allows it — you get `"attempt to yield across a C-call boundary"` |
+| yield through `lua_pcallk` | like stock: allowed when `k != NULL` (the continuation runs on resume), refused with `k == NULL` — you get `"attempt to yield across a C-call boundary"` |
 | `luaL_pushfail` | a header macro, so identical to stock: pushes `nil`, or `false` if you define `LUA_FAILISFALSE` |
 | `lua_newuserdatauv(L, sz, nuvalue)` | `nuvalue` is ignored — you can store any number of user values, and out-of-range `lua_getiuservalue`/`lua_setiuservalue` indices return `LUA_TNONE` / `0` instead of failing |
 | `lua_pushexternalstring(L, s, len, falloc, ud)` | clx copies the bytes into its own arena and calls `falloc(ud, s, len+1, 0)` **immediately**, so your buffer must be freeable right away and must not be reused |
