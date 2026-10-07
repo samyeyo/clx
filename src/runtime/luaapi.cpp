@@ -76,8 +76,18 @@ struct ApiBundle {
     lua_State st;
 };
 
+//---------- CLX: ApiBundle layout check - clang warns offsetof on non-standard-layout; layout is guaranteed
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winvalid-offsetof"
+#endif
+
 static_assert(
     offsetof(ApiBundle, st) == LUA_EXTRASPACE, "lua_getextraspace requires extraspace bytes before lua_State");
+
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 
 //------------------ luaapi_type_names: lua_typename table indexed by (type + 1)
 static const char *const luaapi_type_names[] = { "no value", "nil", "boolean", "userdata", "number", "string", "table",
