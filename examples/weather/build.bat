@@ -11,56 +11,67 @@ set LUASOCKET_URL=https://github.com/lunarmodules/luasocket/archive/refs/tags/v%
 
 :: Detect clx (installed layout first, then in-tree build)
 set CLX=..\..\bin\clx.exe
-if exist "%CLX%" goto clx_found
-set CLX=..\..\build\clx.exe
-if exist "%CLX%" goto clx_found
-echo clx.exe not found.
-echo Please build clx first by running "build.bat" in the repository root.
-exit /b 1
-:clx_found
+if not exist "%CLX%" set CLX=..\..\build\clx.exe
+if not exist "%CLX%" (
+    echo clx.exe not found.
+    echo Please build clx first by running "build.bat" in the repository root.
+    exit /b 1
+)
 for %%I in ("%CLX%") do set "CLX=%%~fI"
 
-if exist "%CLX_INCLUDE%\lua.h" goto headers_ok
-echo Error: %CLX_INCLUDE%\lua.h not found (set CLX_INCLUDE to clx's include directory.)
-exit /b 1
-:headers_ok
+if not exist "%CLX_INCLUDE%\lua.h" (
+    echo Error: %CLX_INCLUDE%\lua.h not found ^(set CLX_INCLUDE to clx's include directory.^)
+    exit /b 1
+)
 
-:: Detect C compiler: clx on Windows links with cl, so prefer it
-set CSTYLE=msvc
-if not "%CC%"=="" goto cc_custom
-where cl.exe >nul 2>&1
-if not errorlevel 1 (set "CC=cl.exe" & goto cc_ready)
+:: Detect C compiler style from the compiler clx itself drives (clx --cxx).
+:: No goto anywhere below: cmd's forward label scan is byte-layout fragile.
+set DIALECT=MSVC
+for /f "tokens=1" %%I in ('%CLX% --cxx 2^>nul') do set DIALECT=%%I
 set CSTYLE=gnu
-where gcc >nul 2>&1
-if not errorlevel 1 (set "CC=gcc" & goto cc_ready)
-where clang >nul 2>&1
-if not errorlevel 1 (set "CC=clang" & goto cc_ready)
-echo Error: no C compiler found.
-echo Run this from an "x64 Native Tools Command Prompt" ^(cl.exe^), or install gcc or clang.
-exit /b 1
-
-:cc_custom
-set CSTYLE=gnu
-for %%I in ("%CC%") do set CCNAME=%%~nxI
-if /I "%CCNAME%"=="cl" set CSTYLE=msvc
-if /I "%CCNAME%"=="cl.exe" set CSTYLE=msvc
-
-:cc_ready
+if "%DIALECT%"=="MSVC" set CSTYLE=msvc
+if "%DIALECT%"=="ClangCL" set CSTYLE=msvc
+if not "%CC%"=="" (
+    for %%I in ("%CC%") do set CCNAME=%%~nxI
+    set CSTYLE=gnu
+    if /I "!CCNAME!"=="cl" set CSTYLE=msvc
+    if /I "!CCNAME!"=="cl.exe" set CSTYLE=msvc
+) else if "!CSTYLE!"=="msvc" (
+    where cl.exe >nul 2>&1
+    if errorlevel 1 (
+        echo Error: cl.exe not found. Run this from an "x64 Native Tools Command Prompt".
+        exit /b 1
+    )
+    set "CC=cl.exe"
+) else (
+    set "CC="
+    where gcc >nul 2>&1
+    if not errorlevel 1 set "CC=gcc"
+    if "!CC!"=="" (
+        where clang >nul 2>&1
+        if not errorlevel 1 set "CC=clang"
+    )
+    if "!CC!"=="" (
+        echo Error: no C compiler found.
+        echo Install gcc or clang, or run from an "x64 Native Tools Command Prompt" ^(cl.exe^).
+        exit /b 1
+    )
+)
 if "%CSTYLE%"=="gnu" if "%AR%"=="" set AR=ar
 
 :: --- 1. fetch luasocket (pinned release, skipped when already extracted) ---
-if exist "%SRC%\luasocket.c" goto fetch_done
-if not exist "%BUILD%" mkdir "%BUILD%"
-if not exist "%BUILD%\luasocket-%LUASOCKET_VERSION%.tar.gz" (
-    echo Fetching luasocket %LUASOCKET_VERSION%...
-    where curl >nul 2>&1
-    if errorlevel 1 (echo Error: need curl to download luasocket. & exit /b 1)
-    curl -sL -o "%BUILD%\luasocket-%LUASOCKET_VERSION%.tar.gz" "%LUASOCKET_URL%"
-    if errorlevel 1 (echo Error: could not download luasocket. & exit /b 1)
+if not exist "%SRC%\luasocket.c" (
+    if not exist "%BUILD%" mkdir "%BUILD%"
+    if not exist "%BUILD%\luasocket-%LUASOCKET_VERSION%.tar.gz" (
+        echo Fetching luasocket %LUASOCKET_VERSION%...
+        where curl >nul 2>&1
+        if errorlevel 1 (echo Error: need curl to download luasocket. & exit /b 1)
+        curl -sL -o "%BUILD%\luasocket-%LUASOCKET_VERSION%.tar.gz" "%LUASOCKET_URL%"
+        if errorlevel 1 (echo Error: could not download luasocket. & exit /b 1)
+    )
+    tar xzf "%BUILD%\luasocket-%LUASOCKET_VERSION%.tar.gz" -C "%BUILD%"
+    if errorlevel 1 (echo Error: could not extract luasocket archive. & exit /b 1)
 )
-tar xzf "%BUILD%\luasocket-%LUASOCKET_VERSION%.tar.gz" -C "%BUILD%"
-if errorlevel 1 (echo Error: could not extract luasocket archive. & exit /b 1)
-:fetch_done
 
 :: --- 2. compile the C cores against clx's Lua C API headers ---
 echo Compiling luasocket C modules with %CC%...
