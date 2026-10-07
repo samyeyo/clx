@@ -66,7 +66,12 @@ for %%F in (%TEST_DIR%\*.lua) do (
 
     :: Determine luajit file: use *_luajit.lua variant if it exists
     set "luajit_file=%TEST_DIR%\!basename!_luajit.lua"
-    if not exist "!luajit_file!" set "luajit_file=!file!"
+    set "luajit_base=!basename!"
+    if not exist "!luajit_file!" (
+        set "luajit_file=!file!"
+    ) else (
+        set "luajit_base=!basename!_luajit"
+    )
 
     :: Compile with clx
     set FOUND_FILES=1
@@ -80,14 +85,14 @@ for %%F in (%TEST_DIR%\*.lua) do (
     if not exist "!basename!.exe" (
         powershell -nologo -noprofile -command "%INV_CULT% '{0,-22} | COMPILATION FAILED       | -                  | -' -f '!basename!.lua'"
     ) else (
-        :: Time lua 5.5
-        call :time_engine "lua !file!" avg_lua
+        :: Time lua 5.5 (engines run from benchmarks\ so relative paths like canada.json resolve, as in run.sh)
+        call :time_engine "cd /d %ROOT_DIR%\benchmarks && lua !basename!.lua >nul 2>&1" avg_lua
 
         :: Time LuaJIT
-        call :time_engine "luajit !luajit_file!" avg_luajit
+        call :time_engine "cd /d %ROOT_DIR%\benchmarks && luajit !luajit_base!.lua >nul 2>&1" avg_luajit
 
-        :: Time clx binary
-        call :time_engine ".\!basename!.exe" avg_clx
+        :: Time clx binary (run from benchmarks\ so relative paths resolve; redirect inside cmd so PowerShell never pipes native stdout)
+        call :time_engine "cd /d %ROOT_DIR%\benchmarks && ..\!basename!.exe >nul 2>&1" avg_clx
 
         :: Compute speedups via PowerShell
         for /f %%R in ('powershell -nologo -noprofile -command "%INV_CULT% if(!avg_luajit! -gt 0){'{0:F2}x' -f (!avg_lua!/!avg_luajit!)}else{'MAXx'}"') do set sp_luajit=%%R
@@ -118,13 +123,13 @@ set "_var=%~2"
 
 :: Warmup
 if "%WARMUP%"=="1" (
-    powershell -nologo -noprofile -command "& {%_cmd%}" >nul 2>&1
+    powershell -nologo -noprofile -command "& { cmd /c '%_cmd%' }" >nul 2>&1
 )
 
 :: Timed runs
 set "_total=0"
 for /l %%i in (1,1,%RUNS%) do (
-    for /f %%T in ('powershell -nologo -noprofile -command "%INV_CULT% $sw=[System.Diagnostics.Stopwatch]::StartNew(); & {%_cmd%} *>$null 2>$null; $sw.Stop(); '{0:F4}' -f $sw.Elapsed.TotalMilliseconds"') do (
+    for /f %%T in ('powershell -nologo -noprofile -command "%INV_CULT% $sw=[System.Diagnostics.Stopwatch]::StartNew(); & { cmd /c '%_cmd%' } *>$null 2>$null; $sw.Stop(); '{0:F4}' -f $sw.Elapsed.TotalMilliseconds"') do (
         set "_t=%%T"
         for /f %%A in ('powershell -nologo -noprofile -command "%INV_CULT% '{0:F4}' -f (!_total! + !_t!)"') do set "_total=%%A"
     )
