@@ -12,7 +12,12 @@ AR="${AR:-ar}"
 
 [ -f "$CLX_INCLUDE/lua.h" ] || { echo "Error: $CLX_INCLUDE/lua.h not found (set CLX_INCLUDE to clx's include directory)."; exit 1; }
 
-[ -x ../../build/clx ] || { echo "Building clx..."; (cd ../.. && ./build.sh); }
+# Rebuild clx when sources/headers changed; stale libs linked against fresh
+# generated code ABI-mismatch and the result crashes at startup
+if [ ! -x ../../build/clx ] || [ -n "$(find ../../src ../../include ../../CMakeLists.txt -newer ../../build/clx -print -quit 2>/dev/null)" ]; then
+    echo "Building clx..."
+    (cd ../.. && ./build.sh)
+fi
 CLX="$(cd ../../build && pwd)/clx"
 
 # Smallest-binary flags, probed so the example also works on toolchains without -Oz/-flto=auto.

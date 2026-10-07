@@ -2,9 +2,18 @@
 set -e
 cd "$(dirname "$0")"
 
-[ -f "../sokol/sokol_clx.a" ] || (cd ../sokol && ./build.sh)
+# Rebuild clx when sources/headers changed; stale libs linked against fresh
+# generated code ABI-mismatch and the result crashes at startup
+if [ ! -x ../../build/clx ] || [ -n "$(find ../../src ../../include ../../CMakeLists.txt -newer ../../build/clx -print -quit 2>/dev/null)" ]; then
+    echo "Building clx..."
+    (cd ../.. && ./build.sh)
+fi
 
-[ -f "../../build/clx" ] || { echo "Building clx..."; (cd ../.. && ./build.sh); }
+# Rebuild sokol module when its sources/headers changed; a sokol_clx.a built
+# against older clx.h/clx_runtime.h corrupts memory inside clx::open()
+if [ ! -f ../sokol/sokol_clx.a ] || [ -n "$(find ../sokol/sokol_clx.cpp ../../include ../sokol/sokol \( -name '*.h' -o -name '*.cpp' \) -newer ../sokol/sokol_clx.a -print -quit 2>/dev/null)" ]; then
+    (cd ../sokol && ./build.sh)
+fi
 
 # Platform-specific linker flags
 case "$(uname -s)" in
