@@ -78,7 +78,9 @@ set_target_properties(clx_lua PROPERTIES
 # the build (linker reports "Unexistent dir" / bitcode mismatch). The
 # per-function sections + final --gc-sections give most of the size
 # benefit without the LTO coupling risk.
-if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+# clang-cl also reports compiler ID "Clang" but only understands MSVC-style
+# options (-ffunction-sections etc. are ignored with a warning).
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC)
     target_compile_options(clx_lua PRIVATE
         -Os
         -ffunction-sections
