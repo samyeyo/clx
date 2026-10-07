@@ -1585,10 +1585,42 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
                     out << "l_" << name << " = " << num_str << ";\n";
                 else
                     out << "l_" << name << " = " << val_str << ";\n";
-                if (is_n && !is_boxed && i < v_count && !tmp_is_native[i] && state.native_integers.count(name) == 0) {
-                    uint32_t fv = ctx.block_statements[first_v + i];
-                    out << "_intf_l_" << name << " = (" << int_flag_expr(fv, 1) << ");\n";
-                    out << "_ii_l_" << name << " = (" << int_value_expr(fv, 1) << ");\n";
+                if (is_n && !is_boxed && state.native_integers.count(name) == 0) {
+                    for (auto sit = locals.rbegin(); sit != locals.rend(); ++sit) {
+                        if (sit->name != name)
+                            continue;
+                        if (sit->has_intf) {
+                            if (i < v_count && tmp_is_native[i]) {
+                                if (tmp_is_integer[i]) {
+                                    out << "_intf_l_" << name << " = true;\n";
+                                    if (sit->has_ii)
+                                        out << "_ii_l_" << name << " = " << num_str << ";\n";
+                                } else {
+                                    out << "_intf_l_" << name << " = false;\n";
+                                    if (sit->has_ii)
+                                        out << "_ii_l_" << name << " = 0;\n";
+                                }
+                            } else if (last_is_call && i + 1 >= v_count) {
+                                std::string mi = std::to_string(i) + " - " + std::to_string(v_count - 1);
+                                out << "_intf_l_" << name << " = ((" << mi << ") < _mret_" << node_idx
+                                    << ".count && _mret_" << node_idx << "[" << mi
+                                    << "].type == clx::ValueType::Int64);\n";
+                                if (sit->has_ii)
+                                    out << "_ii_l_" << name << " = _intf_l_" << name << " ? _mret_" << node_idx
+                                        << "[" << mi << "].val.payload.i64 : 0;\n";
+                            } else if (i >= v_count) {
+                                out << "_intf_l_" << name << " = false;\n";
+                                if (sit->has_ii)
+                                    out << "_ii_l_" << name << " = 0;\n";
+                            } else {
+                                uint32_t fv = ctx.block_statements[first_v + i];
+                                out << "_intf_l_" << name << " = (" << int_flag_expr(fv, 1) << ");\n";
+                                if (sit->has_ii)
+                                    out << "_ii_l_" << name << " = (" << int_value_expr(fv, 1) << ");\n";
+                            }
+                        }
+                        break;
+                    }
                 }
                 if (!is_n
                     && std::find_if(state.const_snapshot_cells.begin() + csnap_base, state.const_snapshot_cells.end(),
