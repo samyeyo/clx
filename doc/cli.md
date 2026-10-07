@@ -123,7 +123,7 @@ computations, and `--size` when binary size matters more.
 
 | Variable | What it means |
 |----------|---------------|
-| `CLX_CXX` | C++ compiler used to build your programs (falls back to the compiler that built clx). |
+| `CLX_CXX` | C++ compiler used to build your programs (falls back to the compiler that built clx). The executable name picks the flag style: `cl` and `clang-cl` get MSVC-style flags, anything else gets GCC-style flags. |
 | `CLX_ARCH` | Target CPU for clx's own build (`sse2`, `avx`, `avx2`, `avx512`, `native` on x64). Opting into AVX2 or newer enables faster SIMD paths in the runtime. |
 | `CLX_GC_MODE` | Collector for compiled programs: `generational` (default) or `incremental` (the legacy collector). |
 | `CLX_GC_MINOR_KB` | Kilobytes allocated between minor collections (default 8192). Lower values collect young garbage sooner. |
@@ -140,7 +140,9 @@ computations, and `--size` when binary size matters more.
 
 - **Compiler**: the C++ compiler is fixed when clx is built (CMake uses the same
   compiler that built clx to compile your Lua scripts). This keeps toolchains
-  consistent.
+  consistent. On Windows clx builds with MSVC or with LLVM's `clang-cl`
+  (`build.bat clang-cl`); `CLX_CXX=cl` / `CLX_CXX=clang-cl` switches the
+  compiler for a single run.
 - **Windows** outputs `.exe` / `.obj` / `.lib`; **Linux/macOS** outputs files
   with no extension / `.o` / `.a`.
 
