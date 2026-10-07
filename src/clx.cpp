@@ -474,6 +474,11 @@ int main(int argc, char* argv[])
 
     const bool is_clang_cl = cc.name == "ClangCL";
     const bool msvc_dialect = is_clang_cl || cc.name == "MSVC";
+    if (link_seen && !msvc_dialect) {
+        std::cerr << "Error: /link options need an MSVC-style compiler (cl/clang-cl), but this clx drives " << cc.name
+                  << ". Pass link flags directly instead (e.g. -mwindows, -lws2_32).\n";
+        return 1;
+    }
 
     std::string opt_flags;
     std::string msvc_opt_flags;
@@ -623,16 +628,21 @@ int main(int argc, char* argv[])
     for (const auto& mod : precompiled_modules) {
         if (module_archives.count(mod))
             continue;
-        std::string target_lib = mod + (msvc_dialect ? ".lib" : ".a");
+        std::string exts[2] = { msvc_dialect ? ".lib" : ".a", msvc_dialect ? ".a" : ".lib" };
         fs::path resolved;
         for (const auto& dir : mod_search_dirs) {
-            if (fs::exists(dir / target_lib)) {
-                resolved = dir / target_lib;
-                break;
+            for (const auto& ext : exts) {
+                if (fs::exists(dir / (mod + ext))) {
+                    resolved = dir / (mod + ext);
+                    break;
+                }
             }
+            if (!resolved.empty())
+                break;
         }
         module_archives[mod] = resolved;
-        module_kinds[mod] = clx_scan_module_kind(resolved.empty() ? fs::path(target_lib) : resolved, mod);
+        module_kinds[mod] = clx_scan_module_kind(
+            resolved.empty() ? fs::path(mod + exts[0]) : resolved, mod);
     }
 
     for (const auto& input_file : input_files) {
@@ -904,21 +914,27 @@ int main(int argc, char* argv[])
     }
 
     for (const auto& mod : precompiled_modules) {
-        std::string target_lib = mod + (msvc_dialect ? ".lib" : ".a");
+        std::string exts[2] = { msvc_dialect ? ".lib" : ".a", msvc_dialect ? ".a" : ".lib" };
         bool found = false;
         for (const auto& dir : mod_search_dirs) {
-            fs::path full = dir / target_lib;
-            if (fs::exists(full)) {
-                if (dir == fs::current_path())
-                    all_cpp_files += "\"" + target_lib + "\" ";
-                else
-                    all_cpp_files += "\"" + fs::absolute(full).string() + "\" ";
-                found = true;
-                break;
+            for (const auto& ext : exts) {
+                fs::path full = dir / (mod + ext);
+                if (fs::exists(full)) {
+                    if (dir == fs::current_path())
+                        all_cpp_files += "\"" + (mod + ext) + "\" ";
+                    else
+                        all_cpp_files += "\"" + fs::absolute(full).string() + "\" ";
+                    found = true;
+                    break;
+                }
             }
+            if (found)
+                break;
         }
         if (!found) {
-            all_cpp_files += "\"" + target_lib + "\" ";
+            std::cerr << "Error: Cannot find module \"" << mod << "\" (tried " << mod << exts[0] << " and "
+                      << mod << exts[1] << " in the current directory and module search paths).\n";
+            return 1;
         }
     }
 
