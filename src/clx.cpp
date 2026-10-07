@@ -271,6 +271,19 @@ static bool find_on_path(const char* exe_name)
 }
 #endif
 
+//------------------ CLX: cxx_dialect - flag dialect of a compiler executable: "MSVC", "ClangCL" or the fallback
+static std::string cxx_dialect(const std::string& exe, const std::string& fallback)
+{
+    std::string base = fs::path(exe).filename().stem().string();
+    for (auto& c : base)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (base == "cl")
+        return "MSVC";
+    if (base == "clang-cl")
+        return "ClangCL";
+    return fallback;
+}
+
 //------------------ CLX: get_compiler - resolve the C++ compiler: CLX_CXX environment
 Compiler get_compiler()
 {
@@ -280,13 +293,8 @@ Compiler get_compiler()
 #ifndef CLX_DEFAULT_CXX_NAME
 #error "CLX_DEFAULT_CXX_NAME not defined — rebuild with CMake"
 #endif
-    if (const char* env = std::getenv("CLX_CXX"); env && *env) {
-        std::string base = fs::path(env).filename().string();
-        for (auto& c : base)
-            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        bool msvc_style = base.rfind("cl", 0) == 0;
-        return { msvc_style ? std::string("MSVC") : std::string("Clang"), std::string(env) };
-    }
+    if (const char* env = std::getenv("CLX_CXX"); env && *env)
+        return { cxx_dialect(env, "Clang"), std::string(env) };
     fs::path embedded(CLX_DEFAULT_CXX);
 #ifdef _WIN32
     std::string embedded_name = embedded.filename().string();
@@ -300,12 +308,26 @@ Compiler get_compiler()
 #endif
     if (embedded.is_absolute() && !fs::exists(embedded)) {
 #ifdef _WIN32
-        return { "MSVC", "cl" };
+        bool embedded_clang_cl = embedded_name.rfind("clang-cl", 0) == 0;
+        const char* candidates[2];
+        if (embedded_clang_cl) {
+            candidates[0] = "clang-cl";
+            candidates[1] = "cl";
+        } else {
+            candidates[0] = "cl";
+            candidates[1] = "clang-cl";
+        }
+        for (const char* candidate : candidates) {
+            std::string probe = std::string(candidate) + ".exe";
+            if (find_on_path(probe.c_str()))
+                return { cxx_dialect(candidate, "MSVC"), candidate };
+        }
+        return { cxx_dialect(candidates[0], "MSVC"), candidates[0] };
 #else
         return { CLX_DEFAULT_CXX_NAME, "c++" };
 #endif
     }
-    return { CLX_DEFAULT_CXX_NAME, CLX_DEFAULT_CXX };
+    return { cxx_dialect(CLX_DEFAULT_CXX, CLX_DEFAULT_CXX_NAME), CLX_DEFAULT_CXX };
 }
 
 //------------------ CLX: print_help - displays usage information
@@ -323,6 +345,7 @@ void print_help()
               << "  --cpp                 Generate C++ source file and exit\n"               << "  --minimal             Exclude non-essential Lua modules; keeps base + package + string\n"
               << "  --dynamic             Link the embedded Lua 5.5 VM (load/loadfile/dofile)\n"
               << "  --version             Print version and exit\n"
+              << "  --cxx                 Print the C++ compiler dialect and path clx drives\n"
               << "  --help                Display this help message\n\n"
               << "Compiler Options:\n"
               << "  Any options starting with '-' not recognized by clx are passed to the C++ compiler.\n"
@@ -354,6 +377,13 @@ int main(int argc, char* argv[])
             return 0;
         } else if (arg == "--version") {
             std::cout << "clx " CLX_VERSION "\nMIT License - Copyright (c) 2026 Tine Samir\n";
+            return 0;
+        } else if (arg == "--cxx") {
+            Compiler cxx = get_compiler();
+            std::cout << cxx.name;
+            if (!cxx.cmd.empty())
+                std::cout << " (" << cxx.cmd << ")";
+            std::cout << "\n";
             return 0;
         } else if (arg == "--output" || arg == "-o") {
             if (i + 1 < argc)
@@ -417,6 +447,12 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    Compiler cc = get_compiler();
+    if (cc.cmd.empty()) {
+        std::cerr << "Error: No C++ compiler found.\n";
+        return 2;
+    }
+
     std::string cc_compile_str = "";
     std::string cc_link_str = "";
     bool link_seen = false;
@@ -435,6 +471,9 @@ int main(int argc, char* argv[])
         cc_compile_str = "";
     }
     std::string cc_options_str = cc_compile_str + cc_link_str;
+
+    const bool is_clang_cl = cc.name == "ClangCL";
+    const bool msvc_dialect = is_clang_cl || cc.name == "MSVC";
 
     std::string opt_flags;
     std::string msvc_opt_flags;
@@ -455,7 +494,9 @@ int main(int argc, char* argv[])
 #endif
         ;
     std::string msvc_dce_cl = dce_mode ? " /Gy" : "";
-    std::string msvc_dce_link = dce_mode ? " /link /LTCG /OPT:REF /OPT:ICF" : "";
+    std::string msvc_dce_link;
+    if (dce_mode)
+        msvc_dce_link = is_clang_cl ? " /link /OPT:REF /OPT:ICF" : " /link /LTCG /OPT:REF /OPT:ICF";
 
     std::string msvc_stack;
     std::string gcc_stack;
@@ -471,15 +512,22 @@ int main(int argc, char* argv[])
         }
     }
 
+    std::string msvc_wpo = is_clang_cl ? "" : " /GL";
     if (debug_mode) {
         opt_flags = "-O0 -g";
         msvc_opt_flags = "/Od /Zi /MDd /EHsc /utf-8";
     } else if (size_mode) {
-        opt_flags = "-Os -fno-inline-functions -fvisibility=hidden";
-        msvc_opt_flags = "/O1 /Ob0 /GL /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy /utf-8";
+        opt_flags = (cc.name == "GNU")
+            ? "-O1 -foptimize-sibling-calls -fno-inline-functions -fvisibility=hidden"
+            : "-Os -fno-inline-functions -fvisibility=hidden";
+        msvc_opt_flags = "/O1 /Ob0" + msvc_wpo + " /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy /utf-8";
     } else {
+#ifdef _WIN32
+        opt_flags = "-O3 -fvisibility=hidden";
+#else
         opt_flags = "-O3 -flto=auto -fvisibility=hidden";
-        msvc_opt_flags = "/O2 /Ot /GL /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy /utf-8";
+#endif
+        msvc_opt_flags = "/O2 /Ot" + msvc_wpo + " /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy /utf-8";
     }
 
 #ifndef CLX_ARCH_GCC_FLAG
@@ -575,11 +623,7 @@ int main(int argc, char* argv[])
     for (const auto& mod : precompiled_modules) {
         if (module_archives.count(mod))
             continue;
-#ifdef _WIN32
-        std::string target_lib = mod + ".lib";
-#else
-        std::string target_lib = mod + ".a";
-#endif
+        std::string target_lib = mod + (msvc_dialect ? ".lib" : ".a");
         fs::path resolved;
         for (const auto& dir : mod_search_dirs) {
             if (fs::exists(dir / target_lib)) {
@@ -737,12 +781,6 @@ int main(int argc, char* argv[])
         return 0;
     }
 
-    Compiler cc = get_compiler();
-    if (cc.cmd.empty()) {
-        std::cerr << "Error: No C++ compiler found.\n";
-        return 2;
-    }
-
     std::string include_opt;
     std::string lib_link;
     std::string runtime_lib_dir;
@@ -761,7 +799,10 @@ int main(int argc, char* argv[])
 
 #ifdef _WIN32
     std::string include_path = fs::exists(include_dir) ? include_dir.string() : "include";
-    include_opt = " /I\"" + include_path + "\"";
+    if (msvc_dialect)
+        include_opt = " /I\"" + include_path + "\"";
+    else
+        include_opt = " -I \"" + include_path + "\"";
 #else
     include_opt = " -I " + (fs::exists(include_dir) ? include_dir.string() : "include");
 #endif
@@ -769,7 +810,11 @@ int main(int argc, char* argv[])
     //------------------ Runtime library link line, from the same lib roots
     {
 #ifdef _WIN32
-        std::string lib_file = size_mode ? "clx_size.lib" : "clx.lib";
+        std::string lib_file;
+        if (msvc_dialect)
+            lib_file = size_mode ? "clx_size.lib" : "clx.lib";
+        else
+            lib_file = size_mode ? "libclx_size.a" : "libclx.a";
         fs::path lib_path;
         bool found = false;
         for (const auto& root : lib_roots) {
@@ -789,7 +834,10 @@ int main(int argc, char* argv[])
             if (fs::exists(lib_path))
                 found = true;
         }
-        lib_link = " \"" + (found ? lib_path.string() : std::string("clx.lib")) + "\"";
+        if (found)
+            lib_link = " \"" + lib_path.string() + "\"";
+        else
+            lib_link = msvc_dialect ? " \"clx.lib\"" : (size_mode ? " -lclx_size" : " -lclx");
         runtime_lib_dir = found ? lib_path.parent_path().string() : std::string();
 #else
         std::string lib_file = size_mode ? "libclx_size.a" : "libclx.a";
@@ -821,7 +869,11 @@ int main(int argc, char* argv[])
         }
         if (need_capi) {
 #ifdef _WIN32
-            std::string capi_file = size_mode ? "clx_capi_size.lib" : "clx_capi.lib";
+            std::string capi_file;
+            if (msvc_dialect)
+                capi_file = size_mode ? "clx_capi_size.lib" : "clx_capi.lib";
+            else
+                capi_file = size_mode ? "libclx_capi_size.a" : "libclx_capi.a";
             fs::path capi_path = fs::path(runtime_lib_dir) / capi_file;
             if (!fs::exists(capi_path))
                 capi_path = build_root / "Release" / capi_file;
@@ -852,11 +904,7 @@ int main(int argc, char* argv[])
     }
 
     for (const auto& mod : precompiled_modules) {
-#ifdef _WIN32
-        std::string target_lib = mod + ".lib";
-#else
-        std::string target_lib = mod + ".a";
-#endif
+        std::string target_lib = mod + (msvc_dialect ? ".lib" : ".a");
         bool found = false;
         for (const auto& dir : mod_search_dirs) {
             fs::path full = dir / target_lib;
@@ -939,15 +987,16 @@ int main(int argc, char* argv[])
         for (const auto& root : lib_roots)
             lua_win_search_dirs.push_back(root);
         std::string found_bridge_lib;
+        std::string bridge_lib_name = msvc_dialect ? "clx_lua.lib" : "libclx_lua.a";
         for (const auto& dir : lua_win_search_dirs) {
-            fs::path p = dir / "clx_lua.lib";
+            fs::path p = dir / bridge_lib_name;
             if (fs::exists(p)) {
                 found_bridge_lib = fs::absolute(p).string();
                 break;
             }
         }
         if (found_bridge_lib.empty()) {
-            std::cerr << "clx: --dynamic requires clx_lua.lib (vendored Lua 5.5 + "
+            std::cerr << "clx: --dynamic requires " << bridge_lib_name << " (vendored Lua 5.5 + "
                       << "clx bridge). Could not find it in:\n";
             for (const auto& dir : lua_win_search_dirs)
                 std::cerr << "  " << dir.string() << "\n";
@@ -961,10 +1010,16 @@ int main(int argc, char* argv[])
     }
 
     std::string cmd;
-    if (cc.name == "MSVC") {
+    if (msvc_dialect) {
         std::string tmp_dir = fs::temp_directory_path().string();
         while (!tmp_dir.empty() && (tmp_dir.back() == '\\' || tmp_dir.back() == '/'))
             tmp_dir.pop_back();
+
+        std::string librarian = "lib";
+#ifdef _WIN32
+        if (is_clang_cl && !find_on_path("lib.exe") && find_on_path("llvm-lib.exe"))
+            librarian = "llvm-lib";
+#endif
 
         std::string fo_arg = " /Fo\"" + tmp_dir + "\\\\\"";
         std::string out_ext;
@@ -988,8 +1043,8 @@ int main(int argc, char* argv[])
             if (!(lib_out.size() >= 4 && lib_out.compare(lib_out.size() - 4, 4, ".lib") == 0))
                 lib_out += ".lib";
             cmd = cc.cmd + " /nologo /c " + msvc_opt_flags + msvc_dce_cl + " /std:c++20" + include_opt + " "
-                + all_cpp_files + cc_compile_str + fo_arg + " && lib /nologo /OUT:\"" + lib_out + "\" "
-                + msvc_obj_files;
+                + all_cpp_files + cc_compile_str + fo_arg + " && " + librarian + " /nologo /OUT:\"" + lib_out
+                + "\" " + msvc_obj_files;
         } else {
             cmd = cc.cmd + " /nologo " + msvc_opt_flags + msvc_dce_cl + " /std:c++20" + include_opt + cc_compile_str
                 + " " + all_cpp_files + fo_arg + lib_link + fe_arg + " " + msvc_dce_link + cc_link_str + msvc_stack;
@@ -1014,10 +1069,10 @@ int main(int argc, char* argv[])
             std::string ext = ".exe";
             if (output_name.size() >= ext.size()
                 && output_name.compare(output_name.size() - ext.size(), ext.size(), ext) == 0)
-                cmd = cc.cmd + " " + opt_flags + gcc_dce_cl + " -std:c++20" + include_opt + " " + all_cpp_files
+                cmd = cc.cmd + " " + opt_flags + gcc_dce_cl + " -std=c++20" + include_opt + " " + all_cpp_files
                     + cc_options_str + lib_link + gcc_stack + gcc_dce_link + gcc_strip_link + " -o " + output_name;
             else
-                cmd = cc.cmd + " " + opt_flags + gcc_dce_cl + " -std:c++20" + include_opt + " " + all_cpp_files
+                cmd = cc.cmd + " " + opt_flags + gcc_dce_cl + " -std=c++20" + include_opt + " " + all_cpp_files
                     + cc_options_str + lib_link + gcc_stack + gcc_dce_link + gcc_strip_link + " -o " + output_name
                     + ".exe";
 #else
@@ -1043,19 +1098,22 @@ int main(int argc, char* argv[])
         if (output.empty()) {
             std::cerr << "clx: could not run C++ compiler: \"" << cc.cmd << "\"\n";
 #ifdef _WIN32
-            std::cerr << "clx: install Visual Studio Build Tools and run from an \"x64 Native Tools Command"
-                         " Prompt\", or set CLX_CXX to a C++ compiler.\n";
+            std::cerr << "clx: install Visual Studio Build Tools (MSVC or the clang-cl/LLVM component) and run"
+                         " from an \"x64 Native Tools Command Prompt\", or set CLX_CXX to a C++ compiler.\n";
 #else
             std::cerr << "clx: install a C++ toolchain or set CLX_CXX to a C++ compiler.\n";
 #endif
         } else {
             std::cerr << output << std::endl;
 #ifdef _WIN32
-            if (cc.name == "MSVC" && output.find("C1083") != std::string::npos) {
+            bool missing_header = (cc.name == "MSVC" && output.find("C1083") != std::string::npos)
+                || (cc.name == "ClangCL" && output.find("file not found") != std::string::npos);
+            if (missing_header) {
                 const char* include_env = std::getenv("INCLUDE");
                 if (!include_env || !*include_env)
-                    std::cerr << "clx: no MSVC header environment found. Run from an \"x64 Native Tools Command"
-                                 " Prompt\" (or \"Developer Command Prompt\") for your Visual Studio version.\n";
+                    std::cerr << "clx: no MSVC/Windows SDK header environment (INCLUDE) found. Run from an"
+                                 " \"x64 Native Tools Command Prompt\" (or \"Developer Command Prompt\") for your"
+                                 " Visual Studio version.\n";
             }
 #endif
         }

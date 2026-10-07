@@ -855,7 +855,7 @@ void CodeEmitter::emitReturnStatement(const ASTNode &node, uint32_t node_idx) {
                     const std::string &_bi_cf = state.builtin_aliases.at(std::string(fname));
                     if (state.in_function_def) {
                         emit_shadow_restore();
-                        out << "    CLX_MUSTTAIL return clx::" << _bi_cf << "(L, nullptr, 0);\n";
+                        out << "    return clx::" << _bi_cf << "(L, nullptr, 0);\n";
                     } else {
                         out << "    clx::MultiValue _res = clx::" << _bi_cf << "(L, nullptr, 0);\n";
                         out << "    return (_res.count > 0) ? _res[0] : clx::LValue();\n";
@@ -864,7 +864,7 @@ void CodeEmitter::emitReturnStatement(const ASTNode &node, uint32_t node_idx) {
                     if (state.in_function_def) {
                         if (state.current_arena_func != 0xFFFFFFFF)
                             out << "    clx::arena_reset(&_arena);\n";
-                        out << "    CLX_MUSTTAIL return clx::call_function(L, ";
+                        out << "    return clx::call_function(L, ";
                         emit_node(tgt);
                         out << ", nullptr, 0, \"" << ctx.filename << "\", " << call_node.line << ");\n";
                     } else {

@@ -24,7 +24,9 @@
 #include <vector>
 
 #if defined(_WIN32)
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #elif defined(__APPLE__) && defined(__aarch64__) || defined(__linux__) && defined(__aarch64__)
 struct CoroutineContext {
@@ -57,11 +59,15 @@ void clx_coro_init(CoroutineContext *ctx, void *stack_top, void *entry);
 #include <ucontext.h>
 #endif
 
-#if defined(_MSC_VER) || !defined(__has_builtin)
+//---------- CLX: CLX_MUSTTAIL - GCC only; clang bans closure->free musttail, MSVC has none.
+//          -O0 (-Og) does not perform tail calls, so musttail is only enabled when optimization is on.
+//          GNU --size uses -O1 (not -Os, Windows and Linux) because GCC 15 rejects [[gnu::musttail]] at -Os.
+//          At -O1 the heuristic tail-call pass is off by default, so size mode also passes
+//          -foptimize-sibling-calls (covers GCC builds without the attribute, e.g. GCC 13).
+#if defined(__clang__)
 #define CLX_MUSTTAIL
-#elif __has_builtin(__builtin_musttail)
-#define CLX_MUSTTAIL [[clang::musttail]]
-#elif defined(__GNUC__) && __has_cpp_attribute(gnu::musttail) && !defined(__aarch64__)
+#elif defined(__GNUC__) && defined(__has_cpp_attribute) && __has_cpp_attribute(gnu::musttail) && !defined(__aarch64__)  \
+    && defined(__OPTIMIZE__)
 #define CLX_MUSTTAIL [[gnu::musttail]]
 #else
 #define CLX_MUSTTAIL
@@ -69,6 +75,9 @@ void clx_coro_init(CoroutineContext *ctx, void *stack_top, void *entry);
 
 #if defined(_MSC_VER)
 #include <intrin.h>
+#endif
+
+#if defined(_MSC_VER) && !defined(__clang__)
 #define clx_strlen strlen
 #define clx_memcpy memcpy
 #define clx_memcmp memcmp

@@ -9,6 +9,14 @@ include(CheckIPOSupported)
 check_ipo_supported(RESULT ipo_supported)
 include(GNUInstallDirs)
 
+# LTO switch: GCC 15.3's LTO symtab pass ICEs on the runtime sources and MinGW's
+# plain `ar` has no LTO plugin (archives would ship without a symbol index), so
+# MinGW builds run without -flto. POSIX GCC/Clang and MSVC keep LTO.
+set(CLX_LTO_FLAG -flto=auto)
+if(MINGW)
+    set(CLX_LTO_FLAG "")
+endif()
+
 set(MI_BUILD_SHARED OFF CACHE INTERNAL "")
 set(MI_BUILD_STATIC OFF CACHE INTERNAL "")
 set(MI_BUILD_OBJECT ON CACHE INTERNAL "")
@@ -111,7 +119,7 @@ message(STATUS "clx: embedding Lua from ${CLX_LUA_SOURCES_DIR}")
 
 add_library(clx_static STATIC ${RUNTIME_SOURCES})
 
-if(ipo_supported)
+if(ipo_supported AND CLX_LTO_FLAG)
     set_property(TARGET clx_static PROPERTY INTERPROCEDURAL_OPTIMIZATION $<$<CONFIG:Release>:TRUE>)
 endif()
 
@@ -128,7 +136,7 @@ if(WIN32)
 
 add_library(clx_static_size STATIC ${RUNTIME_SOURCES})
 
-if(ipo_supported)
+if(ipo_supported AND CLX_LTO_FLAG)
     set_property(TARGET clx_static_size PROPERTY INTERPROCEDURAL_OPTIMIZATION $<$<CONFIG:Release>:TRUE>)
 endif()
 
@@ -148,7 +156,7 @@ add_library(clx_capi STATIC ${CAPI_SOURCE})
 add_library(clx_capi_size STATIC ${CAPI_SOURCE})
 
 foreach(_capi_target clx_capi clx_capi_size)
-    if(ipo_supported)
+    if(ipo_supported AND CLX_LTO_FLAG)
         set_property(TARGET ${_capi_target} PROPERTY INTERPROCEDURAL_OPTIMIZATION $<$<CONFIG:Release>:TRUE>)
     endif()
     target_include_directories(${_capi_target} BEFORE PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -225,10 +233,17 @@ add_executable(clx ${SOURCES})
 target_include_directories(clx PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_include_directories(clx PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+# clang-cl drives MSVC-style command lines, so it needs its own dialect name for the runtime driver.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND MSVC)
+    set(CLX_CXX_NAME "ClangCL")
+else()
+    set(CLX_CXX_NAME "${CMAKE_CXX_COMPILER_ID}")
+endif()
+
 target_compile_definitions(clx PRIVATE
     CLX_VERSION="${PROJECT_VERSION}"
     CLX_DEFAULT_CXX="${CMAKE_CXX_COMPILER}"
-    CLX_DEFAULT_CXX_NAME="${CMAKE_CXX_COMPILER_ID}"
+    CLX_DEFAULT_CXX_NAME="${CLX_CXX_NAME}"
     CLX_INSTALL_PREFIX="${CMAKE_INSTALL_PREFIX}"
     CLX_INSTALL_LIBDIR="${CMAKE_INSTALL_LIBDIR}"
     CLX_INSTALL_BINDIR="${CMAKE_INSTALL_BINDIR}"
@@ -238,25 +253,27 @@ target_compile_definitions(clx PRIVATE
     CLX_ARCH_MSVC_FLAG="${CLX_ARCH_MSVC_FLAG}"
 )
 
-if(ipo_supported)
+if(ipo_supported AND CLX_LTO_FLAG)
     set_target_properties(clx PROPERTIES INTERPROCEDURAL_OPTIMIZATION $<$<CONFIG:Release>:TRUE>)
 endif()
 
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+# MSVC is also true for clang-cl, which takes MSVC-style options (no -flto=auto / -ffloat-store).
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU" AND NOT MSVC)
     if(ARCH_IS_X86)
-        target_compile_options(clx PRIVATE $<$<CONFIG:Release>:-O3;-flto=auto;-ffloat-store;-fno-math-errno;${CLX_ARCH_GCC_FLAG}>)
-        target_compile_options(clx_static PRIVATE $<$<CONFIG:Release>:-O3;-flto=auto;-ffloat-store;-fno-math-errno;${CLX_ARCH_GCC_FLAG}>)
-        target_compile_options(clx_static_size PRIVATE $<$<CONFIG:Release>:-Os;-flto=auto;-ffloat-store;-fno-math-errno;${CLX_ARCH_GCC_FLAG}>)
-        target_compile_options(clx_capi PRIVATE $<$<CONFIG:Release>:-O3;-flto=auto;-ffloat-store;-fno-math-errno;${CLX_ARCH_GCC_FLAG}>)
-        target_compile_options(clx_capi_size PRIVATE $<$<CONFIG:Release>:-Os;-flto=auto;-ffloat-store;-fno-math-errno;${CLX_ARCH_GCC_FLAG}>)
+        target_compile_options(clx PRIVATE $<$<CONFIG:Release>:-O3;${CLX_LTO_FLAG};-ffloat-store;-fno-math-errno;${CLX_ARCH_GCC_FLAG}>)
+        target_compile_options(clx_static PRIVATE $<$<CONFIG:Release>:-O3;${CLX_LTO_FLAG};-ffloat-store;-fno-math-errno;${CLX_ARCH_GCC_FLAG}>)
+        target_compile_options(clx_static_size PRIVATE $<$<CONFIG:Release>:-Os;${CLX_LTO_FLAG};-ffloat-store;-fno-math-errno;${CLX_ARCH_GCC_FLAG}>)
+        target_compile_options(clx_capi PRIVATE $<$<CONFIG:Release>:-O3;${CLX_LTO_FLAG};-ffloat-store;-fno-math-errno;${CLX_ARCH_GCC_FLAG}>)
+        target_compile_options(clx_capi_size PRIVATE $<$<CONFIG:Release>:-Os;${CLX_LTO_FLAG};-ffloat-store;-fno-math-errno;${CLX_ARCH_GCC_FLAG}>)
     elseif(ARCH_IS_ARM)
-        target_compile_options(clx PRIVATE $<$<CONFIG:Release>:-O3;-flto=auto;-fstrict-aliasing;-fno-math-errno;${CLX_ARCH_GCC_FLAG}>)
-        target_compile_options(clx_static PRIVATE $<$<CONFIG:Release>:-O3;-flto=auto;-fstrict-aliasing;-fno-math-errno;${CLX_ARCH_GCC_FLAG}>)
-        target_compile_options(clx_static_size PRIVATE $<$<CONFIG:Release>:-Os;-flto=auto;-fstrict-aliasing;-fno-math-errno;${CLX_ARCH_GCC_FLAG}>)
-        target_compile_options(clx_capi PRIVATE $<$<CONFIG:Release>:-O3;-flto=auto;-fstrict-aliasing;-fno-math-errno;${CLX_ARCH_GCC_FLAG}>)
-        target_compile_options(clx_capi_size PRIVATE $<$<CONFIG:Release>:-Os;-flto=auto;-fstrict-aliasing;-fno-math-errno;${CLX_ARCH_GCC_FLAG}>)
+        target_compile_options(clx PRIVATE $<$<CONFIG:Release>:-O3;${CLX_LTO_FLAG};-fstrict-aliasing;-fno-math-errno;${CLX_ARCH_GCC_FLAG}>)
+        target_compile_options(clx_static PRIVATE $<$<CONFIG:Release>:-O3;${CLX_LTO_FLAG};-fstrict-aliasing;-fno-math-errno;${CLX_ARCH_GCC_FLAG}>)
+        target_compile_options(clx_static_size PRIVATE $<$<CONFIG:Release>:-Os;${CLX_LTO_FLAG};-fstrict-aliasing;-fno-math-errno;${CLX_ARCH_GCC_FLAG}>)
+        target_compile_options(clx_capi PRIVATE $<$<CONFIG:Release>:-O3;${CLX_LTO_FLAG};-fstrict-aliasing;-fno-math-errno;${CLX_ARCH_GCC_FLAG}>)
+        target_compile_options(clx_capi_size PRIVATE $<$<CONFIG:Release>:-Os;${CLX_LTO_FLAG};-fstrict-aliasing;-fno-math-errno;${CLX_ARCH_GCC_FLAG}>)
     endif()
-elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+elseif(MSVC)
+    string(APPEND CMAKE_CXX_FLAGS " /D_CRT_SECURE_NO_WARNINGS")
     string(REPLACE "/O2" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
     string(REPLACE "/Ob2" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
     string(REPLACE "/O2" "" CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}")
