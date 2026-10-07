@@ -66,7 +66,7 @@ clx is currently in **beta**. It can already compile real Lua applications, and 
 
 - **Linux**: `g++` or `clang++`
 - **macOS**: `clang++` (Xcode) or `g++` via Homebrew
-- **Windows**: `g++` (LLVM) or MSVC
+- **Windows**: MSVC (`cl`), LLVM `clang-cl`, or `g++` (MinGW)
 - **CMake 3.15+** to build from source
 
 > The compiler that builds clx is the same one used to compile your Lua scripts, keeping everything consistent. If you need a different compiler, just rebuild clx with it.
