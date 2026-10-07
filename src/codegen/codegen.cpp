@@ -176,15 +176,6 @@ std::string CodeEmitter::int_flag_expr(uint32_t expr_idx, int depth) {
     }
     if (n.type == NodeType::UnaryOp && n.as.unary_op.op == static_cast<int>(UnaryOp::Minus))
         return int_flag_expr(n.as.unary_op.expr, depth + 1);
-    if (n.type == NodeType::CallExpression) {
-        uint32_t tgt = n.as.call_expr.target;
-        if (tgt >= ctx.nodes.size() || ctx.nodes[tgt].type != NodeType::Identifier || ctx.nodes[tgt].as.ident.is_global)
-            return "false";
-        std::string_view callee(ctx.nodes[tgt].as.ident.name, ctx.nodes[tgt].as.ident.length);
-        if (!state.int_preserving_masks.count(callee))
-            return "false";
-        return fast_call_box_flag(callee, n.as.call_expr.first_arg, n.as.call_expr.arg_count);
-    }
     return "false";
 }
 
