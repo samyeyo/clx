@@ -66,7 +66,7 @@ void clx_coro_init(CoroutineContext *ctx, void *stack_top, void *entry);
 //          -foptimize-sibling-calls (covers GCC builds without the attribute, e.g. GCC 13).
 #if defined(__clang__)
 #define CLX_MUSTTAIL
-#elif defined(__GNUC__) && defined(__has_cpp_attribute) && __has_cpp_attribute(gnu::musttail) && !defined(__aarch64__)  \
+#elif defined(__GNUC__) && defined(__has_cpp_attribute) && __has_cpp_attribute(gnu::musttail) && !defined(__aarch64__) \
     && defined(__OPTIMIZE__)
 #define CLX_MUSTTAIL [[gnu::musttail]]
 #else
@@ -722,6 +722,25 @@ CLX_INLINE void tbl_set_metatable(LTable *t, LTable *m) {
     }
 }
 
+//------------------ table_heap_bytes: heap bytes owned by a table's side buffers (mirrors the free paths); arena tables own none
+CLX_INLINE size_t table_heap_bytes(const LTable *t) {
+    if (t->flags & LFLAG_ARENA)
+        return 0;
+    size_t b = 0;
+    if (t->array && t->array != t->small_array)
+        b += t->array_cap * (sizeof(TValue) + sizeof(ValueType));
+    if (t->ext) {
+        b += sizeof(LTableExt);
+        if (t->ext->entries) {
+            b += t->ext->hash_size * sizeof(HashEntry);
+            b += ((t->ext->hash_size + 63) / 64) * sizeof(uint64_t);
+        }
+        if (t->ext->ic)
+            b += static_cast<size_t>(LTABLE_IC_SIZE) * sizeof(LTableInlineCache);
+    }
+    return b;
+}
+
 //------------------ Wyhash secret constants
 static constexpr uint64_t WY_SECRET0 = 0xa0761d6478bd642fULL;
 static constexpr uint64_t WY_SECRET1 = 0xe7037ed1a0b428dbULL;
@@ -1165,6 +1184,16 @@ struct LState {
 
     size_t get_memory_usage() const { return allocated_bytes; }
 
+    //------------------ account_delta: track side-buffer growth/shrink so GC pacing sees real bytes, not just headers
+    CLX_INLINE void account_delta(size_t before, size_t after) {
+        if (after > before)
+            allocated_bytes += after - before;
+        else if (before > after) {
+            size_t d = before - after;
+            allocated_bytes = (d > allocated_bytes) ? 0 : allocated_bytes - d;
+        }
+    }
+
     LValue str_index;
     LValue str_newindex;
     LValue str_gc;
@@ -1269,7 +1298,11 @@ struct LState {
 
     //------------------ Generational GC state
 
+    //------------------ Adaptive minor pacing: next trigger = one current heap-full, clamped (CLX_GC_MINOR_KB pins it)
     size_t gc_minor_threshold = 8 * 1024 * 1024;
+    bool gc_minor_threshold_env = false;
+    static constexpr size_t kMinorThresholdMin = 256 * 1024;
+    static constexpr size_t kMinorThresholdMax = 8 * 1024 * 1024;
     size_t gc_major_threshold = 32 * 1024 * 1024;
     size_t gc_old_bytes = 0;
     size_t gc_bytes_at_minor = 0;
