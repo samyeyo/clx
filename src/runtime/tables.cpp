@@ -147,6 +147,7 @@ LTable::~LTable() {
 void LTable::resize_hash(size_t new_size) {
     new_size = next_pow2(new_size);
 
+    const size_t hb_before = table_heap_bytes(this);
     LTableExt *ex = tbl_ensure_ext(this);
 
     HashEntry *new_entries = static_cast<HashEntry *>(std::calloc(new_size, sizeof(HashEntry)));
@@ -183,6 +184,8 @@ void LTable::resize_hash(size_t new_size) {
         free(ex->hash_bitmap);
     ex->hash_bitmap = new_bitmap;
     ex->hash_version++;
+    if (clx_current_L)
+        clx_current_L->account_delta(hb_before, table_heap_bytes(this));
 }
 
 //------------------ LTable::presize_hash - pre-allocate hash storage at 1/2 load for `expected` entries.
@@ -208,8 +211,12 @@ LValue LTable::gettable(const LValue &key) {
     if (!ex || ex->hash_size == 0)
         return LValue();
 
-    if (!ex->ic)
+    if (!ex->ic) {
+        const size_t hb_ic = table_heap_bytes(this);
         ex->ic = new LTableInlineCache[LTABLE_IC_SIZE]();
+        if (clx_current_L)
+            clx_current_L->account_delta(hb_ic, table_heap_bytes(this));
+    }
 
     uint32_t ic_idx = static_cast<uint32_t>(key.val.payload.u64 ^ (key.val.payload.u64 >> 17)
                           ^ (key.val.payload.u64 >> 33) ^ (key.val.payload.u64 >> 5) ^ (key.val.payload.u64 >> 11))
@@ -259,6 +266,7 @@ void LTable::settable(const LValue &key, const LValue &val) {
         }
         if (idx == static_cast<int64_t>(array_size + 1)) {
             size_t new_cap = (array_cap == 0) ? 8 : array_cap * 2;
+            const size_t hb_grow = table_heap_bytes(this);
             TValue *new_arr = new TValue[new_cap];
             ValueType *new_types = new ValueType[new_cap]();
             if (array_cap) {
@@ -278,6 +286,8 @@ void LTable::settable(const LValue &key, const LValue &val) {
             array_types[array_size] = val.type;
             array_size++;
             array_cap = new_cap;
+            if (clx_current_L)
+                clx_current_L->account_delta(hb_grow, table_heap_bytes(this));
             if (ext && ext->hash_size > 0) {
                 for (size_t i = 0; i < ext->hash_size; ++i) {
                     if (ext->entries[i].ktype == Nil || ext->entries[i].vtype == Nil)
@@ -332,6 +342,7 @@ void LTable::settable(const LValue &key, const LValue &val) {
             }
             if (idx == static_cast<int64_t>(array_size + 1)) {
                 size_t new_cap = (array_cap == 0) ? 8 : array_cap * 2;
+                const size_t hb_grow = table_heap_bytes(this);
                 TValue *new_arr = new TValue[new_cap];
                 ValueType *new_types = new ValueType[new_cap]();
                 if (array_cap) {
@@ -351,6 +362,8 @@ void LTable::settable(const LValue &key, const LValue &val) {
                 array_types[array_size] = val.type;
                 array_size++;
                 array_cap = new_cap;
+                if (clx_current_L)
+                    clx_current_L->account_delta(hb_grow, table_heap_bytes(this));
                 if (ext && ext->hash_size > 0) {
                     for (size_t i = 0; i < ext->hash_size; ++i) {
                         if (ext->entries[i].ktype == Nil || ext->entries[i].vtype == Nil)
