@@ -649,14 +649,17 @@ void CodeEmitter::emitReturnStatement(const ASTNode &node, uint32_t node_idx) {
 
         if (state.current_arena_func != 0xFFFFFFFF)
             out << "clx::arena_reset(&_arena);\n";
-        if (state.current_func_idx != 0xFFFFFFFF)
-            out << "L->shadow_top = _sg_native_" << state.current_func_idx << ";\n";
         if (v_count == 0) {
+            if (state.current_func_idx != 0xFFFFFFFF)
+                out << "L->shadow_top = _sg_native_" << state.current_func_idx << ";\n";
             out << "return clx::LValue();\n";
         } else {
-            out << "return ";
+            out << "clx::LValue _sg_rv_" << node_idx << " = ";
             emit_node(ctx.block_statements[first_v]);
             out << ";\n";
+            if (state.current_func_idx != 0xFFFFFFFF)
+                out << "L->shadow_top = _sg_native_" << state.current_func_idx << ";\n";
+            out << "return _sg_rv_" << node_idx << ";\n";
         }
         return;
     }
@@ -697,16 +700,18 @@ void CodeEmitter::emitReturnStatement(const ASTNode &node, uint32_t node_idx) {
             if (state.current_arena_func != 0xFFFFFFFF)
                 out << "clx::arena_reset(&_arena);\n";
             if (state.in_native_impl) {
-                if (state.current_func_idx != 0xFFFFFFFF)
-                    out << "L->shadow_top = _sg_native_" << state.current_func_idx << ";\n";
-                out << "return ";
+                out << "clx::LValue _sg_rv_" << node_idx << " = ";
                 try_emit_native_call(tgt, call_node.as.call_expr.first_arg, call_node.as.call_expr.arg_count, false);
                 out << ";\n";
+                if (state.current_func_idx != 0xFFFFFFFF)
+                    out << "L->shadow_top = _sg_native_" << state.current_func_idx << ";\n";
+                out << "return _sg_rv_" << node_idx << ";\n";
             } else {
-                emit_shadow_restore();
-                out << "return clx::MultiValue(";
+                out << "clx::MultiValue _sg_mv_" << node_idx << " = clx::MultiValue(";
                 try_emit_native_call(tgt, call_node.as.call_expr.first_arg, call_node.as.call_expr.arg_count, false);
                 out << ");\n";
+                emit_shadow_restore();
+                out << "return _sg_mv_" << node_idx << ";\n";
             }
             return;
         }
