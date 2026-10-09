@@ -69,10 +69,11 @@ static void gc_dispose_swept(LState *L, LHeader *curr) {
             t->next = L->gc_finalizable;
             L->gc_finalizable = t;
         } else {
-            if (static_cast<size_t>(sizeof(LTable)) > L->allocated_bytes)
+            const size_t tbl_bytes = sizeof(LTable) + table_heap_bytes(t);
+            if (tbl_bytes > L->allocated_bytes)
                 L->allocated_bytes = 0;
             else
-                L->allocated_bytes -= sizeof(LTable);
+                L->allocated_bytes -= tbl_bytes;
             if (t->ext) {
                 t->ext->hash_count = 0;
                 t->ext->hash_tombs = 0;
@@ -146,7 +147,7 @@ static void gc_drain_finalizables(LState *L) {
         LTable *nx = static_cast<LTable *>(t->next);
         meta_list_remove(L, t);
         clx_trigger_gc(L, t);
-        size_t t_bytes = sizeof(LTable);
+        size_t t_bytes = sizeof(LTable) + table_heap_bytes(t);
         if (t_bytes > L->allocated_bytes)
             L->allocated_bytes = 0;
         else
@@ -694,6 +695,17 @@ void LState::gc_minor() {
     gc_recent.clear();
     gc_bytes_at_minor = allocated_bytes;
     gc_minor_active = false;
+
+    //------------------ adaptive minor pacing: next trigger ≈ one current heap-full, clamped
+
+    if (!gc_minor_threshold_env) {
+        size_t next = allocated_bytes;
+        if (next < kMinorThresholdMin)
+            next = kMinorThresholdMin;
+        if (next > kMinorThresholdMax)
+            next = kMinorThresholdMax;
+        gc_minor_threshold = next;
+    }
 
     //------------------ major scheduling: if the old set outgrew its budget, the next
 
