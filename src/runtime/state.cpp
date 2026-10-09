@@ -63,8 +63,10 @@ LState::LState()
     }
     if (const char *e = getenv("CLX_GC_MINOR_KB")) {
         long long v = atoll(e);
-        if (v > 0)
+        if (v > 0) {
             gc_minor_threshold = size_t(v) * 1024;
+            gc_minor_threshold_env = true;
+        }
     }
     if (const char *e = getenv("CLX_GC_MAJOR_KB")) {
         long long v = atoll(e);
@@ -358,6 +360,8 @@ LValue LState::create_table(size_t asize, size_t hsize) {
     } else {
         t->array_size = 0;
     }
+
+    allocated_bytes += table_heap_bytes(t);
 
     if (hsize > 0)
         t->presize_hash(hsize);
