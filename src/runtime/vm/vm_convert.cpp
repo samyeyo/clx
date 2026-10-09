@@ -254,9 +254,11 @@ LValue vm_to_clx_value_(LState* clx_L, lua_State* L, int idx)
             size_t cap = 8;
             while (cap < len)
                 cap *= 2;
+            const size_t hb_vm = table_heap_bytes(tbl);
             tbl->array = new TValue[cap]();
             tbl->array_types = new ValueType[cap]();
             tbl->array_cap = cap;
+            clx_L->account_delta(hb_vm, table_heap_bytes(tbl));
             for (size_t i = 0; i < len; ++i) {
                 lua_rawgeti(L, abs_idx, static_cast<int>(i + 1));
                 LValue val = vm_to_clx_value_(clx_L, L, -1);
