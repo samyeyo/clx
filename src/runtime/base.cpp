@@ -197,6 +197,8 @@ MultiValue collectgarbage(LState* L, const LValue* args, size_t arg_count)
             LValue(static_cast<double>(L->gc_stats_major_freed) / 1024.0));
         st->settable(LValue(L->intern_string("old_kb")),
             LValue(static_cast<double>(L->gc_old_bytes) / 1024.0));
+        st->settable(LValue(L->intern_string("minor_kb")),
+            LValue(static_cast<double>(L->gc_minor_threshold) / 1024.0));
         st->settable(LValue(L->intern_string("remembered_high")),
             LValue(static_cast<int64_t>(L->gc_stats_remembered_high)));
         return MultiValue(LValue(Table, st));
