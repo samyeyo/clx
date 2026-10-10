@@ -1299,7 +1299,10 @@ struct LState {
     //------------------ Generational GC state
 
     //------------------ Adaptive minor pacing: next trigger = one current heap-full, clamped (CLX_GC_MINOR_KB pins it)
-    size_t gc_minor_threshold = 8 * 1024 * 1024;
+    //------------------ Initial value must be the MIN, not the MAX: the first minor reclaims ~nothing (gc_recent
+    //------------------ roots everything allocated since the previous cycle), so starting at 8MB feeds the adaptive
+    //------------------ clamp a heap still holding garbage and pins it right back at 8MB — leaving no collections at all.
+    size_t gc_minor_threshold = kMinorThresholdMin;
     bool gc_minor_threshold_env = false;
     static constexpr size_t kMinorThresholdMin = 256 * 1024;
     static constexpr size_t kMinorThresholdMax = 8 * 1024 * 1024;
@@ -1357,6 +1360,10 @@ struct LState {
     //------------------ Allocation-site GC trigger (shared by the allocator paths)
     CLX_INLINE_HOT void gc_maybe_collect() {
         if (!gc_running)
+            return;
+        //------------------ a __gc finalizer draining at the end of gc_minor() must not start another
+        //------------------ collection while that minor's sweep state is still live.
+        if (gc_minor_active)
             return;
         if (gc_phase == GCPhase::Sweeping) {
             gc_step();
