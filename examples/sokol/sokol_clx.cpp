@@ -10,6 +10,14 @@
 #include <string>
 #include <functional>
 #include <cmath>
+#include <cstdarg>
+#include <cstdio>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
 
 #define SOKOL_NO_ENTRY
 #define SOKOL_GLCORE
@@ -55,6 +63,21 @@ sg_sampler g_pixels_sampler = {0};
 
 } 
 
+//------------------ log_error: reports a fatal error to stderr and, on Windows, to the debug output
+static void log_error(const char* fmt, ...) {
+    char msg[512];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+    std::fprintf(stderr, "[sokol_clx] %s\n", msg);
+#ifdef _WIN32
+    OutputDebugStringA("[sokol_clx] ");
+    OutputDebugStringA(msg);
+    OutputDebugStringA("\n");
+#endif
+}
+
 //------------------ SOKOL: init_cb - sokol init callback, sets up graphics and runs Lua init function
 static void init_cb(void* user_data) {
     g_L = static_cast<clx::LState*>(user_data);
@@ -64,9 +87,15 @@ static void init_cb(void* user_data) {
     sgdesc.environment = sglue_environment();
     sgdesc.logger.func = slog_func;
     sg_setup(&sgdesc);
+    if (!sg_isvalid()) {
+        log_error("could not initialize the graphics backend (sg_setup) - the application will now close");
+        sapp_quit();
+        return;
+    }
 
     sgl_desc_t sgldesc;
     std::memset(&sgldesc, 0, sizeof(sgldesc));
+    sgldesc.logger.func = slog_func;
     sgl_setup(&sgldesc);
 
     sg_sampler_desc smp_desc;
@@ -74,6 +103,8 @@ static void init_cb(void* user_data) {
     smp_desc.min_filter = SG_FILTER_LINEAR;
     smp_desc.mag_filter = SG_FILTER_LINEAR;
     g_pixels_sampler = sg_make_sampler(&smp_desc);
+    if (sg_resource_state st = sg_query_sampler_state(g_pixels_sampler); st != SG_RESOURCESTATE_VALID)
+        log_error("could not create the texture sampler (sg_make_sampler returned state=%d) - textured drawing will not work", (int)st);
 
     float w = static_cast<float>(sapp_width());
     float h = static_cast<float>(sapp_height());
@@ -83,137 +114,155 @@ static void init_cb(void* user_data) {
     if (g_init_fn.type == clx::Function) {
         try {
             clx::call(g_L, g_init_fn);
-        } catch (...) {}
+        } catch (const std::exception& e) {
+            log_error("the Lua init function failed: %s - the application will now close", e.what());
+            sapp_quit();
+        } catch (...) {
+            log_error("the Lua init function failed with an unknown error - the application will now close");
+            sapp_quit();
+        }
     }
 }
 
 //------------------ SOKOL: frame_cb - sokol frame callback, runs Lua frame function and renders
 static void frame_cb(void* user_data) {
-    g_L = static_cast<clx::LState*>(user_data);
+    try {
+        g_L = static_cast<clx::LState*>(user_data);
 
-    
-    if (g_frame_fn.type == clx::Function) {
-        try {
+        if (g_frame_fn.type == clx::Function) {
             double dt = sapp_frame_duration();
             clx::call(g_L, g_frame_fn, dt);
-        } catch (...) {}
+        }
+
+        sg_pass_action action;
+        std::memset(&action, 0, sizeof(action));
+        action.colors[0].load_action = SG_LOADACTION_CLEAR;
+        action.colors[0].clear_value = { g_clear_r, g_clear_g, g_clear_b, g_clear_a };
+
+        sg_pass pass;
+        std::memset(&pass, 0, sizeof(pass));
+        pass.action = action;
+        pass.swapchain = sglue_swapchain();
+        sg_begin_pass(&pass);
+
+        sgl_draw();
+        sg_end_pass();
+        sg_commit();
+    } catch (const std::exception& e) {
+        log_error("the frame callback failed: %s - the application will now close", e.what());
+        sapp_quit();
+    } catch (...) {
+        log_error("the frame callback failed with an unknown error - the application will now close");
+        sapp_quit();
     }
-
-    
-    sg_pass_action action;
-    std::memset(&action, 0, sizeof(action));
-    action.colors[0].load_action = SG_LOADACTION_CLEAR;
-    action.colors[0].clear_value = { g_clear_r, g_clear_g, g_clear_b, g_clear_a };
-
-    sg_pass pass;
-    std::memset(&pass, 0, sizeof(pass));
-    pass.action = action;
-    pass.swapchain = sglue_swapchain();
-    sg_begin_pass(&pass);
-
-    sgl_draw();
-    sg_end_pass();
-    sg_commit();
 }
 
 //------------------ SOKOL: event_cb - sokol event callback, dispatches input events to Lua
 static void event_cb(const sapp_event* ev, void* user_data) {
-    g_L = static_cast<clx::LState*>(user_data);
-    if (g_event_fn.type != clx::Function) return;
+    try {
+        g_L = static_cast<clx::LState*>(user_data);
+        if (g_event_fn.type != clx::Function) return;
 
-    clx::LValue t = clx::table(g_L);
+        clx::LValue t = clx::table(g_L);
 
-    
-    const char* type_str = "unknown";
-    switch (ev->type) {
-        case SAPP_EVENTTYPE_KEY_DOWN:    type_str = "key_down";    break;
-        case SAPP_EVENTTYPE_KEY_UP:      type_str = "key_up";      break;
-        case SAPP_EVENTTYPE_CHAR:        type_str = "char";        break;
-        case SAPP_EVENTTYPE_MOUSE_DOWN:  type_str = "mouse_down";  break;
-        case SAPP_EVENTTYPE_MOUSE_UP:    type_str = "mouse_up";    break;
-        case SAPP_EVENTTYPE_MOUSE_MOVE:  type_str = "mouse_move";  break;
-        case SAPP_EVENTTYPE_MOUSE_SCROLL:type_str = "mouse_scroll";break;
-        case SAPP_EVENTTYPE_RESIZED:     type_str = "resized";     break;
-        default: break;
-    }
-    clx::raw_set(g_L, t, "type", clx::string(g_L, type_str));
-
-    
-    const char* key_str = nullptr;
-    switch (ev->key_code) {
-        case SAPP_KEYCODE_SPACE:        key_str = "space";     break;
-        case SAPP_KEYCODE_ESCAPE:       key_str = "escape";    break;
-        case SAPP_KEYCODE_ENTER:        key_str = "enter";     break;
-        case SAPP_KEYCODE_TAB:          key_str = "tab";       break;
-        case SAPP_KEYCODE_BACKSPACE:    key_str = "backspace"; break;
-        case SAPP_KEYCODE_W:            key_str = "w";         break;
-        case SAPP_KEYCODE_S:            key_str = "s";         break;
-        case SAPP_KEYCODE_UP:           key_str = "up";        break;
-        case SAPP_KEYCODE_DOWN:         key_str = "down";      break;
-        case SAPP_KEYCODE_LEFT:         key_str = "left";      break;
-        case SAPP_KEYCODE_RIGHT:        key_str = "right";     break;
-        case SAPP_KEYCODE_LEFT_SHIFT:   key_str = "lshift";    break;
-        case SAPP_KEYCODE_RIGHT_SHIFT:  key_str = "rshift";    break;
-        case SAPP_KEYCODE_LEFT_CONTROL: key_str = "lctrl";     break;
-        case SAPP_KEYCODE_RIGHT_CONTROL:key_str = "rctrl";     break;
-        case SAPP_KEYCODE_MINUS:        key_str = "-";         break;
-        case SAPP_KEYCODE_EQUAL:        key_str = "=";         break;
-        case SAPP_KEYCODE_0:            key_str = "0";         break;
-        case SAPP_KEYCODE_1:            key_str = "1";         break;
-        case SAPP_KEYCODE_2:            key_str = "2";         break;
-        case SAPP_KEYCODE_3:            key_str = "3";         break;
-        case SAPP_KEYCODE_4:            key_str = "4";         break;
-        case SAPP_KEYCODE_5:            key_str = "5";         break;
-        case SAPP_KEYCODE_6:            key_str = "6";         break;
-        case SAPP_KEYCODE_7:            key_str = "7";         break;
-        case SAPP_KEYCODE_8:            key_str = "8";         break;
-        case SAPP_KEYCODE_9:            key_str = "9";         break;
-        default: break;
-    }
-    if (key_str) {
-        clx::raw_set(g_L, t, "key", clx::string(g_L, key_str));
-    }
-
-    
-    if (ev->type == SAPP_EVENTTYPE_MOUSE_DOWN || ev->type == SAPP_EVENTTYPE_MOUSE_UP) {
-        const char* btn = "left";
-        switch (ev->mouse_button) {
-            case SAPP_MOUSEBUTTON_LEFT:   btn = "left";   break;
-            case SAPP_MOUSEBUTTON_RIGHT:  btn = "right";  break;
-            case SAPP_MOUSEBUTTON_MIDDLE: btn = "middle"; break;
+        const char* type_str = "unknown";
+        switch (ev->type) {
+            case SAPP_EVENTTYPE_KEY_DOWN:    type_str = "key_down";    break;
+            case SAPP_EVENTTYPE_KEY_UP:      type_str = "key_up";      break;
+            case SAPP_EVENTTYPE_CHAR:        type_str = "char";        break;
+            case SAPP_EVENTTYPE_MOUSE_DOWN:  type_str = "mouse_down";  break;
+            case SAPP_EVENTTYPE_MOUSE_UP:    type_str = "mouse_up";    break;
+            case SAPP_EVENTTYPE_MOUSE_MOVE:  type_str = "mouse_move";  break;
+            case SAPP_EVENTTYPE_MOUSE_SCROLL:type_str = "mouse_scroll";break;
+            case SAPP_EVENTTYPE_RESIZED:     type_str = "resized";     break;
             default: break;
         }
-        clx::raw_set(g_L, t, "button", clx::string(g_L, btn));
-    }
+        clx::raw_set(g_L, t, "type", clx::string(g_L, type_str));
 
-    clx::raw_set(g_L, t, "x",        clx::number(static_cast<double>(ev->mouse_x)));
-    clx::raw_set(g_L, t, "y",        clx::number(static_cast<double>(ev->mouse_y)));
-    clx::raw_set(g_L, t, "dx",       clx::number(static_cast<double>(ev->mouse_dx)));
-    clx::raw_set(g_L, t, "dy",       clx::number(static_cast<double>(ev->mouse_dy)));
-    clx::raw_set(g_L, t, "scroll_x", clx::number(static_cast<double>(ev->scroll_x)));
-    clx::raw_set(g_L, t, "scroll_y", clx::number(static_cast<double>(ev->scroll_y)));
+        const char* key_str = nullptr;
+        switch (ev->key_code) {
+            case SAPP_KEYCODE_SPACE:        key_str = "space";     break;
+            case SAPP_KEYCODE_ESCAPE:       key_str = "escape";    break;
+            case SAPP_KEYCODE_ENTER:        key_str = "enter";     break;
+            case SAPP_KEYCODE_TAB:          key_str = "tab";       break;
+            case SAPP_KEYCODE_BACKSPACE:    key_str = "backspace"; break;
+            case SAPP_KEYCODE_W:            key_str = "w";         break;
+            case SAPP_KEYCODE_S:            key_str = "s";         break;
+            case SAPP_KEYCODE_UP:           key_str = "up";        break;
+            case SAPP_KEYCODE_DOWN:         key_str = "down";      break;
+            case SAPP_KEYCODE_LEFT:         key_str = "left";      break;
+            case SAPP_KEYCODE_RIGHT:        key_str = "right";     break;
+            case SAPP_KEYCODE_LEFT_SHIFT:   key_str = "lshift";    break;
+            case SAPP_KEYCODE_RIGHT_SHIFT:  key_str = "rshift";    break;
+            case SAPP_KEYCODE_LEFT_CONTROL: key_str = "lctrl";     break;
+            case SAPP_KEYCODE_RIGHT_CONTROL:key_str = "rctrl";     break;
+            case SAPP_KEYCODE_MINUS:        key_str = "-";         break;
+            case SAPP_KEYCODE_EQUAL:        key_str = "=";         break;
+            case SAPP_KEYCODE_0:            key_str = "0";         break;
+            case SAPP_KEYCODE_1:            key_str = "1";         break;
+            case SAPP_KEYCODE_2:            key_str = "2";         break;
+            case SAPP_KEYCODE_3:            key_str = "3";         break;
+            case SAPP_KEYCODE_4:            key_str = "4";         break;
+            case SAPP_KEYCODE_5:            key_str = "5";         break;
+            case SAPP_KEYCODE_6:            key_str = "6";         break;
+            case SAPP_KEYCODE_7:            key_str = "7";         break;
+            case SAPP_KEYCODE_8:            key_str = "8";         break;
+            case SAPP_KEYCODE_9:            key_str = "9";         break;
+            default: break;
+        }
+        if (key_str) {
+            clx::raw_set(g_L, t, "key", clx::string(g_L, key_str));
+        }
 
-    try {
+        if (ev->type == SAPP_EVENTTYPE_MOUSE_DOWN || ev->type == SAPP_EVENTTYPE_MOUSE_UP) {
+            const char* btn = "left";
+            switch (ev->mouse_button) {
+                case SAPP_MOUSEBUTTON_LEFT:   btn = "left";   break;
+                case SAPP_MOUSEBUTTON_RIGHT:  btn = "right";  break;
+                case SAPP_MOUSEBUTTON_MIDDLE: btn = "middle"; break;
+                default: break;
+            }
+            clx::raw_set(g_L, t, "button", clx::string(g_L, btn));
+        }
+
+        clx::raw_set(g_L, t, "x",        clx::number(static_cast<double>(ev->mouse_x)));
+        clx::raw_set(g_L, t, "y",        clx::number(static_cast<double>(ev->mouse_y)));
+        clx::raw_set(g_L, t, "dx",       clx::number(static_cast<double>(ev->mouse_dx)));
+        clx::raw_set(g_L, t, "dy",       clx::number(static_cast<double>(ev->mouse_dy)));
+        clx::raw_set(g_L, t, "scroll_x", clx::number(static_cast<double>(ev->scroll_x)));
+        clx::raw_set(g_L, t, "scroll_y", clx::number(static_cast<double>(ev->scroll_y)));
+
         clx::call(g_L, g_event_fn, t);
-    } catch (...) {}
+    } catch (const std::exception& e) {
+        log_error("the event callback failed: %s - the application will now close", e.what());
+        sapp_quit();
+    } catch (...) {
+        log_error("the event callback failed with an unknown error - the application will now close");
+        sapp_quit();
+    }
 }
 
 //------------------ SOKOL: cleanup_cb - sokol cleanup callback, destroys GPU resources
 static void cleanup_cb(void* user_data) {
-    g_L = static_cast<clx::LState*>(user_data);
-    g_init_fn = clx::nil();
-    g_frame_fn = clx::nil();
-    g_event_fn = clx::nil();
-    sg_destroy_image(g_pixels_image);
-    sg_destroy_view(g_pixels_view);
-    sg_destroy_sampler(g_pixels_sampler);
-    std::memset(&g_pixels_image, 0, sizeof(g_pixels_image));
-    std::memset(&g_pixels_view, 0, sizeof(g_pixels_view));
-    std::memset(&g_pixels_sampler, 0, sizeof(g_pixels_sampler));
-    sgl_shutdown();
-    sg_shutdown();
+    try {
+        g_L = static_cast<clx::LState*>(user_data);
+        g_init_fn = clx::nil();
+        g_frame_fn = clx::nil();
+        g_event_fn = clx::nil();
+        sg_destroy_image(g_pixels_image);
+        sg_destroy_view(g_pixels_view);
+        sg_destroy_sampler(g_pixels_sampler);
+        std::memset(&g_pixels_image, 0, sizeof(g_pixels_image));
+        std::memset(&g_pixels_view, 0, sizeof(g_pixels_view));
+        std::memset(&g_pixels_sampler, 0, sizeof(g_pixels_sampler));
+        sgl_shutdown();
+        sg_shutdown();
+    } catch (const std::exception& e) {
+        log_error("the cleanup callback failed: %s", e.what());
+    } catch (...) {
+        log_error("the cleanup callback failed with an unknown error");
+    }
 }
-
 
 
 
@@ -348,6 +397,8 @@ static clx::MultiValue pixels(clx::LState* L, const clx::LValue* args, size_t n)
         img_desc.pixel_format = SG_PIXELFORMAT_RGBA8;
         img_desc.usage.stream_update = true;
         g_pixels_image = sg_make_image(&img_desc);
+        if (sg_resource_state st = sg_query_image_state(g_pixels_image); st != SG_RESOURCESTATE_VALID)
+            log_error("could not create the pixel image (sg_make_image returned state=%d) - pixel output is unavailable", (int)st);
 
         sg_image_data img_data;
         std::memset(&img_data, 0, sizeof(img_data));
@@ -358,6 +409,8 @@ static clx::MultiValue pixels(clx::LState* L, const clx::LValue* args, size_t n)
         std::memset(&view_desc, 0, sizeof(view_desc));
         view_desc.texture.image = g_pixels_image;
         g_pixels_view = sg_make_view(&view_desc);
+        if (sg_resource_state st = sg_query_view_state(g_pixels_view); st != SG_RESOURCESTATE_VALID)
+            log_error("could not create the pixel image view (sg_make_view returned state=%d) - pixel output is unavailable", (int)st);
     } else {
         sg_image_data img_data;
         std::memset(&img_data, 0, sizeof(img_data));
