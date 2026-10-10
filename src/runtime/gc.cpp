@@ -457,6 +457,10 @@ static void gc_trace_remember_nonold_children(LTable *t) {
 //------------------ LState::gc_minor — young-generation collection (generational mode)
 
 void LState::gc_minor() {
+    //------------------ re-entrancy guard: draining finalizables below runs Lua, which may allocate
+    //------------------ and re-enter through gc_maybe_collect().
+    if (gc_minor_active)
+        return;
     ++gc_stats_minors;
     gc_minor_active = true;
     if (gc_stats_remembered_high < gc_remembered.size())
@@ -494,22 +498,14 @@ void LState::gc_minor() {
     for (const LValue &r : permanent_roots)
         push_if_needed(r);
 
-    //------------------ roots: gc_recent (every object allocated since the last collection)
+    //------------------ roots: gc_recent. Objects here were allocated since the previous collection and
+    //------------------ are now ordinary objects: normal reachability decides them. Rooting every one of
+    //------------------ them unconditionally promoted each dead object to AGE_SURVIVOR, so it could only be
+    //------------------ freed one cycle later — that lag is what kept dead tables off free_tables and forced
+    //------------------ fresh array growth. Everything reachable from a live object is still marked through
+    //------------------ that object's own trace, so nothing in flight is lost here.
 
-    for (size_t _ri = 0; _ri < gc_recent.top; ++_ri) {
-        LHeader *h = gc_recent.data[_ri];
-        if (h->marked != 0 || h->age != AGE_YOUNG)
-            continue;
-        if (h->type == static_cast<uint8_t>(UserData) && !is_allocated_userdata(h))
-            continue;
-        h->marked = 1;
-        if (h->type == static_cast<uint8_t>(Table)) {
-            wl.push(h);
-        } else if (h->type == static_cast<uint8_t>(Thread) || h->type == static_cast<uint8_t>(Function)
-            || h->type == static_cast<uint8_t>(UserData)) {
-            wl.push(h);
-        }
-    }
+    gc_recent.clear();
 
     //------------------ roots: remembered old-generation owners and upvalue cells.
 
@@ -556,7 +552,27 @@ void LState::gc_minor() {
             push_if_needed(*cell);
 
     //------------------ trace: descend only into YOUNG children
-    while (!wl.empty()) {
+
+    bool meta_protected = false;
+    while (!wl.empty() || !meta_protected) {
+        if (wl.empty()) {
+            //------------------ protect metatables of dead finalizable tables. gc_dispose_swept() will push
+            //------------------ those tables onto gc_finalizable, but their metatable (and the __gc closure
+            //------------------ it holds) is only reachable through the dead object, so the sweep below would
+            //------------------ null the closure's func and the drain would throw std::bad_function_call.
+            //------------------ Mirrors the protect_wl pass in collect_garbage_full().
+            meta_protected = true;
+            for (LTable *obj = metatabled_tables; obj; obj = obj->ext->meta_next) {
+                if (obj->marked != 0 || (obj->flags & LFLAG_VM_PROXY))
+                    continue;
+                LTable *mt = obj->ext ? obj->ext->metatable : nullptr;
+                if (!mt || mt->marked != 0 || mt->age == AGE_OLD)
+                    continue;
+                mt->marked = 1;
+                wl.push(mt);
+            }
+            continue;
+        }
         LHeader *curr = wl.back();
         wl.pop_back();
         if (curr->flags & LFLAG_VM_PROXY)
@@ -651,6 +667,16 @@ void LState::gc_minor() {
             gc_dispose_swept(this, o);
             *link = next_obj;
             object_count--;
+        } else if (!(o->flags & (LFLAG_GC_PIN | LFLAG_REMEMBERED))) {
+            //------------------ dead young: unreachable at this collection. gc_recent was cleared above and no Lua
+            //------------------ runs between that clear and this walk, so an unmarked young object here is garbage,
+            //------------------ not something in flight. Returning it to free_tables now is what lets the next
+            //------------------ table reuse its array buffer instead of re-growing 8->16->32->64. Pinned objects
+            //------------------ are spared: one freshly taken off the free list may not be rooted yet.
+            LHeader *next_obj = o->next;
+            gc_dispose_swept(this, o);
+            *link = next_obj;
+            object_count--;
         } else {
             link = &o->next;
         }
@@ -693,6 +719,16 @@ void LState::gc_minor() {
 
     //------------------ rebuild pacing state
     gc_recent.clear();
+
+    //------------------ drain finalizables. gc_dispose_swept() routes every swept metatabled table onto
+    //------------------ gc_finalizable, but only the incremental major sweep used to drain that list, so
+    //------------------ minors disposed objects whose __gc could then never run (finalizers stalled at 1).
+    //------------------ Runs before gc_minor_active drops so a finalizer that allocates cannot nest a minor
+    //------------------ inside this drain.
+
+    if (gc_finalizable || gc_finalizable_ud)
+        gc_drain_finalizables(this);
+
     gc_bytes_at_minor = allocated_bytes;
     gc_minor_active = false;
 
@@ -807,6 +843,10 @@ bool LState::gc_step() {
 //------------------ LState::collect_garbage — full mark-sweep collection (entry point)
 
 void LState::collect_garbage() {
+    //------------------ re-entrancy guard: gc_minor() drains finalizables before dropping gc_minor_active,
+    //------------------ so a __gc that calls collectgarbage() must not start a full collection mid-drain.
+    if (gc_minor_active)
+        return;
     ++gc_stats_collects;
     if (gc_mode == GCMode::Generational && !gc_draining && gc_phase == GCPhase::Idle)
         gc_minor();
@@ -1102,6 +1142,42 @@ void LState::collect_garbage_full() {
             }
         }
     }
+    //------------------ A major marks from roots, so LFLAG_REMEMBERED no longer says anything about
+    //------------------ reachability. gc_step() never disposes a remembered object and minors skip AGE_OLD
+    //------------------ entirely, so a dead old table mutated by a write barrier would survive every
+    //------------------ collection. Drop the entries this mark proved dead *before* sweeping, so the sweep
+    //------------------ below can free them and gc_remembered holds no pointer to a soon-freed object.
+
+    {
+        size_t w = 0;
+        for (size_t i = 0; i < gc_remembered.size(); ++i) {
+            LHeader *h = gc_remembered[i];
+            if (!h)
+                continue;
+            if (h->marked != 0)
+                gc_remembered[w++] = h;
+            else
+                h->flags &= ~LFLAG_REMEMBERED;
+        }
+        gc_remembered.resize(w);
+
+        size_t wc = 0;
+        for (size_t i = 0; i < gc_remembered_cells.size(); ++i) {
+            const LUpValue &cell = gc_remembered_cells[i];
+            bool live = false;
+            if (cell && cell->is_gc_obj()) {
+                LHeader *ch = static_cast<LHeader *>(cell->as_pointer());
+                live = ch && ch->type == static_cast<uint8_t>(cell->type) && ch->marked != 0;
+            }
+            if (live)
+                gc_remembered_cells[wc++] = cell;
+        }
+        gc_remembered_cells.resize(wc);
+        gc_remembered_cell_set.clear();
+        for (size_t i = 0; i < gc_remembered_cells.size(); ++i)
+            gc_remembered_cell_set.insert(gc_remembered_cells[i].get());
+    }
+
     gc_phase = GCPhase::Sweeping;
     gc_sweep_cursor = allocated_objects;
     gc_prev = nullptr;
