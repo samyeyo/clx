@@ -356,6 +356,144 @@ bool local_register_friendly(
     return !res.materialized;
 }
 
+//------------------ count_ident_uses: occurrences of `name` as an Identifier inside a statement subtree, excluding two
+//------------------ known node indices. Returns kIdentUseUnsafe when any unhandled node type is met, so callers can
+//------------------ treat "unknown" as "unsafe" and keep the conservative path.
+
+int count_ident_uses(const ASTContext &ctx, uint32_t idx, std::string_view name, uint32_t skip_a, uint32_t skip_b) {
+    if (idx == 0xFFFFFFFF || idx >= ctx.nodes.size())
+        return 0;
+    const auto &nd = ctx.nodes[idx];
+    auto sum = [&](int a, int b) { return (a >= kIdentUseUnsafe || b >= kIdentUseUnsafe) ? kIdentUseUnsafe : a + b; };
+    switch (nd.type) {
+    case NodeType::Identifier: {
+        std::string_view nm(nd.as.ident.name, nd.as.ident.length);
+        if (nm != name || idx == skip_a || idx == skip_b)
+            return 0;
+        //------------------ a captured name would be an upvalue, which this scan cannot account for
+        return nd.as.ident.is_captured ? kIdentUseUnsafe : 1;
+    }
+    case NodeType::Number:
+    case NodeType::Integer:
+    case NodeType::String:
+    case NodeType::TrueLiteral:
+    case NodeType::FalseLiteral:
+    case NodeType::NilLiteral:
+    case NodeType::LabelStatement:
+    case NodeType::GotoStatement:
+    case NodeType::BreakStatement:
+    case NodeType::Vararg:
+        return 0;
+    case NodeType::FunctionDef:
+        return kIdentUseUnsafe;
+    case NodeType::Block: {
+        int total = 0;
+        for (uint32_t i = 0; i < nd.as.block.count; ++i) {
+            total = sum(total,
+                count_ident_uses(ctx, ctx.block_statements[nd.as.block.first_statement + i], name, skip_a, skip_b));
+            if (total >= kIdentUseUnsafe)
+                return kIdentUseUnsafe;
+        }
+        return total;
+    }
+    case NodeType::CallExpression: {
+        int total = count_ident_uses(ctx, nd.as.call_expr.target, name, skip_a, skip_b);
+        for (uint32_t i = 0; i < nd.as.call_expr.arg_count; ++i)
+            total = sum(total,
+                count_ident_uses(ctx, ctx.block_statements[nd.as.call_expr.first_arg + i], name, skip_a, skip_b));
+        return total;
+    }
+    case NodeType::IntrinsicCall: {
+        int total = 0;
+        for (uint32_t i = 0; i < nd.as.intrinsic_call.arg_count; ++i)
+            total = sum(total,
+                count_ident_uses(ctx, ctx.block_statements[nd.as.intrinsic_call.first_arg + i], name, skip_a, skip_b));
+        return total;
+    }
+    case NodeType::GenericForStatement: {
+        int total = 0;
+        for (uint32_t i = 0; i < nd.as.generic_for.iter_count; ++i)
+            total = sum(total,
+                count_ident_uses(ctx, ctx.block_statements[nd.as.generic_for.first_iter + i], name, skip_a, skip_b));
+        return sum(total, count_ident_uses(ctx, nd.as.generic_for.body_block, name, skip_a, skip_b));
+    }
+    case NodeType::TableAccess:
+        return sum(count_ident_uses(ctx, nd.as.table_access.table, name, skip_a, skip_b),
+            count_ident_uses(ctx, nd.as.table_access.key, name, skip_a, skip_b));
+    case NodeType::BinaryOp:
+        return sum(count_ident_uses(ctx, nd.as.bin_op.left, name, skip_a, skip_b),
+            count_ident_uses(ctx, nd.as.bin_op.right, name, skip_a, skip_b));
+    case NodeType::UnaryOp:
+        return count_ident_uses(ctx, nd.as.unary_op.expr, name, skip_a, skip_b);
+    case NodeType::ParenExpression:
+        return count_ident_uses(ctx, nd.as.paren_expr.expr, name, skip_a, skip_b);
+    case NodeType::LocalDecl: {
+        int total = 0;
+        for (uint32_t i = 0; i < nd.as.local_decl.value_count; ++i)
+            total = sum(total,
+                count_ident_uses(ctx, ctx.block_statements[nd.as.local_decl.first_value + i], name, skip_a, skip_b));
+        return total;
+    }
+    case NodeType::GlobalDeclStatement: {
+        int total = 0;
+        for (uint32_t i = 0; i < nd.as.global_decl.value_count; ++i)
+            total = sum(total,
+                count_ident_uses(ctx, ctx.block_statements[nd.as.global_decl.first_value + i], name, skip_a, skip_b));
+        return total;
+    }
+    case NodeType::Assignment: {
+        int total = 0;
+        for (uint32_t i = 0; i < nd.as.assign.target_count; ++i) {
+            total = sum(total,
+                count_ident_uses(ctx, ctx.block_statements[nd.as.assign.first_target + i], name, skip_a, skip_b));
+            if (i < nd.as.assign.value_count)
+                total = sum(total,
+                    count_ident_uses(ctx, ctx.block_statements[nd.as.assign.first_value + i], name, skip_a, skip_b));
+        }
+        return total;
+    }
+    case NodeType::IfStatement:
+        return sum(sum(count_ident_uses(ctx, nd.as.if_stmt.condition, name, skip_a, skip_b),
+                       count_ident_uses(ctx, nd.as.if_stmt.then_block, name, skip_a, skip_b)),
+            count_ident_uses(ctx, nd.as.if_stmt.else_block, name, skip_a, skip_b));
+    case NodeType::WhileStatement:
+        return sum(count_ident_uses(ctx, nd.as.while_stmt.condition, name, skip_a, skip_b),
+            count_ident_uses(ctx, nd.as.while_stmt.body_block, name, skip_a, skip_b));
+    case NodeType::RepeatStatement:
+        return sum(count_ident_uses(ctx, nd.as.repeat_stmt.body_block, name, skip_a, skip_b),
+            count_ident_uses(ctx, nd.as.repeat_stmt.condition, name, skip_a, skip_b));
+    case NodeType::ForStatement: {
+        int total = sum(count_ident_uses(ctx, nd.as.for_stmt.start_expr, name, skip_a, skip_b),
+            count_ident_uses(ctx, nd.as.for_stmt.limit_expr, name, skip_a, skip_b));
+        if (nd.as.for_stmt.step_expr != 0xFFFFFFFF)
+            total = sum(total, count_ident_uses(ctx, nd.as.for_stmt.step_expr, name, skip_a, skip_b));
+        return sum(total, count_ident_uses(ctx, nd.as.for_stmt.body_block, name, skip_a, skip_b));
+    }
+    case NodeType::DoStatement:
+        return count_ident_uses(ctx, nd.as.do_stmt.body_block, name, skip_a, skip_b);
+    case NodeType::TableConstructor: {
+        int total = 0;
+        for (uint32_t i = 0; i < nd.as.table_cons.count; ++i) {
+            total = sum(total,
+                count_ident_uses(ctx, ctx.block_statements[nd.as.table_cons.first_item + i * 2], name, skip_a, skip_b));
+            total = sum(total,
+                count_ident_uses(
+                    ctx, ctx.block_statements[nd.as.table_cons.first_item + i * 2 + 1], name, skip_a, skip_b));
+        }
+        return total;
+    }
+    case NodeType::ReturnStatement: {
+        int total = 0;
+        for (uint32_t i = 0; i < nd.as.return_stmt.value_count; ++i)
+            total = sum(total,
+                count_ident_uses(ctx, ctx.block_statements[nd.as.return_stmt.first_value + i], name, skip_a, skip_b));
+        return total;
+    }
+    default:
+        return kIdentUseUnsafe;
+    }
+}
+
 //------------------ hex_digit_value: numeric value of a single hexadecimal digit character
 static int hex_digit_value(unsigned char c) {
     if (c >= '0' && c <= '9')

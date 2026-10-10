@@ -43,6 +43,155 @@ void CodeEmitter::emitGotoStatement(const ASTNode &node, uint32_t node_idx) {
     out << "goto clx_lbl_" << lname << "_" << target_label << ";\n";
 }
 
+//------------------ same_expr: structural equality of two expression subtrees, used to prove a swap's key pairing
+static bool same_expr(const ASTContext &ctx, uint32_t a, uint32_t b) {
+    if (a == b)
+        return true;
+    if (a >= ctx.nodes.size() || b >= ctx.nodes.size())
+        return false;
+    const ASTNode &x = ctx.nodes[a];
+    const ASTNode &y = ctx.nodes[b];
+    if (x.type != y.type)
+        return false;
+    switch (x.type) {
+    case NodeType::Identifier:
+        return std::string_view(x.as.ident.name, x.as.ident.length)
+            == std::string_view(y.as.ident.name, y.as.ident.length);
+    case NodeType::Number:
+        return x.as.number.val == y.as.number.val;
+    case NodeType::Integer:
+        return x.as.integer.val == y.as.integer.val;
+    case NodeType::BinaryOp:
+        return x.as.bin_op.op == y.as.bin_op.op && same_expr(ctx, x.as.bin_op.left, y.as.bin_op.left)
+            && same_expr(ctx, x.as.bin_op.right, y.as.bin_op.right);
+    case NodeType::UnaryOp:
+        return x.as.unary_op.op == y.as.unary_op.op && same_expr(ctx, x.as.unary_op.expr, y.as.unary_op.expr);
+    case NodeType::ParenExpression:
+        return same_expr(ctx, x.as.paren_expr.expr, y.as.paren_expr.expr);
+    default:
+        return false;
+    }
+}
+
+//------------------ try_match_swap_idiom: true when statements `pos`..`pos+2` of a block are the array swap idiom
+//------------------ on one hoisted table. Fusing them removes the boxed temp and its shadow-stack root.
+bool CodeEmitter::try_match_swap_idiom(uint32_t block_idx, uint32_t pos, SwapIdiomMatch &m) {
+    if (block_idx >= ctx.nodes.size() || ctx.nodes[block_idx].type != NodeType::Block)
+        return false;
+    const ASTNode &blk = ctx.nodes[block_idx];
+    if (pos + 2 >= blk.as.block.count)
+        return false;
+    uint32_t a = ctx.block_statements[blk.as.block.first_statement + pos];
+    uint32_t b = ctx.block_statements[blk.as.block.first_statement + pos + 1];
+    uint32_t c = ctx.block_statements[blk.as.block.first_statement + pos + 2];
+    if (a >= ctx.nodes.size() || b >= ctx.nodes.size() || c >= ctx.nodes.size())
+        return false;
+    const ASTNode &na = ctx.nodes[a];
+    const ASTNode &nb = ctx.nodes[b];
+    const ASTNode &nc = ctx.nodes[c];
+    //------------------ shape: `local x = A[i]` then `A[j] = A[k]` then `A[l] = x`
+    if (na.type != NodeType::LocalDecl || nb.type != NodeType::Assignment || nc.type != NodeType::Assignment)
+        return false;
+    if (state.dead_stmts.count(a))
+        return false;
+    if (na.as.local_decl.ident_count != 1 || na.as.local_decl.value_count != 1)
+        return false;
+    if (nb.as.assign.target_count != 1 || nb.as.assign.value_count != 1)
+        return false;
+    if (nc.as.assign.target_count != 1 || nc.as.assign.value_count != 1)
+        return false;
+    uint32_t temp_id = ctx.block_statements[na.as.local_decl.first_ident];
+    uint32_t va = ctx.block_statements[na.as.local_decl.first_value];
+    uint32_t tb = ctx.block_statements[nb.as.assign.first_target];
+    uint32_t vb = ctx.block_statements[nb.as.assign.first_value];
+    uint32_t tc = ctx.block_statements[nc.as.assign.first_target];
+    uint32_t vc = ctx.block_statements[nc.as.assign.first_value];
+    if (temp_id >= ctx.nodes.size() || va >= ctx.nodes.size() || tb >= ctx.nodes.size() || vb >= ctx.nodes.size()
+        || tc >= ctx.nodes.size() || vc >= ctx.nodes.size())
+        return false;
+    if (ctx.nodes[temp_id].type != NodeType::Identifier)
+        return false;
+    if (ctx.nodes[temp_id].as.ident.is_captured || ctx.nodes[temp_id].as.ident.is_global)
+        return false;
+    if (ctx.nodes[va].type != NodeType::TableAccess || ctx.nodes[tb].type != NodeType::TableAccess
+        || ctx.nodes[vb].type != NodeType::TableAccess || ctx.nodes[tc].type != NodeType::TableAccess)
+        return false;
+    if (ctx.nodes[vc].type != NodeType::Identifier || ctx.nodes[vc].as.ident.is_global)
+        return false;
+    std::string_view temp_name(ctx.nodes[temp_id].as.ident.name, ctx.nodes[temp_id].as.ident.length);
+    if (temp_name != std::string_view(ctx.nodes[vc].as.ident.name, ctx.nodes[vc].as.ident.length))
+        return false;
+    //------------------ all four accesses must name the same hoisted table
+    uint32_t tbls[4] = { ctx.nodes[va].as.table_access.table, ctx.nodes[tb].as.table_access.table,
+        ctx.nodes[vb].as.table_access.table, ctx.nodes[tc].as.table_access.table };
+    for (uint32_t ti : tbls) {
+        if (ti >= ctx.nodes.size() || ctx.nodes[ti].type != NodeType::Identifier || ctx.nodes[ti].as.ident.is_global)
+            return false;
+    }
+    std::string_view tn(ctx.nodes[tbls[0]].as.ident.name, ctx.nodes[tbls[0]].as.ident.length);
+    for (uint32_t ti : tbls) {
+        if (std::string_view(ctx.nodes[ti].as.ident.name, ctx.nodes[ti].as.ident.length) != tn)
+            return false;
+    }
+    if (hoisted_table_ptr(tbls[0]).empty())
+        return false;
+    uint32_t k_read = ctx.nodes[va].as.table_access.key;
+    uint32_t k_tgt_b = ctx.nodes[tb].as.table_access.key;
+    uint32_t k_val_b = ctx.nodes[vb].as.table_access.key;
+    uint32_t k_tgt_c = ctx.nodes[tc].as.table_access.key;
+    for (uint32_t k : { k_read, k_tgt_b, k_val_b, k_tgt_c }) {
+        if (k >= ctx.nodes.size() || !is_purely_integer_expr(ctx, state, k))
+            return false;
+    }
+    //------------------ the stores must target exactly the two slots that were read, or it is not a swap
+    if (!same_expr(ctx, k_read, k_tgt_b) || !same_expr(ctx, k_val_b, k_tgt_c))
+        return false;
+    //------------------ the temp must not be referenced anywhere else in this block subtree
+    if (count_ident_uses(ctx, block_idx, temp_name, temp_id, vc) != 0)
+        return false;
+    m.temp_ident = temp_id;
+    m.table_ident = tbls[0];
+    m.read_a = va;
+    m.read_b = vb;
+    m.key_a = k_read;
+    m.key_b = k_val_b;
+    return true;
+}
+
+//------------------ emit_swap_idiom: raw two-slot exchange on a hoisted array; generic table_get/table_set fallback
+//------------------ when either index is outside the array part.
+void CodeEmitter::emit_swap_idiom(const SwapIdiomMatch &m, uint32_t tag) {
+    const std::string s = std::to_string(tag);
+    out << "{ clx::LTable* _sw" << s << " = " << hoisted_table_ptr(m.table_ident) << "; int64_t _sa" << s
+        << " = static_cast<int64_t>(";
+    emit_native(m.key_a);
+    out << "); int64_t _sb" << s << " = static_cast<int64_t>(";
+    emit_native(m.key_b);
+    out << "); if (_sa" << s << " >= 1 && _sb" << s << " >= 1 && static_cast<size_t>(_sa" << s << ") <= _sw" << s
+        << "->array_size && static_cast<size_t>(_sb" << s << ") <= _sw" << s
+        << "->array_size && static_cast<size_t>(_sa" << s << ") <= _sw" << s << "->array_cap && static_cast<size_t>(_sb"
+        << s << ") <= _sw" << s << "->array_cap) [[likely]] {"
+        << " clx::TValue _v1" << s << " = _sw" << s << "->array[_sa" << s << " - 1];"
+        << " clx::ValueType _y1" << s << " = _sw" << s << "->array_types[_sa" << s << " - 1];"
+        << " clx::TValue _v2" << s << " = _sw" << s << "->array[_sb" << s << " - 1];"
+        << " clx::ValueType _y2" << s << " = _sw" << s << "->array_types[_sb" << s << " - 1];"
+        << " clx::gc_barrier_table(L, _sw" << s << ", clx::LValue(_v2" << s << ", _y2" << s << "));"
+        << " clx::gc_barrier_table(L, _sw" << s << ", clx::LValue(_v1" << s << ", _y1" << s << "));"
+        << " _sw" << s << "->array[_sa" << s << " - 1] = _v2" << s << ";"
+        << " _sw" << s << "->array_types[_sa" << s << " - 1] = _y2" << s << ";"
+        << " _sw" << s << "->array[_sb" << s << " - 1] = _v1" << s << ";"
+        << " _sw" << s << "->array_types[_sb" << s << " - 1] = _y1" << s << ";"
+        << " } else {"
+        << " clx::LValue _f1" << s << " = ";
+    emit_node(m.read_a);
+    out << "; clx::LValue _f2" << s << " = ";
+    emit_node(m.read_b);
+    out << "; clx::LValue _tb" << s << " = clx::LValue(clx::ValueType::Table, _sw" << s << ");"
+        << " clx::table_set(L, _tb" << s << ", clx::LValue(static_cast<int64_t>(_sa" << s << ")), _f2" << s << ");"
+        << " clx::table_set(L, _tb" << s << ", clx::LValue(static_cast<int64_t>(_sb" << s << ")), _f1" << s << ");"
+        << " } }\n";
+}
+
 //------------------ emitBlock: handles NodeType::Block
 void CodeEmitter::emitBlock(const ASTNode &node, uint32_t node_idx, DeferredBlockScope *def) {
     bool prev_skip_braces = state.skip_block_braces;
@@ -56,6 +205,10 @@ void CodeEmitter::emitBlock(const ASTNode &node, uint32_t node_idx, DeferredBloc
         const auto &stmt = ctx.nodes[stmt_idx];
         if (stmt.type == NodeType::LocalDecl) {
             if (state.dead_stmts.count(stmt_idx))
+                continue;
+            //------------------ a temp consumed by swap fusion never exists, so it needs no scope guard
+            SwapIdiomMatch _swm;
+            if (try_match_swap_idiom(node_idx, i, _swm))
                 continue;
             for (uint32_t j = 0; j < stmt.as.local_decl.ident_count; ++j) {
                 uint32_t id_idx = ctx.block_statements[stmt.as.local_decl.first_ident + j];
@@ -187,6 +340,15 @@ void CodeEmitter::emitBlock(const ASTNode &node, uint32_t node_idx, DeferredBloc
         if (state.dead_stmts.count(stmt_idx))
             continue;
         const auto &stmt = ctx.nodes[stmt_idx];
+
+        //------------------ array swap fusion: `local x = A[i]; A[j] = A[k]; A[l] = x` becomes one raw exchange,
+        //------------------ dropping the boxed temp, its shadow-stack root and the per-store gap handling.
+        SwapIdiomMatch _sw;
+        if (try_match_swap_idiom(node_idx, i, _sw)) {
+            emit_swap_idiom(_sw, stmt_idx);
+            i += 2;
+            continue;
+        }
 
         if (stmt.type == NodeType::LocalDecl) {
             bool creates_shadow = false;

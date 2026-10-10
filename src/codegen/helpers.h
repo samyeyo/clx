@@ -39,6 +39,14 @@ void scan_own(const ASTContext &ctx, const AnalysisState &state, uint32_t idx, s
 bool local_register_friendly(
     const ASTContext &ctx, const AnalysisState &state, uint32_t body_idx, std::string_view name);
 
+//------------------ kIdentUseUnsafe: sentinel returned by count_ident_uses when a subtree cannot be analysed
+constexpr int kIdentUseUnsafe = 1000;
+
+//------------------ count_ident_uses: occurrences of `name` as an Identifier inside a statement subtree, excluding two
+//------------------ known node indices. Returns kIdentUseUnsafe when any unhandled node type is met, so callers can
+//------------------ treat "unknown" as "unsafe" and keep the conservative path.
+int count_ident_uses(const ASTContext &ctx, uint32_t idx, std::string_view name, uint32_t skip_a, uint32_t skip_b);
+
 //------------------ lua_decode_string: decodes Lua escape sequences in a string literal body
 std::string lua_decode_string(std::string_view s);
 

@@ -109,6 +109,24 @@ private:
     //------------------ try_emit_array_cmp: numeric fast path for two hoisted integer-indexed array reads; returns false to use the generic path.
     bool try_emit_array_cmp(int cmp_op, uint32_t l_idx, uint32_t r_idx);
 
+    //------------------ SwapIdiomMatch: a proven `local x = A[i]; A[j] = A[k]; A[l] = x` sequence eligible for fusion.
+    struct SwapIdiomMatch {
+        uint32_t temp_ident = 0xFFFFFFFF;
+        uint32_t table_ident = 0xFFFFFFFF;
+        uint32_t read_a = 0xFFFFFFFF;
+        uint32_t read_b = 0xFFFFFFFF;
+        uint32_t key_a = 0xFFFFFFFF;
+        uint32_t key_b = 0xFFFFFFFF;
+    };
+
+    //------------------ try_match_swap_idiom: true when statements `pos`..`pos+2` of a block are the array swap idiom
+    //------------------ on one hoisted table. Fusing them removes the boxed temp and its shadow-stack root.
+    bool try_match_swap_idiom(uint32_t block_idx, uint32_t pos, SwapIdiomMatch &m);
+
+    //------------------ emit_swap_idiom: raw two-slot exchange on a hoisted array; generic table_get/table_set fallback
+    //------------------ when either index is outside the array part.
+    void emit_swap_idiom(const SwapIdiomMatch &m, uint32_t tag);
+
     //------------------ local_root_snapshot_ok: every use lowers inline, so a snapshot root can keep the local in a register.
     bool local_root_snapshot_ok(std::string_view lua_name);
 
