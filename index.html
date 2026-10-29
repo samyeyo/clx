@@ -1806,8 +1806,7 @@ end
 <span class="flag">CLX_GC_MODE</span>     Collector for compiled programs: <span class="inline-code">generational</span> (default) or <span class="inline-code">incremental</span> (the legacy collector).
 <span class="flag">CLX_GC_MINOR_KB</span> Pins the minor-collection threshold in kilobytes. Without it the threshold is adaptive: starts at 256 KB and re-paces each minor, capped at 8192 KB. Lower values collect young garbage sooner.
 <span class="flag">CLX_GC_MAJOR_KB</span> Old-generation budget in kilobytes that triggers a full collection (default 32768).
-<span class="flag">CLX_IO_NOBUF</span>    Set to <span class="inline-code">1</span> to bypass the runtime's userspace io.write batching (escape hatch / A/B).
-<span class="flag">CLX_ALLOC_STATS</span> Diagnostic: set to any value to dump an allocation census to stderr when the program exits.</div>
+<span class="flag">CLX_IO_NOBUF</span>    Set to <span class="inline-code">1</span> to bypass the runtime's userspace io.write batching (escape hatch / A/B).</div>
                     </div>
                 </div>
                 <div class="doc-section">
