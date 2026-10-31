@@ -228,7 +228,7 @@ CLX_API clx::LValue luaopen_vector(clx::LState* L) {
 gcc -shared -fPIC vector.c -o vector.so -llua
 
 # clx version — compile to a static lib, then link
-g++ -c -std=c++17 -I/path/to/clx/include vector.cpp -o vector.o
+g++ -c -std=c++20 -I/path/to/clx/include vector.cpp -o vector.o
 ar rcs vector.a vector.o                          # Linux/macOS
 clx main.lua --modules vector
 ```
