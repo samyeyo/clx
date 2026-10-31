@@ -103,6 +103,6 @@ compile programs — or copy the missing archives from a source build into
 
 ```sh
 clx --version
-# clx 0.4.0
+# clx 0.5.0
 # MIT License - Copyright (c) 2026 Tine Samir
 ```

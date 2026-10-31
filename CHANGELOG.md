@@ -6,7 +6,7 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 
 ---
 
-## [Work in progress]
+## [0.5.0] - 2026-11-01
 
 ### Added
 
