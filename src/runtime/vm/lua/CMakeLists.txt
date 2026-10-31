@@ -139,7 +139,7 @@ target_sources(clx_lua PRIVATE
 )
 
 set_target_properties(clx_lua PROPERTIES
-    CXX_STANDARD 17
+    CXX_STANDARD 20
     CXX_STANDARD_REQUIRED ON
     CXX_EXTENSIONS OFF
 )
