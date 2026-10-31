@@ -1240,7 +1240,7 @@
                         <div class="label">Lua compiler</div>
                     </div>
                     <div class="about-stat">
-                        <div class="value">C++17</div>
+                        <div class="value">C++20</div>
                         <div class="label">Backend</div>
                     </div>
                     <div class="about-stat">
@@ -1265,7 +1265,7 @@
                         <div class="feature-title">
                             <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16 10 8"></polygon></svg></span> Native AOT
                         </div>
-                        <div class="feature-desc">Compile Lua directly to optimized C++17 code. No interpreter layer, no bytecode overhead.</div>
+                        <div class="feature-desc">Compile Lua directly to optimized C++20 code. No interpreter layer, no bytecode overhead.</div>
                     </div>
                     <div class="feature-card">
                         <div class="feature-title">
@@ -1299,7 +1299,7 @@
                     </div>
                     <div class="feature-card">
                         <div class="feature-title">
-                            <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg></span> C++17 Backend
+                            <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg></span> C++20 Backend
                         </div>
                         <div class="feature-desc">SROA, SIMD vectorization, CPU cache friendly optimizations...</div>
                     </div>
@@ -2112,11 +2112,11 @@ utils.help()</div>
                     <p>Compile it to an object file with your C++ compiler:</p>
                     <div class="code-block">
                         <div class="code-header"><span class="lang">Linux/macOS</span><span>g++/clang++</span></div>
-                        <div class="code-body"><span class="prompt">$</span> g++ -c -std=c++17 -I./include my_native_mod.cpp -o my_native_mod.o</div>
+                        <div class="code-body"><span class="prompt">$</span> g++ -c -std=c++20 -I./include my_native_mod.cpp -o my_native_mod.o</div>
                     </div>
                     <div class="code-block">
                         <div class="code-header"><span class="lang">Windows</span><span>MSVC</span></div>
-                        <div class="code-body"><span class="prompt">&gt;</span> cl /c /std:c++17 /I.\include my_native_mod.cpp /Fomy_native_mod.obj</div>
+                        <div class="code-body"><span class="prompt">&gt;</span> cl /c /std:c++20 /I.\include my_native_mod.cpp /Fomy_native_mod.obj</div>
                     </div>
                     <p>Then link with your Lua script. clx looks for <span class="inline-code">my_native_mod.a</span> (or <span class="inline-code">.lib</span> on Windows) in the current directory first, then in clx's <span class="inline-code">lib/clx</span> install locations (the in-tree <span class="inline-code">build/</span>, <span class="inline-code">lib/</span> and <span class="inline-code">lib64/</span> directories next to the clx binary, then the install prefix's libdir, e.g. <span class="inline-code">/usr/local/lib/clx/</span>), and finally in any <span class="inline-code">-L&lt;dir&gt;</span> flags you pass:</p>
                     <div class="code-block">
