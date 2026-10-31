@@ -10,7 +10,7 @@
 Cross-platform ahead-of-time Lua compiler
 
 ![Lua 5.5](https://img.shields.io/badge/Lua-5.5-E65100?logo=lua&logoColor=white)
-![C++17](https://img.shields.io/badge/C%2B%2B-17-1565C0?logo=cplusplus&logoColor=white)
+![C++20](https://img.shields.io/badge/C%2B%2B-20-1565C0?logo=cplusplus&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/license-MIT-4CAF50?logo=opensourceinitiative&logoColor=white)
 [![ko-fi](https://img.shields.io/badge/Ko--fi-Support%20me-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/samirtine)
 
