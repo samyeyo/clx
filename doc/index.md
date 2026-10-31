@@ -29,7 +29,7 @@ Want to know how clx works under the hood? See **[Internals](./internals/index.m
 Contributions are welcome! Before submitting a pull request, please ensure:
 
 1. Tests pass (`./tests/run.sh` or `tests\run.bat` on Windows)
-2. Code follows the existing style and uses C++17
+2. Code follows the existing style and uses C++20
 3. Documentation in `./doc` (Markdown) is updated for any new features
 
 ## License
