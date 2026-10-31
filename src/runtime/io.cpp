@@ -63,12 +63,19 @@ static OutBufEnt *outbuf_find(FILE *fp) {
     return nullptr;
 }
 
+static void outbuf_flush_all();
+
 static OutBufEnt *outbuf_get(FILE *fp) {
     if (OutBufEnt *e = outbuf_find(fp))
         return e;
     for (size_t i = 0; i < kOutBufSlots; ++i) {
         if (out_bufs[i].fp == nullptr) {
             out_bufs[i].fp = fp;
+            static bool atexit_registered = false;
+            if (!atexit_registered) {
+                std::atexit(outbuf_flush_all);
+                atexit_registered = true;
+            }
             return &out_bufs[i];
         }
     }
@@ -172,8 +179,10 @@ static void outbuf_drop_fp(FILE *fp) {
     }
 }
 
-//------------------ outbuf_flush_all — flush every batched FILE* (state close; std files are never
-//------------------ closed so their buffers would otherwise be lost). Published via clx_io_flush_all_ptr.
+//------------------ outbuf_flush_all — flush every batched FILE* (state close and process exit; std
+//------------------ files are never closed so their buffers would otherwise be lost). Published via
+//------------------ clx_io_flush_all_ptr and registered with atexit, since os.exit() bypasses state
+//------------------ close and would drop whatever is still batched.
 static void outbuf_flush_all() {
     for (size_t i = 0; i < kOutBufSlots; ++i)
         outbuf_flush_ent(&out_bufs[i]);
