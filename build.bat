@@ -22,6 +22,13 @@ shift
 goto parse
 :done_parse
 
+rem MSVC's nmake/cl only exist inside a Visual Studio developer environment, so bootstrap it when running from a plain prompt.
+if not defined USE_MINGW if not defined USE_CLANG_CL if not defined VCINSTALLDIR (
+    where cl >nul 2>&1
+    if errorlevel 1 call :setup_msvc
+    if errorlevel 1 exit /b 1
+)
+
 set GEN=NMake Makefiles
 set TOOLCHAIN_ARGS=
 if defined USE_MINGW (
@@ -69,6 +76,43 @@ if "%DO_INSTALL%"=="1" (
 )
 endlocal
 exit /b 0
+
+:setup_msvc
+set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+if not exist "!VSWHERE!" set "VSWHERE=%ProgramFiles%\Microsoft Visual Studio\Installer\vswhere.exe"
+if not exist "!VSWHERE!" goto no_compiler
+set "VSDIR="
+for /f "usebackq tokens=*" %%I in (`"!VSWHERE!" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2^>nul`) do set "VSDIR=%%I"
+if not defined VSDIR goto no_vc_tools
+if exist "!VSDIR!\VC\Auxiliary\Build\vcvars64.bat" goto msvc_vcvars
+if exist "!VSDIR!\Common7\Tools\VsDevCmd.bat" goto msvc_devcmd
+echo error: no vcvars64.bat or VsDevCmd.bat under "!VSDIR!".
+exit /b 1
+
+:msvc_vcvars
+call "!VSDIR!\VC\Auxiliary\Build\vcvars64.bat" >nul
+goto msvc_check
+
+:msvc_devcmd
+call "!VSDIR!\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+goto msvc_check
+
+:msvc_check
+where cl >nul 2>&1
+if errorlevel 1 goto msvc_failed
+exit /b 0
+
+:msvc_failed
+echo error: failed to set up the MSVC environment from "!VSDIR!".
+exit /b 1
+
+:no_vc_tools
+echo error: Visual Studio found at "!VSWHERE!", but without the C++ build tools. Install the "Desktop development with C++" workload.
+exit /b 1
+
+:no_compiler
+echo error: no C++ compiler found. Install Visual Studio Build Tools, run this from a Developer Command Prompt, or pass "mingw" / "clang-cl".
+exit /b 1
 
 :do_uninstall
 set "MANIFEST=build\install_manifest.txt"
