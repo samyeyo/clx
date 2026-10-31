@@ -94,28 +94,30 @@ Speedups vs. Lua 5.5 (10-run average, `hyperfine`):
 
 | Script | lua 5.5 | LuaJIT | clx (speedup, `--fast`) |
 |--------|---------|--------|--------------------------|
-| 3ddist.lua | 0.406s (1.00x) | 0.043s (9.44x) | **0.015s (27.07x)** |
-| ackermann.lua | 0.172s (1.00x) | **0.030s (5.73x)** | 0.050s (3.44x) |
-| arraysum.lua | 0.216s (1.00x) | 0.056s (3.86x) | **0.053s (4.08x)** |
-| binarytrees.lua | 0.395s (1.00x) | **0.111s (3.56x)** | 0.124s (3.19x) |
-| bubble.lua | 0.286s (1.00x) | **0.013s (22.00x)** | 0.051s (5.61x) |
-| canada.lua | 0.172s (1.00x) | **0.091s (1.89x)** | 0.144s (1.19x) |
-| coro.lua | 0.527s (1.00x) | **0.101s (5.22x)** | 0.325s (1.62x) |
-| fannkuchredux.lua | 1.973s (1.00x) | **0.302s (6.53x)** | 0.797s (2.48x) |
-| fasta.lua | 0.251s (1.00x) | **0.086s (2.92x)** | 0.147s (1.71x) |
-| fib.lua | 0.254s (1.00x) | 0.039s (6.51x) | **0.026s (9.77x)** |
-| hashtable.lua | 0.453s (1.00x) | **0.147s (3.08x)** | 0.191s (2.37x) |
-| json.lua | 0.141s (1.00x) | 0.600s (0.23x) | **0.019s (7.42x)** |
-| knucleotide.lua | 0.077s (1.00x) | **0.038s (2.03x)** | 0.044s (1.75x) |
-| life.lua | 0.329s (1.00x) | **0.030s (10.97x)** | 0.046s (7.15x) |
-| mandelbrot.lua | 0.286s (1.00x) | 0.025s (11.44x) | **0.023s (12.43x)** |
-| nbody.lua | 0.220s (1.00x) | **0.014s (15.71x)** | 0.062s (3.55x) |
-| pi.lua | 0.377s (1.00x) | 0.575s (0.66x) | **0.009s (41.89x)** |
-| regexdna.lua | 0.047s (1.00x) | 0.046s (1.02x) | **0.035s (1.34x)** |
-| sieve.lua | 0.206s (1.00x) | 0.221s (0.93x) | **0.112s (1.84x)** |
-| skynet.lua | 0.456s (1.00x) | **0.124s (3.68x)** | 0.243s (1.88x) |
-| spectralnorm.lua | 0.385s (1.00x) | **0.016s (24.06x)** | 0.019s (20.26x) |
-| warmup.lua | 0.006s (1.00x) | 0.005s (1.20x) | **0.005s (1.20x)** |
+| 3ddist.lua | 0.384s (1.00x) | 0.041s (9.37x) | **0.013s (29.54x)** |
+| ackermann.lua | 0.159s (1.00x) | **0.022s (7.23x)** | 0.049s (3.24x) |
+| arraysum.lua | 0.205s (1.00x) | 0.066s (3.11x) | **0.053s (3.87x)** |
+| binarytrees.lua | 0.391s (1.00x) | 0.111s (3.52x) | **0.097s (4.03x)** |
+| bubble.lua | 0.278s (1.00x) | **0.013s (21.38x)** | 0.025s (11.12x) |
+| canada.lua | 0.169s (1.00x) | **0.082s (2.06x)** | 0.124s (1.36x) |
+| coro.lua | 0.525s (1.00x) | **0.097s (5.41x)** | 0.247s (2.13x) |
+| fannkuchredux.lua | 1.954s (1.00x) | **0.277s (7.05x)** | 0.682s (2.87x) |
+| fasta.lua | 0.237s (1.00x) | **0.082s (2.89x)** | 0.092s (2.58x) |
+| fib.lua | 0.253s (1.00x) | 0.032s (7.91x) | **0.025s (10.12x)** |
+| hashtable.lua | 0.330s (1.00x) | **0.096s (3.44x)** | 0.166s (1.99x) |
+| json.lua | 0.133s (1.00x) | 0.540s (0.25x) | **0.016s (8.31x)** |
+| knucleotide.lua | 0.073s (1.00x) | **0.037s (1.97x)** | 0.041s (1.78x) |
+| life.lua | 0.320s (1.00x) | **0.032s (10.00x)** | 0.053s (6.04x) |
+| mandelbrot.lua | 0.279s (1.00x) | 0.025s (11.16x) | **0.021s (13.29x)** |
+| nbody.lua | 0.215s (1.00x) | **0.012s (17.92x)** | 0.058s (3.71x) |
+| pi.lua | 0.384s (1.00x) | 0.543s (0.71x) | **0.050s (7.68x)** |
+| ray.lua | 0.405s (1.00x) | **0.019s (21.32x)** | 0.234s (1.73x) |
+| realworld.lua | 0.608s (1.00x) | **0.260s (2.34x)** | 0.483s (1.26x) |
+| regexdna.lua | 0.047s (1.00x) | 0.045s (1.04x) | **0.034s (1.38x)** |
+| sieve.lua | 0.208s (1.00x) | 0.222s (0.94x) | **0.108s (1.93x)** |
+| skynet.lua | 0.454s (1.00x) | **0.122s (3.72x)** | 0.094s (4.83x) |
+| spectralnorm.lua | 0.363s (1.00x) | **0.015s (24.20x)** | 0.019s (19.11x) |
+| warmup.lua | 0.005s (1.00x) | 0.004s (1.25x) | **0.004s (1.25x)** |
 
 > Measured on an Apple A18 Pro · macOS 26.6.2 (ARM64) · Apple clang 21.0.0 · Average of 10 runs · clx `--fast`
 
@@ -176,8 +178,8 @@ Speedups vs. Lua 5.5 (10-run average, `benchmarks\run.bat`):
 | **coro** | Coroutine yield cycles — coroutine overhead |
 | **canada** | Parsing a real 2.2 MB GeoJSON file with dkjson — the most realistic workload |
 | **skynet** | Actor-model coroutine stress test — millions of coroutine create/resume/yield cycles |
-| **ray** | Ray tracer — float math, table-heavy scene traversal (added Oct 2026; not yet in the timing tables) |
-| **realworld** | Mixed real-world workload (added Oct 2026; not yet in the timing tables) |
+| **ray** | Ray tracer — float math, table-heavy scene traversal |
+| **realworld** | Mixed real-world workload (parse + transform + aggregate) |
 | **warmup** | A one-line script — startup latency only |
 
 ### About `canada.lua`
