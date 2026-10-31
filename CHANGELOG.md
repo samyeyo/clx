@@ -35,7 +35,7 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 * Quieter, more portable Windows builds. MSVC UTF-8 source handling, `/EHs` so `extern "C"` Lua functions may throw, GCC-only section flags kept off clang-cl, and Windows path lookup plus stack options in the driver
 * `resume()` builds `(ok, yields...)` directly in the return slot instead of filling a temp buffer and re-copying; `pcall`/`xpcall` and the `coroutine.wrap` trampoline build results in place. The 5M coroutine probe went 0.28s to 0.25s
 * The three copy-pasted platform context switches (fiber end, `resume`, `yield`) are folded into one `coro_switch_to()` helper with identical platform conditions
-* C++17 conformance: `using enum` in the lexer/parser is replaced by qualified enumerators, and two lambdas no longer capture structured bindings. The build is warning-free under the pinned C++17 standard
+* Back to C++20. The runtime, the vendored Lua VM, the test harnesses, the native-module examples and the docs all target C++20 again: MSVC 14.50 mis-compiles `#line`-annotated generated code under `/std:c++17` when nested generic lambdas are involved, while GCC and clang accept it. The C++17 workarounds (`using enum`, lambda structured bindings) stay in place harmlessly, and `[[likely]]` hints are applied by every toolchain again
 
 ### Fixed
 
@@ -44,6 +44,9 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 * Fixed finalizer and remembered-set handling during minor collections, and pinned byte accounting on array-churning tables
 * Fixed `string.find`/`match` arity, `%q` escaping, and decimal-escape decoding to match stock Lua byte-for-byte
 * Fixed Windows file-readability checks in `package`, and table `next()` bitmap scanning
+* Fixed `include/clx_runtime.h` not compiling under MSVC: `CLX_INLINE_COLD` uses `__declspec(noinline)` instead of the GNU `__attribute__`, and a parameter was renamed away from `small`, which `<rpcndr.h>` defines to `char`
+* Fixed buffered output being dropped on exit: the per-`FILE*` output batch is now drained by an `atexit` handler, so `os.exit()` and an early return from an uncaught Lua error no longer lose whatever was still batched
+* Fixed `build.bat` failing from a plain prompt (`Running 'nmake' '-?' failed: no such file or directory`) by locating the toolchain with `vswhere` and entering the MSVC environment up front, skipping that step for `mingw`/`clang-cl` and reporting clearly when no compiler is available
 * Fixed MSVC warnings on UTF-8 encoded files
 * Fixed coroutine yield bookkeeping overtaking rooted-call error handling
 * A trailing call returning zero values (`local v = f()`) now assigns nil instead of reading a stale inline slot. An exhausted `coroutine.wrap` closure returned its last value again instead of ending the loop
@@ -52,6 +55,7 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 
 * New regression coverage for rooting across collections in return expressions, C API continuations, and the metamethod cache
 * Native/capi module builds are now gated on the detected `clx --cxx` dialect (`g++`/`ar` vs `cl`/`clang-cl`), and benchmark harnesses run from `benchmarks/` with Windows-safe timing wrappers
+* `string_format_stock` expects whatever `%a` layout the C library produces, matching stock Lua's delegation: UCRT always prints all 13 fractional hex digits, glibc and musl trim to the shortest exact form
 
 ### Refactored
 
