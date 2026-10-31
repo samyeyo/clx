@@ -1150,7 +1150,7 @@ utils.lua</div>
                     <p>That is probably the most accurate description of developing a native Lua compiler: the individual pieces are manageable, but making all of them behave correctly together is where the real work is.</p>
                     <h3>Why C++?</h3>
                     <p>I considered the possibility of targeting other forms of native code, but C++ turned out to be a very practical choice.</p>
-                    <p>Clang, GCC and MSVC already provide mature optimizing backends for the platforms I care about. By generating modern C++17 rather than implementing an entire machine-code backend, clx can benefit from decades of work that has already gone into native compilers.</p>
+                    <p>Clang, GCC and MSVC already provide mature optimizing backends for the platforms I care about. By generating modern C++20 rather than implementing an entire machine-code backend, clx can benefit from decades of work that has already gone into native compilers.</p>
                     <p>It also makes integration with existing native software considerably easier.</p>
                     <p>If someone already has a C++ library, writing a thin clx module around it is much more straightforward than creating a completely separate foreign-function interface and code-generation backend.</p>
                     <p>There is a trade-off, of course. Generated C++ can become large, and very large generated translation units can take a significant amount of time to compile. That is one of the problems I am still working on as the compiler grows.</p>
