@@ -140,7 +140,7 @@ if exist "%NATIVE_SRC%" if exist "%NATIVE_TEST%" (
     set "NATIVE_OK="
     :: Toolchain must match clx dialect (clx --cxx): GNU uses g++; MSVC/ClangCL use cl then clang-cl
     if /I "!CXX_DIALECT!"=="GNU" (
-        g++ -c -std=c++17 -I"%ROOT_DIR%\include" "%NATIVE_SRC%" -o "%SCRIPT_DIR%\native_mod.o" 2>&1
+        g++ -c -std=c++20 -I"%ROOT_DIR%\include" "%NATIVE_SRC%" -o "%SCRIPT_DIR%\native_mod.o" 2>&1
         if exist "%SCRIPT_DIR%\native_mod.o" (
             ar rcs "%SCRIPT_DIR%\native_mod.a" "%SCRIPT_DIR%\native_mod.o" >nul 2>&1
             "%COMPILER%" "%NATIVE_TEST%" --modules native_mod --output "%NATIVE_BIN%" 2>&1
@@ -156,7 +156,7 @@ if exist "%NATIVE_SRC%" if exist "%NATIVE_TEST%" (
     ) else (
     where cl.exe >nul 2>&1
     if !errorlevel! equ 0 (
-        cl /c /std:c++17 /MD /EHsc /utf-8 /I"%ROOT_DIR%\include" "%NATIVE_SRC%" /Fo"%SCRIPT_DIR%\native_mod.obj" 2>&1
+        cl /c /std:c++20 /MD /EHsc /utf-8 /I"%ROOT_DIR%\include" "%NATIVE_SRC%" /Fo"%SCRIPT_DIR%\native_mod.obj" 2>&1
         if exist "%SCRIPT_DIR%\native_mod.obj" (
             lib /OUT:"%SCRIPT_DIR%\native_mod.lib" "%SCRIPT_DIR%\native_mod.obj" >nul 2>&1
             "%COMPILER%" "%NATIVE_TEST%" --modules native_mod --output "%NATIVE_BIN%" 2>&1
@@ -172,7 +172,7 @@ if exist "%NATIVE_SRC%" if exist "%NATIVE_TEST%" (
     ) else (
         where clang-cl.exe >nul 2>&1
         if !errorlevel! equ 0 (
-            clang-cl /c /std:c++17 /MD /EHsc /utf-8 /I"%ROOT_DIR%\include" "%NATIVE_SRC%" /Fo"%SCRIPT_DIR%\native_mod.obj" 2>&1
+            clang-cl /c /std:c++20 /MD /EHsc /utf-8 /I"%ROOT_DIR%\include" "%NATIVE_SRC%" /Fo"%SCRIPT_DIR%\native_mod.obj" 2>&1
             if exist "%SCRIPT_DIR%\native_mod.obj" (
                 where lib.exe >nul 2>&1
                 if !errorlevel! equ 0 (
@@ -228,7 +228,7 @@ if exist "%CAPI_SRC%" if exist "%CAPI_TEST%" (
     set "CAPI_OK="
     :: Toolchain must match clx dialect (clx --cxx): GNU uses g++; MSVC/ClangCL use cl then clang-cl
     if /I "!CXX_DIALECT!"=="GNU" (
-        g++ -c -std=c++17 -I"%ROOT_DIR%\include" "%CAPI_SRC%" -o "%SCRIPT_DIR%\capi_mod.o" 2>&1
+        g++ -c -std=c++20 -I"%ROOT_DIR%\include" "%CAPI_SRC%" -o "%SCRIPT_DIR%\capi_mod.o" 2>&1
         if exist "%SCRIPT_DIR%\capi_mod.o" (
             ar rcs "%SCRIPT_DIR%\capi_mod.a" "%SCRIPT_DIR%\capi_mod.o" >nul 2>&1
             "%COMPILER%" "%CAPI_TEST%" --modules capi_mod --output "%CAPI_BIN%" 2>&1
@@ -244,7 +244,7 @@ if exist "%CAPI_SRC%" if exist "%CAPI_TEST%" (
     ) else (
     where cl.exe >nul 2>&1
     if !errorlevel! equ 0 (
-        cl /c /std:c++17 /MD /EHsc /utf-8 /I"%ROOT_DIR%\include" "%CAPI_SRC%" /Fo"%SCRIPT_DIR%\capi_mod.obj" 2>&1
+        cl /c /std:c++20 /MD /EHsc /utf-8 /I"%ROOT_DIR%\include" "%CAPI_SRC%" /Fo"%SCRIPT_DIR%\capi_mod.obj" 2>&1
         if exist "%SCRIPT_DIR%\capi_mod.obj" (
             lib /OUT:"%SCRIPT_DIR%\capi_mod.lib" "%SCRIPT_DIR%\capi_mod.obj" >nul 2>&1
             "%COMPILER%" "%CAPI_TEST%" --modules capi_mod --output "%CAPI_BIN%" 2>&1
@@ -260,7 +260,7 @@ if exist "%CAPI_SRC%" if exist "%CAPI_TEST%" (
     ) else (
         where clang-cl.exe >nul 2>&1
         if !errorlevel! equ 0 (
-            clang-cl /c /std:c++17 /MD /EHsc /utf-8 /I"%ROOT_DIR%\include" "%CAPI_SRC%" /Fo"%SCRIPT_DIR%\capi_mod.obj" 2>&1
+            clang-cl /c /std:c++20 /MD /EHsc /utf-8 /I"%ROOT_DIR%\include" "%CAPI_SRC%" /Fo"%SCRIPT_DIR%\capi_mod.obj" 2>&1
             if exist "%SCRIPT_DIR%\capi_mod.obj" (
                 where lib.exe >nul 2>&1
                 if !errorlevel! equ 0 (
