@@ -55,14 +55,29 @@ assert_eq(("%05d"):format(42), "00042", "d zero pad")
 assert_eq(("%+d"):format(42), "+42", "d plus")
 assert_eq(("%08.3f"):format(3.14159), "0003.142", "f width")
 
-assert_eq(("%a"):format(1.0), "0x1p+0", "a 1.0")
-assert_eq(("%a"):format(0.0), "0x0p+0", "a 0.0")
-assert_eq(("%a"):format(-0.0), "-0x0p+0", "a -0.0")
-assert_eq(("%a"):format(1.5), "0x1.8p+0", "a 1.5")
-assert_eq(("%a"):format(1e10), "0x1.2a05f2p+33", "a 1e10")
+-- %a delegates to the C library, exactly like stock Lua, so its shape is platform-defined:
+-- glibc/musl trim the fraction to the shortest exact form, Windows' UCRT always prints all
+-- 13 fractional hex digits. Expectations are written in the trimmed form and expanded here.
+local CRT_PADS_HEXFLOAT = #(("%a"):format(1.0)) > #"0x1p+0"
+local function hexfloat(trimmed)
+    if not CRT_PADS_HEXFLOAT then
+        return trimmed
+    end
+    local sign, lead, frac, expo = trimmed:match("^(%-?0[xX])(%x)(%.?%x*)([pP][-+]%d+)$")
+    if frac == "" then
+        frac = "."
+    end
+    return sign .. lead .. frac .. string.rep("0", 13 - (#frac - 1)) .. expo
+end
+
+assert_eq(("%a"):format(1.0), hexfloat("0x1p+0"), "a 1.0")
+assert_eq(("%a"):format(0.0), hexfloat("0x0p+0"), "a 0.0")
+assert_eq(("%a"):format(-0.0), hexfloat("-0x0p+0"), "a -0.0")
+assert_eq(("%a"):format(1.5), hexfloat("0x1.8p+0"), "a 1.5")
+assert_eq(("%a"):format(1e10), hexfloat("0x1.2a05f2p+33"), "a 1e10")
 assert_eq(("%a"):format(1 / 0), "inf", "a inf")
 assert_eq(("%a"):format(-(1 / 0)), "-inf", "a -inf")
-assert_eq(("%A"):format(1.5), "0X1.8P+0", "A 1.5")
+assert_eq(("%A"):format(1.5), hexfloat("0X1.8P+0"), "A 1.5")
 assert_eq(("%.2a"):format(1.0), "0x1.00p+0", "a precision")
 
 assert_eq(("%s"):format(10), "10", "s number")
