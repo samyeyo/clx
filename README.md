@@ -99,13 +99,13 @@ clx compares well against the reference Lua 5.5 interpreter:
 
 | Script | lua 5.5 | LuaJIT | clx `--fast` |
 |--------|---------|--------|--------------------------|
-| fib.lua | 0.319s (1.00x) | 0.051s (6.25x) | **0.007s (45.57x)** |
-| arraysum.lua | 0.300s (1.00x) | 0.095s (3.16x) | **0.093s (3.23x)** |
-| spectralnorm.lua | 0.339s (1.00x) | **0.020s (16.95x)** | 0.021s (16.14x) |
-| canada.lua | 0.398s (1.00x) | **0.132s (3.02x)** | 0.219s (1.82x) |
-| warmup.lua | 0.006s (1.00x) | 0.005s (1.20x) | **0.002s (3.00x)** |
+| fib.lua | 0.299s (1.00x) | 0.049s (6.10x) | **0.006s (49.83x)** |
+| arraysum.lua | 0.305s (1.00x) | **0.086s (3.55x)** | 0.090s (3.39x) |
+| spectralnorm.lua | 0.328s (1.00x) | 0.021s (15.62x) | **0.019s (17.26x)** |
+| canada.lua | 0.356s (1.00x) | **0.148s (2.41x)** | 0.244s (1.46x) |
+| warmup.lua | 0.008s (1.00x) | 0.006s (1.33x) | **0.004s (2.00x)** |
 
-> Measured on an Intel® Core™ Ultra 5 125U CPU @ 4.30GHz · Linux · GCC 15.2.0 · Average of 10 runs · clx `--fast` built with AVX2 (`CLX_ARCH=avx2` — the default x86 build is SSE2)
+> Measured on an Intel® Core™ Ultra 5 125U CPU @ 4.30GHz · Linux · GCC 15.2.0 · Average of 10 runs · clx `--fast` built with AVX2 (`CLX_ARCH=avx2`)
 
 > Full benchmarks are available in **[clx benchmarks](./doc/benchmarks.md)**
 

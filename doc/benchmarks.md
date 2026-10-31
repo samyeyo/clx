@@ -63,30 +63,32 @@ Speedups vs. Lua 5.5 (10-run average, single CPU, `hyperfine`):
 
 | Script | lua 5.5 | LuaJIT | clx (speedup, `--fast`) |
 |--------|---------|--------|--------------------------|
-| 3ddist.lua | 0.346s (1.00x) | 0.050s (6.92x) | **0.023s (15.04x)** |
-| ackermann.lua | 0.183s (1.00x) | 0.032s (5.72x) | **0.018s (10.17x)** |
-| arraysum.lua | 0.300s (1.00x) | 0.095s (3.16x) | **0.093s (3.23x)** |
-| binarytrees.lua | 0.339s (1.00x) | **0.177s (1.92x)** | 0.190s (1.78x) |
-| bubble.lua | 0.289s (1.00x) | **0.015s (19.27x)** | 0.075s (3.85x) |
-| canada.lua | 0.398s (1.00x) | **0.132s (3.02x)** | 0.219s (1.82x) |
-| coro.lua | 0.516s (1.00x) | **0.199s (2.59x)** | 0.454s (1.14x) |
-| fannkuchredux.lua | 2.355s (1.00x) | **0.431s (5.46x)** | 1.271s (1.85x) |
-| fasta.lua | 0.236s (1.00x) | **0.077s (3.06x)** | 0.112s (2.11x) |
-| fib.lua | 0.319s (1.00x) | 0.051s (6.25x) | **0.007s (45.57x)** |
-| hashtable.lua | 0.997s (1.00x) | **0.385s (2.59x)** | 0.441s (2.26x) |
-| json.lua | 0.371s (1.00x) | 2.089s (0.18x) | **0.026s (14.27x)** |
-| knucleotide.lua | 0.137s (1.00x) | **0.093s (1.47x)** | 0.115s (1.19x) |
-| life.lua | 0.332s (1.00x) | **0.061s (5.44x)** | 0.062s (5.35x) |
-| mandelbrot.lua | 0.228s (1.00x) | 0.031s (7.35x) | **0.026s (8.77x)** |
-| nbody.lua | 0.198s (1.00x) | **0.021s (9.43x)** | 0.101s (1.96x) |
-| pi.lua | 0.333s (1.00x) | 0.162s (2.06x) | **0.074s (4.50x)** |
-| regexdna.lua | 0.080s (1.00x) | 0.062s (1.29x) | **0.051s (1.57x)** |
-| sieve.lua | 0.389s (1.00x) | **0.185s (2.10x)** | 0.220s (1.77x) |
-| skynet.lua | 0.407s (1.00x) | **0.182s (2.24x)** | 0.285s (1.43x) |
-| spectralnorm.lua | 0.339s (1.00x) | **0.020s (16.95x)** | 0.021s (16.14x) |
-| warmup.lua | 0.006s (1.00x) | 0.005s (1.20x) | **0.002s (3.00x)** |
+| 3ddist.lua | 0.369s (1.00x) | 0.062s (5.95x) | **0.028s (13.18x)** |
+| ackermann.lua | 0.188s (1.00x) | 0.026s (7.23x) | **0.018s (10.44x)** |
+| arraysum.lua | 0.305s (1.00x) | **0.086s (3.55x)** | 0.090s (3.39x) |
+| binarytrees.lua | 0.335s (1.00x) | 0.197s (1.70x) | **0.138s (2.43x)** |
+| bubble.lua | 0.294s (1.00x) | **0.015s (19.60x)** | 0.034s (8.65x) |
+| canada.lua | 0.356s (1.00x) | **0.148s (2.41x)** | 0.244s (1.46x) |
+| coro.lua | 0.477s (1.00x) | **0.194s (2.46x)** | 0.387s (1.23x) |
+| fannkuchredux.lua | 2.331s (1.00x) | **0.404s (5.77x)** | 1.175s (1.98x) |
+| fasta.lua | 0.229s (1.00x) | **0.083s (2.76x)** | 0.117s (1.96x) |
+| fib.lua | 0.299s (1.00x) | 0.049s (6.10x) | **0.006s (49.83x)** |
+| hashtable.lua | 0.863s (1.00x) | **0.313s (2.76x)** | 0.395s (2.18x) |
+| json.lua | 0.335s (1.00x) | 1.931s (0.17x) | **0.020s (16.75x)** |
+| knucleotide.lua | 0.105s (1.00x) | **0.069s (1.52x)** | 0.101s (1.04x) |
+| life.lua | 0.301s (1.00x) | 0.062s (4.85x) | **0.061s (4.93x)** |
+| mandelbrot.lua | 0.203s (1.00x) | 0.025s (8.12x) | **0.024s (8.46x)** |
+| nbody.lua | 0.177s (1.00x) | **0.022s (8.05x)** | 0.073s (2.42x) |
+| pi.lua | 0.300s (1.00x) | 0.132s (2.27x) | **0.072s (4.17x)** |
+| ray.lua | 0.342s (1.00x) | **0.019s (18.00x)** | 0.202s (1.69x) |
+| realworld.lua | 0.643s (1.00x) | **0.310s (2.07x)** | 1.053s (0.61x) |
+| regexdna.lua | 0.067s (1.00x) | 0.054s (1.24x) | **0.052s (1.29x)** |
+| sieve.lua | 0.366s (1.00x) | **0.167s (2.19x)** | 0.210s (1.74x) |
+| skynet.lua | 0.403s (1.00x) | 0.167s (2.41x) | **0.139s (2.90x)** |
+| spectralnorm.lua | 0.328s (1.00x) | 0.021s (15.62x) | **0.019s (17.26x)** |
+| warmup.lua | 0.008s (1.00x) | 0.006s (1.33x) | **0.004s (2.00x)** |
 
-> Measured on an Intel® Core™ Ultra 5 125U CPU @ 4.30GHz · Linux · GCC 15.2.0 · Average of 10 runs · clx `--fast` built with AVX2 (`CLX_ARCH=avx2` — the default x86 build is SSE2)
+> Measured on an Intel® Core™ Ultra 5 125U CPU @ 4.30GHz · Linux · GCC 15.2.0 · Average of 10 runs · clx `--fast` built with AVX2 (`CLX_ARCH=avx2`)
 
 ### macOS ARM64
 
