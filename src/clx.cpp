@@ -1177,22 +1177,22 @@ int main(int argc, char* argv[])
         }
 
         if (mode == BuildMode::Object) {
-            cmd = cc.cmd + " /nologo /c " + msvc_opt_flags + msvc_dce_cl + " /std:c++17" + include_opt + " "
+            cmd = cc.cmd + " /nologo /c " + msvc_opt_flags + msvc_dce_cl + " /std:c++20" + include_opt + " "
                 + all_cpp_files + cc_compile_str + fo_arg;
         } else if (mode == BuildMode::Static) {
             std::string lib_out = output_name;
             if (!(lib_out.size() >= 4 && lib_out.compare(lib_out.size() - 4, 4, ".lib") == 0))
                 lib_out += ".lib";
-            cmd = cc.cmd + " /nologo /c " + msvc_opt_flags + msvc_dce_cl + " /std:c++17" + include_opt + " "
+            cmd = cc.cmd + " /nologo /c " + msvc_opt_flags + msvc_dce_cl + " /std:c++20" + include_opt + " "
                 + all_cpp_files + cc_compile_str + fo_arg + " && " + librarian + " /nologo /OUT:\"" + lib_out
                 + "\" " + msvc_obj_files;
         } else {
-            cmd = cc.cmd + " /nologo " + msvc_opt_flags + msvc_dce_cl + " /std:c++17" + include_opt + cc_compile_str
+            cmd = cc.cmd + " /nologo " + msvc_opt_flags + msvc_dce_cl + " /std:c++20" + include_opt + cc_compile_str
                 + " " + all_cpp_files + fo_arg + lib_link + fe_arg + " " + msvc_dce_link + cc_link_str + msvc_stack;
         }
     } else {
         if (mode == BuildMode::Object)
-            cmd = cc.cmd + " -c " + opt_flags + gcc_dce_cl + " -std=c++17" + include_opt + " -fPIC " + all_cpp_files
+            cmd = cc.cmd + " -c " + opt_flags + gcc_dce_cl + " -std=c++20" + include_opt + " -fPIC " + all_cpp_files
                 + " -o \""
                 + (fs::temp_directory_path() / (fs::path(input_files[0]).stem().string() + "_tmp.o")).string() + "\""
                 + cc_options_str;
@@ -1200,24 +1200,24 @@ int main(int argc, char* argv[])
             std::string ext = ".a";
             if (output_name.size() >= ext.size()
                 && output_name.compare(output_name.size() - ext.size(), ext.size(), ext) == 0)
-                cmd = cc.cmd + " -c " + opt_flags + gcc_dce_cl + " -std=c++17" + include_opt + " " + all_cpp_files
+                cmd = cc.cmd + " -c " + opt_flags + gcc_dce_cl + " -std=c++20" + include_opt + " " + all_cpp_files
                     + cc_options_str + " && ar rcs " + output_name + " " + obj_files;
             else
-                cmd = cc.cmd + " -c " + opt_flags + gcc_dce_cl + " -std=c++17" + include_opt + " " + all_cpp_files
+                cmd = cc.cmd + " -c " + opt_flags + gcc_dce_cl + " -std=c++20" + include_opt + " " + all_cpp_files
                     + cc_options_str + " && ar rcs " + output_name + ".a " + obj_files;
         } else {
 #ifdef _WIN32
             std::string ext = ".exe";
             if (output_name.size() >= ext.size()
                 && output_name.compare(output_name.size() - ext.size(), ext.size(), ext) == 0)
-                cmd = cc.cmd + " " + opt_flags + gcc_dce_cl + " -std=c++17" + include_opt + " " + all_cpp_files
+                cmd = cc.cmd + " " + opt_flags + gcc_dce_cl + " -std=c++20" + include_opt + " " + all_cpp_files
                     + cc_options_str + lib_link + gcc_stack + gcc_dce_link + gcc_strip_link + " -o " + output_name;
             else
-                cmd = cc.cmd + " " + opt_flags + gcc_dce_cl + " -std=c++17" + include_opt + " " + all_cpp_files
+                cmd = cc.cmd + " " + opt_flags + gcc_dce_cl + " -std=c++20" + include_opt + " " + all_cpp_files
                     + cc_options_str + lib_link + gcc_stack + gcc_dce_link + gcc_strip_link + " -o " + output_name
                     + ".exe";
 #else
-            cmd = cc.cmd + " " + opt_flags + gcc_dce_cl + " -std=c++17" + include_opt + " " + all_cpp_files
+            cmd = cc.cmd + " " + opt_flags + gcc_dce_cl + " -std=c++20" + include_opt + " " + all_cpp_files
 #ifdef __APPLE__
 
                 + cc_options_str + lib_link + gcc_dce_link + gcc_strip_link + " -o " + output_name;
