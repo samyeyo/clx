@@ -107,11 +107,11 @@ Then compile it to a static library and link it:
 
 ```bash
 # Linux/macOS
-g++ -c -std=c++17 -I/path/to/clx/include my_native_mod.cpp -o my_native_mod.o
+g++ -c -std=c++20 -I/path/to/clx/include my_native_mod.cpp -o my_native_mod.o
 ar rcs my_native_mod.a my_native_mod.o
 
 # Windows (MSVC)
-cl /c /std:c++17 /utf-8 /I.\path\to\clx\include my_native_mod.cpp /Fomy_native_mod.obj
+cl /c /std:c++20 /utf-8 /I.\path\to\clx\include my_native_mod.cpp /Fomy_native_mod.obj
 lib /OUT:my_native_mod.lib my_native_mod.obj
 
 # Link with your Lua program
