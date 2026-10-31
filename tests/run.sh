@@ -114,7 +114,7 @@ NATIVE_SRC="$SCRIPT_DIR/conformance/native_mod.cpp"
 NATIVE_TEST_LUA="$SCRIPT_DIR/conformance/test_native_mod.lua"
 NATIVE_BIN="$SCRIPT_DIR/native_mod_test"
 if [ -f "$NATIVE_SRC" ] && [ -f "$NATIVE_TEST_LUA" ]; then
-    g++ -c -std=c++17 -fPIC -I "$ROOT_DIR/include" -o "$SCRIPT_DIR/native_mod.o" "$NATIVE_SRC" 2>/dev/null
+    g++ -c -std=c++20 -fPIC -I "$ROOT_DIR/include" -o "$SCRIPT_DIR/native_mod.o" "$NATIVE_SRC" 2>/dev/null
     if [ -f "$SCRIPT_DIR/native_mod.o" ]; then
         NATIVE_A="$SCRIPT_DIR/native_mod.a"
         ar rcs "$NATIVE_A" "$SCRIPT_DIR/native_mod.o" 2>/dev/null
@@ -147,7 +147,7 @@ CAPI_SRC="$SCRIPT_DIR/conformance/capi_mod.cpp"
 CAPI_TEST_LUA="$SCRIPT_DIR/conformance/test_capi_mod.lua"
 CAPI_BIN="$SCRIPT_DIR/capi_mod_test"
 if [ -f "$CAPI_SRC" ] && [ -f "$CAPI_TEST_LUA" ]; then
-    g++ -c -std=c++17 -fPIC -I "$ROOT_DIR/include" -o "$SCRIPT_DIR/capi_mod.o" "$CAPI_SRC" 2>/dev/null
+    g++ -c -std=c++20 -fPIC -I "$ROOT_DIR/include" -o "$SCRIPT_DIR/capi_mod.o" "$CAPI_SRC" 2>/dev/null
     if [ -f "$SCRIPT_DIR/capi_mod.o" ]; then
         CAPI_A="$SCRIPT_DIR/capi_mod.a"
         ar rcs "$CAPI_A" "$SCRIPT_DIR/capi_mod.o" 2>/dev/null
