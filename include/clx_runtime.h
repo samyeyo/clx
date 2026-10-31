@@ -102,7 +102,7 @@ void clx_coro_init(CoroutineContext *ctx, void *stack_top, void *entry);
 #define CLX_INLINE_HOT __forceinline
 #endif
 #ifndef CLX_INLINE_COLD
-#define CLX_INLINE_COLD inline __attribute__((noinline))
+#define CLX_INLINE_COLD inline __declspec(noinline)
 #endif
 #ifndef CLX_INLINE
 #define CLX_INLINE inline
@@ -940,8 +940,8 @@ CLX_INLINE_HOT void table_alloc_array(TValue *&arr, ValueType *&types, size_t ca
     types = reinterpret_cast<ValueType *>(mem + cap * sizeof(TValue));
 }
 
-CLX_INLINE_HOT void table_free_array(TValue *&arr, ValueType *&types, const TValue *small) {
-    if (arr && arr != small)
+CLX_INLINE_HOT void table_free_array(TValue *&arr, ValueType *&types, const TValue *small_block) {
+    if (arr && arr != small_block)
         std::free(arr);
     arr = nullptr;
     types = nullptr;
