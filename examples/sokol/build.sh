@@ -10,7 +10,7 @@ case "$(uname -s)" in
     *)      EXTRA_FLAGS="" ;;
 esac
 
-g++ -std=c++17 -Os -fvisibility=hidden -ffunction-sections -fdata-sections -I../../include -I./sokol $EXTRA_FLAGS -c sokol_clx.cpp -o sokol_clx.o
+g++ -std=c++20 -Os -fvisibility=hidden -ffunction-sections -fdata-sections -I../../include -I./sokol $EXTRA_FLAGS -c sokol_clx.cpp -o sokol_clx.o
 case "$(uname -s)" in
     Darwin) strip -x sokol_clx.o 2>/dev/null || true ;;
     *)      strip --strip-unneeded sokol_clx.o 2>/dev/null || true ;;
