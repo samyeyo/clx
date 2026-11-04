@@ -13,6 +13,7 @@
 #include <fstream>
 #include <map>
 #include <set>
+#include <sstream>
 #include <string_view>
 #include <vector>
 
@@ -64,7 +65,8 @@ public:
 
 private:
     const ASTContext &ctx;
-    std::ofstream out;
+    std::ostringstream out;
+    std::string output_path;
     std::vector<LocalVar> locals;
     AnalysisState &state;
 
@@ -73,7 +75,18 @@ private:
 
     //------------------ gc_cells_arg: initializer list of in-scope upvalue cells for GC rooting of escaped closures
     std::string gc_cells_arg(const std::string &exclude = "");
-    uint32_t next_site_id = 0;
+
+    //------------------ CallSiteEntry: one interned call-site descriptor, emitted into the per-TU
+    //------------------ `_sites[]` table instead of a separate static object per site.
+    struct CallSiteEntry {
+        int line;
+        bool is_method;
+        bool name_short;
+    };
+
+    std::vector<CallSiteEntry> call_sites;
+    std::map<uint64_t, uint32_t> call_site_ids;
+    std::string call_site_table();
     bool is_local(std::string_view name, bool &out_is_boxed, std::string_view &out_cpp_name);
 
     //------------------ note_global_ref: records a global read for filtered std registration.
