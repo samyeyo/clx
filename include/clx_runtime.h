@@ -1803,6 +1803,27 @@ template<size_t N> struct Frame : FrameBase {
     Frame &operator=(const Frame &) = delete;
 };
 
+//------------------ CallAdopt — first result of a call plus the exact integer subtype and shadow a
+//------------------ numeric target needs. Generated code calls adopt_call_result() instead of emitting
+//------------------ an inline push loop and three conditional extractions at every single-value call site.
+struct CallAdopt {
+    LValue value;
+    bool is_int;
+    int64_t i64;
+};
+
+//------------------ adopt_call_result: roots every result at the caller's frame watermark (as the inline
+//------------------ push loop did) and returns the first slot. The caller still owns the compact(base, mid).
+template<typename FrameT> CLX_INLINE_HOT CallAdopt adopt_call_result(FrameT &fr, const MultiValue &mv) {
+    for (size_t i = 0; i < mv.count; ++i)
+        fr.push(mv[i]);
+    CallAdopt r;
+    r.is_int = mv.count > 0 && mv[0].type == ValueType::Int64;
+    r.value = (mv.count > 0) ? mv[0] : LValue();
+    r.i64 = r.is_int ? mv[0].val.payload.i64 : 0;
+    return r;
+}
+
 //------------------ FrameGuard — RAII watermark save/restore for one block scope (unwind-safe by construction)
 struct FrameGuard {
     FrameBase *f;
