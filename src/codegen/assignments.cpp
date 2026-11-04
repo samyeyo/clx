@@ -111,6 +111,12 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
         }
     }
 
+    //------------------ single_adopt: one target fed by one trailing call. Its result is adopted by
+    //------------------ the shared runtime helper instead of an inline push loop plus three
+    //------------------ conditional extractions at the site.
+    bool single_adopt = t_count == 1 && v_count == 1 && last_is_call && tuple_fill_n == 0
+        && ctx.nodes[ctx.block_statements[first_v]].type == NodeType::CallExpression;
+
     if (is_local && t_count == 1 && v_count == 1) {
         uint32_t _dt = ctx.block_statements[first_t];
         uint32_t _dv = ctx.block_statements[first_v];
@@ -1407,9 +1413,13 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
                     out << ";\n";
                     state.expect_multivalue = false;
                 }
+                if (single_adopt) {
+                    out << "auto _ad_" << node_idx << " = clx::adopt_call_result(_fr, _mret_" << node_idx << ");\n";
+                } else {
                 out << "for (size_t _rg_mri = 0; _rg_mri < _mret_" << node_idx << ".count; ++_rg_mri) {\n";
                 out << "_fr.push(_mret_" << node_idx << "[_rg_mri]);\n";
                 out << "}\n";
+                }
             } else {
                 bool t_is_n = false;
                 bool v_is_n = yields_number(ctx, state, v_idx, nullptr, state.current_fast_func);
@@ -1575,9 +1585,14 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
                 //------------------ falling off its end): guard the first-slot read so the target gets
                 //------------------ nil instead of a stale slot. Raw inline storage (no nil defaults)
                 //------------------ makes the unguarded read observable; the branch predicts perfectly.
-                val_str = "((0 < _mret_" + std::to_string(node_idx) + ".count) ? _mret_"
-                    + std::to_string(node_idx) + "[0] : clx::LValue())";
+                if (single_adopt) {
+                    val_str = "_ad_" + std::to_string(node_idx) + ".value";
+                    num_str = val_str + ".as_number()";
+                } else {
+                    val_str = "((0 < _mret_" + std::to_string(node_idx) + ".count) ? _mret_" + std::to_string(node_idx)
+                        + "[0] : clx::LValue())";
                 num_str = val_str + ".as_number()";
+                }
             } else {
                 if (tmp_is_native[i]) {
                     num_str = "_tmp_" + std::to_string(node_idx) + "_" + std::to_string(i);
@@ -1640,13 +1655,19 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
                                         out << "_ii_l_" << name << " = 0;\n";
                                 }
                             } else if (last_is_call && i + 1 >= v_count) {
+                                if (single_adopt) {
+                                    out << "_intf_l_" << name << " = _ad_" << node_idx << ".is_int;\n";
+                                    if (sit->has_ii)
+                                        out << "_ii_l_" << name << " = _ad_" << node_idx << ".i64;\n";
+                                } else {
                                 std::string mi = std::to_string(i) + " - " + std::to_string(v_count - 1);
                                 out << "_intf_l_" << name << " = ((" << mi << ") < _mret_" << node_idx
                                     << ".count && _mret_" << node_idx << "[" << mi
                                     << "].type == clx::ValueType::Int64);\n";
                                 if (sit->has_ii)
-                                    out << "_ii_l_" << name << " = _intf_l_" << name << " ? _mret_" << node_idx << "["
-                                        << mi << "].val.payload.i64 : 0;\n";
+                                        out << "_ii_l_" << name << " = _intf_l_" << name << " ? _mret_" << node_idx
+                                            << "[" << mi << "].val.payload.i64 : 0;\n";
+                                }
                             } else if (i >= v_count) {
                                 out << "_intf_l_" << name << " = false;\n";
                                 if (sit->has_ii)
