@@ -109,7 +109,8 @@ for %%f in (socket.lua ltn12.lua mime.lua) do (
     if errorlevel 1 (echo Error: could not stage %%f & exit /b 1)
 )
 if not exist "%BUILD%\socket" mkdir "%BUILD%\socket"
-for %%f in (url.lua headers.lua http.lua tp.lua) do (
+:: tp.lua is only needed by socket.smtp - weather only pulls socket.http
+for %%f in (url.lua headers.lua http.lua) do (
     copy /Y "%SRC%\%%f" "%BUILD%\socket\" >nul
     if errorlevel 1 (echo Error: could not stage %%f & exit /b 1)
 )
@@ -126,7 +127,7 @@ if not "%CSTYLE%"=="msvc" set WS2_32=-lws2_32
 set MSVC_SIZE=/Os /Oi /Zc:inline /link
 if not "%CSTYLE%"=="msvc" set MSVC_SIZE=
 pushd "%BUILD%"
-"%CLX%" ../weather.lua socket.lua socket/url.lua socket/headers.lua socket/http.lua socket/tp.lua ltn12.lua mime.lua dkjson.lua --modules socket.core,mime.core %MSVC_SIZE% %WS2_32% -o weather.exe
+"%CLX%" ../weather.lua socket.lua socket/url.lua socket/headers.lua socket/http.lua ltn12.lua mime.lua dkjson.lua --minimal --modules string,table,math,io,os,socket.core,mime.core %MSVC_SIZE% %WS2_32% -o weather.exe
 set CLX_EXIT=!errorlevel!
 popd
 if not "!CLX_EXIT!"=="0" exit /b !CLX_EXIT!

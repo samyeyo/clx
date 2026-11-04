@@ -66,16 +66,18 @@ done
 # --- 3. stage the Lua side; the directory layout gives the dotted require names ---
 mkdir -p "$BUILD/socket"
 cp "$SRC/socket.lua" "$SRC/ltn12.lua" "$SRC/mime.lua" "$BUILD/"
-cp "$SRC/url.lua" "$SRC/headers.lua" "$SRC/http.lua" "$SRC/tp.lua" "$BUILD/socket/"
+# tp.lua is only needed by socket.smtp — weather only pulls socket.http
+cp "$SRC/url.lua" "$SRC/headers.lua" "$SRC/http.lua" "$BUILD/socket/"
 cp ../../benchmarks/dkjson.lua "$BUILD/"
 
 # --- 4. compile and link the example ---
 echo "Compiling weather..."
 cd "$BUILD"
 "$CLX" ../weather.lua \
-    socket.lua socket/url.lua socket/headers.lua socket/http.lua socket/tp.lua \
+    socket.lua socket/url.lua socket/headers.lua socket/http.lua \
     ltn12.lua mime.lua dkjson.lua \
-    --modules socket.core,mime.core \
+    --minimal \
+    --modules string,table,math,io,os,socket.core,mime.core \
     $SIZE_FLAGS \
     -o weather
 
