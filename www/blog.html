@@ -1087,6 +1087,10 @@
                 <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect><path d="M9 2v2"></path><path d="M15 2v2"></path><path d="M9 20v2"></path><path d="M15 20v2"></path><path d="M2 9h2"></path><path d="M2 15h2"></path><path d="M20 9h2"></path><path d="M20 15h2"></path></svg></span> Native Lua Compilation
             </button>
 
+            <button class="nav-item" data-section="weather-cli" role="tab" aria-selected="false" aria-controls="weather-cli">
+                <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 16.2A4.5 4.5 0 0 0 18 7.5h-1.3A6 6 0 1 0 5 15.5"></path><path d="M8 19v2"></path><path d="M12 17v4"></path><path d="M16 19v2"></path></svg></span> Weather CLI
+            </button>
+
             <div class="sidebar-footer">
                 © 2026 - Tine Samir<br>
                 <a href="https://github.com/samyeyo/clx" target="_blank" rel="noopener noreferrer">
@@ -1358,6 +1362,92 @@ utils.lua</div>
                     <p>It isn't an attempt to replace every Lua implementation, and it isn't a claim that native compilation is always the right answer. It is simply an attempt to explore what Lua can become when the language is compiled directly into a native program and supported by a dedicated native runtime.</p>
 
                     <p>After spending years packaging Lua VMs into applications, there is something genuinely satisfying about being able to compile a Lua program and know that, when I hand somebody the resulting executable, I'm handing them a native program rather than an application whose execution still depends on a Lua interpreter.</p>
+                </div>
+            </section>
+
+            <section id="weather-cli" class="section" role="tabpanel" aria-labelledby="weather-cli">
+                <h2>
+                    <span class="section-title-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 16.2A4.5 4.5 0 0 0 18 7.5h-1.3A6 6 0 1 0 5 15.5"></path><path d="M8 19v2"></path><path d="M12 17v4"></path><path d="M16 19v2"></path></svg></span>
+                    Let's Build a Weather CLI in Lua
+                </h2>
+                <div class="post-meta"><span>November 2026</span><span class="dot">·</span><span>7 min read</span></div>
+
+                <div class="doc-section">
+                    <p>One of the things I wanted to demonstrate with clx 0.5.0 was that compiling a Lua program doesn't mean giving up the binary/lua modules that already exist in the Lua ecosystem. To make that a little more concrete, I put together a small weather command-line application using LuaSocket and dkjson.</p>
+
+                    <p>The interesting part is that we can start by running the program with an ordinary Lua interpreter. Only after that do we bring clx into the picture and turn the same application into a standalone executable.</p>
+
+                    <h3>Starting with regular Lua</h3>
+                    <p>The application uses <strong>LuaSocket</strong> to make HTTP requests and <strong>dkjson</strong> to decode the JSON responses. It obtains an approximate location from the public IP address, then uses the Open-Meteo API to retrieve the weather forecast. You can also provide coordinates yourself.</p>
+
+                    <p>First, install the dependencies with LuaRocks:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">bash</span><span>Dependencies</span></div>
+                        <div class="code-body">luarocks install luasocket
+luarocks install dkjson</div>
+                    </div>
+
+                    <p>Clone the clx repository and move to the example directory:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">bash</span><span>Get the example</span></div>
+                        <div class="code-body">git clone https://github.com/samyeyo/clx
+cd clx/examples/weather</div>
+                    </div>
+
+                    <p>Now run it just like any other Lua script:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">bash</span><span>Run with Lua</span></div>
+                        <div class="code-body">lua weather.lua</div>
+                    </div>
+
+                    <p>The program detects an approximate location from your IP address. If you prefer, pass latitude, longitude and a location name on the command line:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">bash</span><span>Specify a location</span></div>
+                        <div class="code-body">lua weather.lua 48.85 2.35 "Paris"</div>
+                    </div>
+
+                    <p>At this point, there is nothing specific to clx. It is a regular Lua application using familiar Lua libraries.</p>
+
+                    <h3>How to compile weather as a standalone executable ?</h3>
+                    <p>LuaSocket is not purely written in Lua. Some of its functionality is implemented by native C modules, notably <span class="inline-code">socket.core</span> and <span class="inline-code">mime.core</span>. The rest of the library consists of pure Lua modules, and the application also uses dkjson.</p>
+
+                    <p>This is where the Lua C API compatibility layer introduced in clx 0.5.0 becomes useful. The native LuaSocket components can be built from their original C sources against clx's compatibility headers.<br><b>The C source code does not need to be rewritten</b>, although the modules do need to be recompiled for clx.</p>
+
+                    <p>The pure Lua parts of LuaSocket and dkjson are included in the clx build alongside the application. The native components are linked in as modules.</p>
+
+                    <h3>Build the standalone executable</h3>
+                    <p>The example includes build scripts for the supported platforms. On Linux or macOS, run:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">bash</span><span>Linux / macOS</span></div>
+                        <div class="code-body">./build.sh</div>
+                    </div>
+
+                    <p>On Windows, use a <span class="inline-code">x64 Native Tools Command Prompt</span> for Visual Studio and run:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">bash</span><span>Windows</span></div>
+                        <div class="code-body">build.bat</div>
+                    </div>
+
+                    <p>For reference, the clx invocation that brings the Lua sources and native modules together looks like this:</p>
+                    <div class="code-block">
+                        <div class="code-header"><span class="lang">bash</span><span>Compile with clx</span></div>
+                        <div class="code-body">clx ../weather.lua \
+    socket.lua socket/url.lua socket/headers.lua socket/http.lua socket/tp.lua \
+    ltn12.lua mime.lua dkjson.lua \
+    --modules socket.core,mime.core \
+    -o weather</div>
+                    </div>
+
+                    <p>The build scripts take care of preparing the native LuaSocket components and staging the Lua modules before invoking clx.</p>
+
+                    <h3>A standalone weather application</h3>
+                    <p>The resulting executable is approximately <strong>890 KB</strong>. It contains the application, the required LuaSocket components and dkjson. There is no need to install Lua separately or ship an external Lua dynamic library alongside it.</p>
+
+                    <p>And that is really the point of this example. We started with an ordinary Lua script and familiar Lua libraries, ran it with the standard interpreter, and then compiled it into a standalone native executable <i>without rewriting the application.</i></p>
+
+                    <p>The C modules did need to be rebuilt against clx's Lua C API compatibility headers, but <i>their original C source is reused without modifications.</i> For me, this is an important step toward making clx useful with the existing Lua ecosystem rather than only with code written specifically for clx.</p>
+
+                    <p>The complete example, including the source code and platform build scripts, is available in the <a href="https://github.com/samyeyo/clx/tree/main/examples/weather" target="_blank" rel="noopener noreferrer">clx repository</a>.</p>
                 </div>
             </section>
         </div>
