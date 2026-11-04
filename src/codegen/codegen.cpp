@@ -111,9 +111,9 @@ bool CodeEmitter::var_reassigned_non_int(std::string_view name, uint32_t block_i
 }
 
 //------------------ CodeEmitter: constructor initializes output stream and binds analysis results
-CodeEmitter::CodeEmitter(const ASTContext &context, const char *output_path, AnalysisState &analysis)
+CodeEmitter::CodeEmitter(const ASTContext &context, const char *path, AnalysisState &analysis)
     : ctx(context)
-    , out(output_path)
+    , output_path(path)
     , state(analysis) {
     out << std::setprecision(17);
 }
@@ -360,18 +360,39 @@ bool CodeEmitter::unboxed_arg_ok(uint32_t arg_idx, int depth) {
     return false;
 }
 
-//------------------ emit_call_site: emits one static CallSite descriptor and returns its address expression
+//------------------ emit_call_site: interns a (line, flags) descriptor and returns its table address
 std::string CodeEmitter::emit_call_site(int line, bool is_method, bool name_short) {
-    uint32_t id = next_site_id++;
-    out << "[[maybe_unused]] static constexpr clx::CallSite _cs_" << id << " = { \"" << ctx.filename << "\", " << line
-        << ", "
-        << (is_method ? "true" : "false") << ", " << (name_short ? "true" : "false") << " };\n";
-    return "&_cs_" + std::to_string(id);
+    uint64_t key
+        = (static_cast<uint64_t>(static_cast<uint32_t>(line)) << 2) | (is_method ? 1u : 0u) | (name_short ? 2u : 0u);
+    auto it = call_site_ids.find(key);
+    uint32_t id;
+    if (it != call_site_ids.end()) {
+        id = it->second;
+    } else {
+        id = static_cast<uint32_t>(call_sites.size());
+        call_sites.push_back({ line, is_method, name_short });
+        call_site_ids.emplace(key, id);
+    }
+    return "&_sites[" + std::to_string(id) + "]";
+}
+
+//------------------ call_site_table: the interned CallSite array shared by every site in this TU
+std::string CodeEmitter::call_site_table() {
+    if (call_sites.empty())
+        return std::string();
+    std::string t = "static constexpr clx::CallSite _sites[" + std::to_string(call_sites.size()) + "] = {\n";
+    for (const auto &s : call_sites) {
+        t += "    { \"" + ctx.filename + "\", " + std::to_string(s.line) + ", " + (s.is_method ? "true" : "false")
+            + ", " + (s.name_short ? "true" : "false") + " },\n";
+    }
+    t += "};\n\n";
+    return t;
 }
 
 //------------------ emit: generates C++ code for the AST rooted at root_node
 void CodeEmitter::emit(uint32_t root_node, std::string_view module_name) {
-    next_site_id = 0;
+    call_sites.clear();
+    call_site_ids.clear();
     state.native_numbers.clear();
     state.string_pool.clear();
     state.table_presize.clear();
@@ -583,6 +604,8 @@ void CodeEmitter::emit(uint32_t root_node, std::string_view module_name) {
     out << "#include <clx.h>\n";
     out << "#include <atomic>\n\n";
 
+    size_t site_table_pos = out.str().size();
+
     if (!state.string_pool.empty()) {
         out << "static clx::LValue cstr_[" << state.string_pool.size() << "];\n";
     }
@@ -687,6 +710,13 @@ void CodeEmitter::emit(uint32_t root_node, std::string_view module_name) {
     }
     out << "    return clx::LValue();\n";
     out << "}\n";
+
+    std::string generated = out.str();
+    std::string table = call_site_table();
+    if (!table.empty())
+        generated.insert(site_table_pos, table);
+    std::ofstream fout(output_path, std::ios::binary | std::ios::trunc);
+    fout << generated;
 }
 
 //------------------ emit_node: dispatches a single AST node to its emitXxx method
