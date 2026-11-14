@@ -77,38 +77,38 @@ LValue table_get_slow(LState *L, const LValue &obj, const LValue &key) {
         mt = ud->metatable;
     } else if (obj.type == ValueType::String) {
         mt = L->string_metatable;
+    } else {
+        //------------------ numbers, booleans and nil can carry a type metatable (debug.setmetatable)
+        mt = L->type_metatables[type_meta_index(obj.type)];
+        if (!mt)
+            throw_index_error(L, obj);
+    }
+
+    //------------------ stock follows a chain of __index tables at most MAXTAGLOOP times and reports
+    //------------------ a loop instead of recursing without bound
+    LValue cur = obj;
+    for (int loop = 0; loop < 2000; ++loop) {
         if (!mt)
             return LValue();
         LValue index = mt->gettable(L->str_index);
         if (index.type == ValueType::Nil)
             return LValue();
-        if (index.type == ValueType::Table)
-            return table_get(L, index, key);
         if (index.type == ValueType::Function) {
-            LValue args[2] = { obj, key };
+            LValue args[2] = { cur, key };
             static constexpr CallSite index_site = { "__index", 0, false, false };
             MultiValue mv = call_function_rooted(L, index, args, 2, &index_site);
             return mv.count > 0 ? mv[0] : LValue();
         }
-        return LValue();
-    } else {
-        throw_index_error(L, obj);
+        if (index.type != ValueType::Table)
+            return LValue();
+        LTable *next = static_cast<LTable *>(index.as_pointer());
+        LValue direct2 = next->get_value(L, key);
+        if (direct2.type != ValueType::Nil)
+            return direct2;
+        cur = index;
+        mt = tbl_metatable(next);
     }
-
-    if (!mt)
-        return LValue();
-    LValue index = mt->gettable(L->str_index);
-    if (index.type == ValueType::Nil)
-        return LValue();
-    if (index.type == ValueType::Function) {
-        LValue args[2] = { obj, key };
-        static constexpr CallSite index_site = { "__index", 0, false, false };
-        MultiValue mv = call_function_rooted(L, index, args, 2, &index_site);
-        return mv.count > 0 ? mv[0] : LValue();
-    }
-    if (index.type == ValueType::Table)
-        return table_get(L, index, key);
-    return LValue();
+    throw_runtime_error(file_line_prefix(L) + "'__index' chain too long; possible loop");
 }
 
 //------------------ LTable::LTable — table constructor
@@ -240,8 +240,21 @@ LValue LTable::gettable(const LValue &key) {
     }
 }
 
+//------------------ store_error_prefix: the caller's file:line prefix for a rejected table key, empty when
+//------------------ no position is active
+static std::string store_error_prefix() {
+    return clx_current_L ? file_line_prefix(clx_current_L) : std::string();
+}
+
 //------------------ LTable::settable — set value by key
 void LTable::settable(const LValue &key, const LValue &val) {
+    //------------------ stock luaV_finishset rejects a NaN key; without this it silently created an
+    //------------------ unreachable entry (NaN never equals itself, so the lookup could never find it)
+    if (key.type == Double && std::isnan(key.val.payload.f64))
+        throw_runtime_error(store_error_prefix() + "table index is NaN");
+    //------------------ a nil key is refused the same way stock refuses it
+    if (key.type == Nil)
+        throw_runtime_error(store_error_prefix() + "table index is nil");
     if (clx_current_L) {
         gc_barrier_table(clx_current_L, this, val);
         if (key.is_gc_obj())
@@ -632,62 +645,69 @@ void LTable::op_direct(LState *L, const LValue &obj, const LValue &key, double a
 
 //------------------ LTable::get_value — get with metamethod fallback
 LValue LTable::get_value(LState *L, const LValue &key) {
-    LValue ptr = gettable(key);
-    if (ptr.type != Nil)
-        return ptr;
-
-    if (ext && ext->metatable) {
-        LValue index_key = L->str_index;
-        LValue index_ptr = ext->metatable->gettable(index_key);
-
-        if (index_ptr.type != Nil) {
-            if (index_ptr.type == Table) {
-                LTable *parent = static_cast<LTable *>(index_ptr.as_pointer());
-                return parent->get_value(L, key);
-            } else if (index_ptr.type == Function) {
-                LValue args[2];
-                args[0] = LValue(this);
-                args[1] = key;
-
-                static constexpr CallSite index_ptr_site = { __FILE__, __LINE__, false, false };
-                MultiValue ret = call_function_rooted(L, index_ptr, args, 2, &index_ptr_site);
-                return ret.count > 0 ? ret[0] : LValue();
-            }
+    //------------------ the __index chain is walked iteratively; stock bounds it with MAXTAGLOOP and
+    //------------------ reports a loop instead of overflowing the C stack (a.__index = a)
+    LTable *cur = this;
+    for (int loop = 0;; ++loop) {
+        if (loop >= 2000)
+            throw_runtime_error(file_line_prefix(L) + "'__index' chain too long; possible loop");
+        LValue ptr = cur->gettable(key);
+        if (ptr.type != Nil)
+            return ptr;
+        if (!cur->ext || !cur->ext->metatable)
+            return LValue();
+        LValue index_ptr = cur->ext->metatable->gettable(L->str_index);
+        if (index_ptr.type == Table) {
+            cur = static_cast<LTable *>(index_ptr.as_pointer());
+            continue;
         }
+        if (index_ptr.type == Function) {
+            LValue args[2];
+            args[0] = LValue(cur);
+            args[1] = key;
+
+            static constexpr CallSite index_ptr_site = { __FILE__, __LINE__, false, false };
+            MultiValue ret = call_function_rooted(L, index_ptr, args, 2, &index_ptr_site);
+            return ret.count > 0 ? ret[0] : LValue();
+        }
+        return LValue();
     }
-    return LValue();
 }
 
 //------------------ LTable::set_value — set with metamethod fallback
 void LTable::set_value(LState *L, const LValue &key, const LValue &val) {
-    LValue ptr = gettable(key);
-    if (ptr.type != Nil) {
-        settable(key, val);
-        return;
-    }
-
-    if (ext && ext->metatable) {
-        LValue newindex_key = L->str_newindex;
-        LValue newindex_ptr = ext->metatable->gettable(newindex_key);
-
-        if (newindex_ptr.type != Nil) {
-            if (newindex_ptr.type == Table) {
-                LTable *parent = static_cast<LTable *>(newindex_ptr.as_pointer());
-                parent->set_value(L, key, val);
-                return;
-            } else if (newindex_ptr.type == Function) {
-                LValue args[3];
-                args[0] = LValue(this);
-                args[1] = key;
-                args[2] = val;
-
-                static constexpr CallSite newindex_ptr_site = { __FILE__, __LINE__, false, false };
-                call_function_rooted(L, newindex_ptr, args, 3, &newindex_ptr_site);
-                return;
-            }
+    //------------------ a chain of __newindex tables is followed at most MAXTAGLOOP times; stock
+    //------------------ reports a loop instead of recursing without bound (a.__newindex = a)
+    LTable *cur = this;
+    for (int loop = 0;; ++loop) {
+        if (loop >= 2000)
+            throw_runtime_error(file_line_prefix(L) + "'__newindex' chain too long; possible loop");
+        LValue ptr = cur->gettable(key);
+        if (ptr.type != Nil) {
+            cur->settable(key, val);
+            return;
         }
+
+        if (!cur->ext || !cur->ext->metatable)
+            break;
+        LValue newindex_ptr = cur->ext->metatable->gettable(L->str_newindex);
+        if (newindex_ptr.type == Table) {
+            cur = static_cast<LTable *>(newindex_ptr.as_pointer());
+            continue;
+        }
+        if (newindex_ptr.type == Function) {
+            LValue args[3];
+            args[0] = LValue(cur);
+            args[1] = key;
+            args[2] = val;
+
+            static constexpr CallSite newindex_ptr_site = { __FILE__, __LINE__, false, false };
+            call_function_rooted(L, newindex_ptr, args, 3, &newindex_ptr_site);
+            return;
+        }
+        break;
     }
-    settable(key, val);
+    cur->settable(key, val);
 }
 
 //------------------ LTable::bind — bind constant value
