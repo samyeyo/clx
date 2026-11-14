@@ -20,6 +20,43 @@ static constexpr const char *std_libs[] = { "print", "require", "error", "assert
     "rawequal", "collectgarbage", "load", "loadfile", "_G", "_VERSION", "warn", "math", "table", "string", "os",
     "coroutine", "package", "debug", "io", "utf8" };
 
+//------------------ parser_parse_numeral: Lua numeral -> int64, false when the text is not an integer constant
+//------------------ (hex wraps modulo 2^64 as in l_str2int, decimal overflows fall through to a float)
+static bool parser_parse_numeral(std::string_view text, int64_t &out) {
+    size_t i = 0;
+    if (i < text.size() && (text[i] == '-' || text[i] == '+'))
+        i++;
+    bool is_hex = (i + 1 < text.size() && text[i] == '0' && (text[i + 1] == 'x' || text[i + 1] == 'X'));
+    if (is_hex)
+        i += 2;
+    if (i >= text.size())
+        return false;
+    uint64_t acc = 0;
+    for (; i < text.size(); i++) {
+        char c = text[i];
+        unsigned digit;
+        if (c >= '0' && c <= '9')
+            digit = static_cast<unsigned>(c - '0');
+        else if (is_hex && c >= 'a' && c <= 'f')
+            digit = static_cast<unsigned>(c - 'a' + 10);
+        else if (is_hex && c >= 'A' && c <= 'F')
+            digit = static_cast<unsigned>(c - 'A' + 10);
+        else
+            return false;
+        if (is_hex) {
+            acc = acc * 16u + digit;
+        } else {
+            if (acc > (UINT64_MAX - digit) / 10u)
+                return false;
+            acc = acc * 10u + digit;
+            if (acc > static_cast<uint64_t>(INT64_MAX))
+                return false;
+        }
+    }
+    out = static_cast<int64_t>(acc);
+    return true;
+}
+
 //------------------ PARSER: constructor - initializes parser with lexer and AST context, seeds std lib symbols
 Parser::Parser(const char *source, const char *filename, ASTContext &context)
     : lexer(source, filename)
@@ -83,6 +120,11 @@ SymbolType Parser::resolve_symbol(std::string_view name, int line, bool &out_is_
             }
             return it->type;
         }
+    }
+    //------------------ _ENV is an implicit outer local of every chunk, so it is never a free name
+    if (name == "_ENV") {
+        out_is_global = true;
+        return SymbolType::ExplicitGlobal;
     }
     if (implicit_globals.back() == ImplicitGlobalMode::None) {
         throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(line)
@@ -184,23 +226,15 @@ uint32_t Parser::parse_primary() {
         return add_node(node);
     }
     if (current_token.type == TokenType::TokNumber) {
-        bool is_float = (current_token.text.find('.') != std::string_view::npos
-            || current_token.text.find('e') != std::string_view::npos
-            || current_token.text.find('E') != std::string_view::npos);
         ASTNode node;
         node.line = current_token.line;
-        if (is_float) {
+        int64_t ival = 0;
+        if (parser_parse_numeral(current_token.text, ival)) {
+            node.type = NodeType::Integer;
+            node.as.integer.val = ival;
+        } else {
             node.type = NodeType::Number;
             node.as.number.val = current_token.number_value;
-        } else {
-            node.type = NodeType::Integer;
-            int64_t ival = 0;
-            const char *nstart = current_token.text.data();
-            const char *nstop = nstart + current_token.text.size();
-            bool is_hex = (current_token.text.size() > 2 && nstart[0] == '0' && (nstart[1] == 'x' || nstart[1] == 'X'));
-            const char *digits = is_hex ? nstart + 2 : nstart;
-            auto [p, ec] = std::from_chars(digits, nstop, ival, is_hex ? 16 : 10);
-            node.as.integer.val = ival;
         }
         advance();
         return add_node(node);
@@ -268,6 +302,26 @@ uint32_t Parser::parse_primary() {
 //------------------ PARSER: parse_postfix_expression - parses method calls, index access, function calls
 uint32_t Parser::parse_postfix_expression() {
     uint32_t expr = parse_primary();
+    //------------------ stock's suffixedexp only extends a NAME or a parenthesized expression: `{}.x` and
+    //------------------ `function() end()` are syntax errors, and a constructor followed by `(` on the next
+    //------------------ line starts a new statement instead of calling the constructor
+    if (expr < ctx.nodes.size()) {
+        NodeType base_type = ctx.nodes[expr].type;
+        if (base_type != NodeType::Identifier && base_type != NodeType::ParenExpression) {
+            switch (current_token.type) {
+            case TokenType::TokString:
+            case TokenType::TokLBrace:
+            case TokenType::TokDot:
+            case TokenType::TokLBracket:
+            case TokenType::TokColon:
+                throw std::runtime_error("Error: " + ctx.filename + ":" + std::to_string(current_token.line)
+                    + ": unexpected symbol near '" + std::string(current_token.text) + "'");
+            default:
+                break;
+            }
+            return expr;
+        }
+    }
     while (true) {
         if (current_token.type == TokenType::TokString || current_token.type == TokenType::TokLBrace) {
             int line = current_token.line;
@@ -815,6 +869,11 @@ uint32_t Parser::parse_statement() {
             implicit_globals.back() = ImplicitGlobalMode::None;
 
             std::vector<uint32_t> idents;
+            //------------------ the names enter scope only after the initializer is parsed (stock
+            //------------------ globalnames bumps nactvar afterwards), so `global a = a` reads the
+            //------------------ enclosing binding for the right-hand side
+            std::vector<std::pair<std::string_view, SymbolType>> pending_symbols;
+            std::vector<uint32_t> pending_nodes;
             do {
                 if (current_token.type != TokenType::TokIdent)
                     throw std::runtime_error(
@@ -847,7 +906,8 @@ uint32_t Parser::parse_statement() {
 
                 SymbolType sym_type
                     = (local_attr == Attribute::Const) ? SymbolType::ConstGlobal : SymbolType::ExplicitGlobal;
-                add_symbol(name, sym_type, id_idx);
+                pending_symbols.push_back({ name, sym_type });
+                pending_nodes.push_back(id_idx);
 
             } while (current_token.type == TokenType::TokComma && (advance(), true));
 
@@ -858,6 +918,9 @@ uint32_t Parser::parse_statement() {
                     values.push_back(parse_expression());
                 } while (current_token.type == TokenType::TokComma && (advance(), true));
             }
+
+            for (size_t _si = 0; _si < pending_symbols.size(); ++_si)
+                add_symbol(pending_symbols[_si].first, pending_symbols[_si].second, pending_nodes[_si]);
 
             uint32_t first_id = ctx.block_statements.size();
             for (auto id : idents)
