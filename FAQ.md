@@ -88,13 +88,13 @@ clx script.lua --dynamic --output script
 
 The generated program then links the embedded Lua VM. Source passed to `load`, `loadfile`, or `dofile` executes in that VM and crosses the clx/VM bridge when it calls AOT functions or returns values. Without `--dynamic`—and in `--minimal` builds—the loader functions are not registered.
 
-The clx AOT runtime registers `string.dump()` but it always throws `string.dump not supported`, and it does not register the `debug` module at all. Dynamic code runs in the embedded VM and uses its own standard libraries; see [`doc/dynamic-lua.md`](doc/dynamic-lua.md) for the environment and bridge boundaries.
+`string.dump` and `debug` do not depend on `--dynamic` (see the next question). Dynamic code runs in the embedded VM and uses its own standard libraries; see [`doc/dynamic-lua.md`](doc/dynamic-lua.md) for the environment and bridge boundaries.
 
 ---
 
 ## Does dynamic Lua provide string.dump() and debug?
 
-The clx AOT runtime does not expose a working `string.dump()` (it exists but always throws) or a `debug` global. When compiled with `--dynamic`, however, loaded code executes in the embedded Lua VM, which contains Lua’s own standard libraries: the default bridge environment copies selected VM globals (including `string`, which has a real `string.dump` that works on VM closures) but does not copy `debug`. Consult [Dynamic Lua](doc/dynamic-lua.md) for the boundary details.
+Yes, both work in every build mode, with one caveat each. `string.dump` of a compiled or C function returns a callable snapshot instead of bytecode — only VM-loaded functions dump real bytecode — and `debug` is present, but the entries that need frame or line tables (`getlocal`, `setlocal`, `getinfo`, `sethook`/`gethook`) raise. Under `--dynamic`, a loaded chunk sees the embedded VM's own `string` and `debug`, so a real `string.dump` and the complete `debug` are reachable there. Consult [Dynamic Lua](doc/dynamic-lua.md) for the boundary details and [Lua 5.5 compatibility](doc/compatibility.md#the-debug-library) for the per-entry status.
 
 ---
 
