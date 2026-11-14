@@ -9,7 +9,7 @@
 
 Cross-platform ahead-of-time Lua compiler
 
-![Lua 5.5](https://img.shields.io/badge/Lua-5.5-E65100?logo=lua&logoColor=white)
+![Lua 5.5.1](https://img.shields.io/badge/Lua-5.5.1-E65100?logo=lua&logoColor=white)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-1565C0?logo=cplusplus&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/license-MIT-4CAF50?logo=opensourceinitiative&logoColor=white)
 [![ko-fi](https://img.shields.io/badge/Ko--fi-Support%20me-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/samirtine)
@@ -34,7 +34,7 @@ Hello clx!
 
 ## What makes clx useful
 
-- **Just write Lua.** clx targets Lua 5.5, so your code works like ordinary Lua.
+- **Just write Lua.** clx targets Lua 5.5.1, so your code works like ordinary Lua.
 - **Fast native speed** — your scripts are compiled to native machine code.
 - **Efficient memory management** — a generational garbage collector tuned for short-lived data.
 - **Standalone binaries** — no interpreter or extra runtime to install alongside your program.
@@ -61,6 +61,8 @@ A Mandelbrot viewer written in Lua and compiled into a standalone native executa
 ## Project status
 
 clx is currently in **beta**. It can already compile real Lua applications, and compatibility and performance work continues.
+
+> Compatibility is tracked against the official Lua 5.5.1 test suite: compiled binaries pass all 29 test files, apart from a few assertions that only an interpreter can satisfy.
 
 ## Requirements
 
