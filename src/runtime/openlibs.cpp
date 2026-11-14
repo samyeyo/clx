@@ -19,7 +19,7 @@ static void register_loaded_builtins(LState *L) {
         return;
     LTable *lt = static_cast<LTable *>(loaded.as_pointer());
 
-    static constexpr const char *kModules[] = { "string", "table", "math", "io", "os", "utf8", "coroutine" };
+    static constexpr const char *kModules[] = { "string", "table", "math", "io", "os", "utf8", "coroutine", "debug" };
     for (const char *name : kModules) {
         LValue lib = get_global(L, name);
         if (lib.type == ValueType::Table)

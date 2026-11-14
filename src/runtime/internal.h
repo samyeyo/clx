@@ -28,6 +28,16 @@ extern void (*clx_io_write_ptr)(FILE *fp, const char *p, size_t n);
 //------------------ VM-side boxes for native closures); when null, string.dump throws unsupported.
 extern MultiValue (*clx_string_dump_hook)(LState *L, const LValue *args, size_t count);
 
+//------------------ debug.getupvalue bridge: assigned by the embedded-VM layer when linked with
+//------------------ --dynamic so upvalue lookups on VM closures go to the Lua debug API instead of
+//------------------ the clx closure cell array. Null (returns false) in plain builds.
+extern bool (*clx_vm_debug_upvalue_hook)(LState *L, LHeader *fn, int64_t n, LValue &name, LValue &value);
+
+//------------------ debug.getinfo bridge: assigned by the embedded-VM layer when linked with --dynamic, so
+//------------------ a VM closure (a chunk loaded at run time) is described by the VM's own debug data. AOT
+//------------------ closures have no line table, so the hook returns false for them and the caller errors.
+extern bool (*clx_vm_debug_getinfo_hook)(LState *L, const LValue &fn, const char *what, LValue &out);
+
 //------------------ register_static_preload: registers a static preload loader for a module
 void register_static_preload(LState *L, const char *name, LValue(open_func)(LState *));
 

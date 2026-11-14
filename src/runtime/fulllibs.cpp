@@ -24,6 +24,7 @@ void openlibs(LState *L) {
     luastd_os(L);
     luastd_utf8(L);
     luastd_coroutine(L);
+    luastd_debug(L);
     openlibs_minimal(L);
 }
 }

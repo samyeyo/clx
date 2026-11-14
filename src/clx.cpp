@@ -44,7 +44,7 @@ std::vector<std::string> precompiled_modules;
 //------------------ Std Lua modules shipped as per-module archives (libclx_<name>.a / clx_<name>.lib
 //------------------ in <libdir>/clx or the build tree). --minimal links base + package only; the rest come
 //------------------ in via --modules <name>. base/package are always linked: LState::open() opens them.
-static const char *kStdModules[] = { "base", "package", "string", "table", "math", "io", "os", "utf8", "coroutine" };
+static const char *kStdModules[] = { "base", "package", "string", "table", "math", "io", "os", "utf8", "coroutine", "debug" };
 std::vector<std::string> std_modules;
 
 static bool is_std_module(const std::string &m) {
@@ -1067,7 +1067,6 @@ int main(int argc, char* argv[])
 #if defined(__APPLE__) || defined(__linux__) || defined(__unix__)
 
         std::vector<std::string> lua_search_dirs;
-        lua_search_dirs.push_back("deps/lua-5.5/src");
         lua_search_dirs.push_back((build_root / "build" / "clx_lua").string());
         for (const auto& opt : cc_options) {
             if (opt.size() > 2 && opt[0] == '-' && opt[1] == 'L') {
@@ -1101,7 +1100,6 @@ int main(int argc, char* argv[])
                       << " but it does not define clx_register_load_builtins.\n"
                       << "Fix:\n"
                       << "  - Run `cmake --build build -j` to build clx_lua (libclx_lua.a), OR\n"
-                      << "  - Run deps/fetch_lua.sh to fetch Lua 5.5 into deps/lua-5.5/src/, OR\n"
                       << "  - Configure clx with -DCLX_LUA_SOURCES_DIR=/path/to/lua-5.5/src, OR\n"
                       << "  - Drop --dynamic if you don't need load/loadfile/dofile.\n";
             return 1;
@@ -1112,7 +1110,6 @@ int main(int argc, char* argv[])
                 std::cerr << "  " << dir << "/\n";
             std::cerr << "Fix:\n"
                       << "  - Run `cmake --build build -j` to build clx_lua (libclx_lua.a), OR\n"
-                      << "  - Run deps/fetch_lua.sh to fetch Lua 5.5 into deps/lua-5.5/src/, OR\n"
                       << "  - Configure clx with -DCLX_LUA_SOURCES_DIR=/path/to/lua-5.5/src, OR\n"
                       << "  - Drop --dynamic if you don't need load/loadfile/dofile.\n";
             return 1;
