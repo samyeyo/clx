@@ -73,7 +73,7 @@ set(RUNTIME_SOURCES
 #------------------ Std Lua modules: one static archive each (libclx_<name>.a / clx_<name>.lib),
 #------------------ installed to <libdir>/clx. --minimal links base + package only; anything else comes
 #------------------ in via --modules <name>. Source file differs from module name only for string.
-set(CLX_MODULES base package math coroutine string table os utf8 io)
+set(CLX_MODULES base package math coroutine string table os utf8 io debug)
 set(CLX_MODULE_string_SRC src/runtime/strings.cpp)
 set(CLX_MODULE_table_SRC src/runtime/table.cpp)
 
@@ -94,16 +94,12 @@ endif()
 set(CLX_VENDORED_LUA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/vm/lua")
 if(NOT DEFINED CLX_LUA_SOURCES_DIR)
     set(CLX_LUA_SOURCES_DIR "${CLX_VENDORED_LUA_DIR}/src")
-    if(NOT EXISTS "${CLX_LUA_SOURCES_DIR}/lua.h")
-        set(CLX_LUA_SOURCES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/lua-5.5/src")
-    endif()
 endif()
 if(NOT EXISTS "${CLX_LUA_SOURCES_DIR}/lua.h")
     message(FATAL_ERROR
         "Lua 5.5 sources not at ${CLX_LUA_SOURCES_DIR}.\n"
         "  Options:\n"
         "    - Use the in-tree vendored sources at src/runtime/vm/lua\n"
-        "    - Run deps/fetch_lua.sh to fetch Lua into deps/lua-5.5/src/\n"
         "    - Pass -DCLX_LUA_SOURCES_DIR=/path/to/lua-5.5/src when configuring")
 endif()
 if(EXISTS "${CLX_VENDORED_LUA_DIR}/CMakeLists.txt" AND
