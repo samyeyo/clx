@@ -1,11 +1,12 @@
 # ─────────────────────────────────────────────
-# │ CMakeLists.txt · vendored Lua 5.5.0 bridge │
+# │ CMakeLists.txt · vendored Lua 5.5.1 bridge │
 # ─────────────────────────────────────────────
 #
 # This file is OUR wrapper around the upstream Lua interpreter sources.
-# It adds NO modifications to the upstream files (no Lua source edits).
-# It compiles every .c file except lua.c and luac.c (no standalone CLI
-# binaries; clx only wants the interpreter).
+# The vendored tree is the unmodified Lua 5.5.1 release (no local patches:
+# keep it byte-identical to the upstream tarball). It compiles every .c file
+# except lua.c and luac.c (no standalone
+# CLI binaries; clx only wants the interpreter).
 #
 # Upstream Lua is MIT-licensed. Vendoring copy: docs are in
 # src/runtime/vm/lua/doc/, the source-overrides Makefile in
