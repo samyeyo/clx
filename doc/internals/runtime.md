@@ -21,6 +21,12 @@ state lifecycle in `state.cpp`, and call dispatch in `calls.cpp`. It provides:
 - Table operations with inline caching
 - Metamethod handling
 - Function calls
+- A C stack guard: `clx::stack_check(L)` raises stock's `stack overflow` before the C stack
+  runs out, against a limit derived from the calling thread's stack and swapped with the
+  coroutine context (`Ls->stack_low` in `threads.cpp`), so a recycled fiber keeps its own
+  threshold. Fast function bodies use a deferred form — they record the site and return —
+  because a throw in that lambda costs ~1.9× on recursion-heavy code; the enclosing call
+  wrapper raises at the recorded site (`raise_stack_overflow` in `state.cpp`).
 
 #### Value System
 
@@ -258,6 +264,26 @@ cache is invalidated by `hash_version`, which moves only on structural change (r
 metatable set, recycle). See [Optimizations](./optimizations.md#3-inline-caching) for
 the full story.
 
+### 14. Debug Library (src/runtime/debug.cpp)
+
+The `debug` library is a std module like the others (`libclx_debug.a`) and is
+registered as a global by `luastd_debug`. The entries split by what they can answer:
+
+| Entries | Implementation |
+|---------|----------------|
+| `getmetatable`, `setmetatable`, `getuservalue`, `setuservalue` | Native. `debug.getmetatable` skips the `__metatable` guard; `debug.setmetatable` accepts every type, including numbers and `nil`, and the value metatables live in the same per-type slots the operator paths read. |
+| `getupvalue`, `setupvalue`, `upvalueid` | Walk the closure's `LUpValue` cells (`LCFunction::gc_cells`), numbered from 1 in that order — the same numbering `luaapi_upvalue_cell` gives the C API adapter, so `debug.getupvalue(f, n)` and `lua_getupvalue(L, f, n)` describe the same slot. The cells are the in-scope capture cells the closure was created with: their names are not recorded (every name is `""`), and a local the codegen captured by value has a snapshot cell that `setupvalue` cannot push back into the function. `upvalueid` interns `"userdata: <cell address>"`, which is equal for two closures sharing a capture. |
+| `upvaluejoin` | Raises `debug.upvaluejoin is not available in compiled code`: the function body reads its captures through the emitted C++ lambda, so replacing the recorded cell would only change what `getupvalue` reports. |
+| `getregistry` | An empty table created on first use and rooted for the life of the state; it carries none of stock's `_LOADED` / `_PRELOAD` / `_CLIBS` keys. |
+| `traceback` | `msg`, a newline and `stack traceback:`, with no frame list — compiled frames carry no call chain. |
+| `getinfo`, `getlocal`, `setlocal`, `sethook`, `gethook` | Raise `debug.getinfo/getlocal/setlocal/sethook/gethook are not available in compiled code`, since there are no line/frame tables. Both this and the `upvaluejoin` raise go through `stub_error`, so the message is prefixed like every other runtime error. |
+
+Two hooks soften that last row under `--dynamic`: `clx_vm_debug_getinfo_hook` and
+`clx_vm_debug_upvalue_hook` (declared in `internal.h`, assigned by
+`src/runtime/vm/load_builtin.cpp`) let `debug.getinfo`/`debug.getupvalue` answer for a
+function created by `load`/`loadfile`, described by the embedded VM's own debug data. A
+compiled closure leaves the hook returning `false`, so the caller errors as above.
+
 ## Metamethods
 
 clx supports all standard Lua metamethods:
@@ -348,3 +374,8 @@ The `collectgarbage()` function accepts these options:
 | `"mode"` | Returns the current mode: `"generational"` or `"incremental"` |
 | `"stats"` | Returns a table with GC stats: `mode`, `collects`, `minors`, `minor_freed_kb`, `major_freed_kb`, `old_kb`, `minor_kb`, `remembered_high` |
 | `"param"` | Gets/sets GC parameters. Requires a parameter name (`"pause"`, `"stepmul"`, `"stepsize"`, `"minormul"`, `"majorminor"`, `"minormajor"`) and an optional new integer value (0–100000). Returns the previous value |
+
+Inside a `__gc` finalizer, `collectgarbage()` returns `nil` instead of running a
+collection, matching stock 5.5. Weak tables follow stock's clearable-kinds rule
+(strings are never cleared), and `collectgarbage("step", size)` treats its
+argument as the number of bytes to pretend were allocated.
