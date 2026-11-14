@@ -142,26 +142,41 @@ return true, result
 
 ## Notes on how it works
 
-A `--dynamic` program ends up running two Lua environments: your compiled
-(code) and any runtime-loaded code. They keep separate globals and libraries,
-and values passed between them are converted at the boundary.
+A `--dynamic` program runs two Lua environments: your compiled code and any
+runtime-loaded code. Each has its own globals and standard libraries, values are
+converted at the boundary, and the two globals tables are bridged.
 
 What this means in practice:
 
 - **Your compiled code is usually the faster path.** Dynamic calls cross between
   the two environments with some overhead, so don't put performance-critical
   loops inside a loaded chunk.
-- **Libraries are self-contained.** Runtime-loaded code uses its own copy of
-  `string`, `math`, `table`, and friends. A compiled module isn't automatically
-  visible to a loaded chunk through `require`.
-- **Values are converted, not shared.** A table passed across the boundary is a
-  copy or a proxy, so don't rely on identity or shared metatable behavior.
+- **Loaded code keeps its own libraries.** A chunk runs on the embedded VM's
+  `string`, `math`, `table`, and friends, so a compiled module isn't
+  automatically visible to it through `require`. Bundled modules and anything in
+  `package.preload` do resolve. Inside a chunk, `require` consults the VM's own
+  `package.loaded` first — so `require "debug"` reaches the VM's complete
+  library — and falls through to clx's `require` for everything else, which
+  means `package.path` and `package.loaded` are shared state.
+- **The globals tables are bridged.** A chunk's `_ENV` is the VM's own globals
+  table (`_G == _ENV`), so a raw access sees the chunk's own names only. A name
+  missing there is looked up in the compiled program's globals through a
+  metatable `__index` — `rawget` does not follow it — and a global either side
+  writes is visible to the other (see
+  [Sharing values](#sharing-values-with-loaded-code)).
+- **Bridged values get a stable proxy.** Reading a compiled table or function
+  from a chunk yields the same proxy each time for as long as it lives, so
+  `rawequal` and `tostring` agree inside the chunk and a write through the proxy
+  is a write to the original table. Values travelling *back* are converted
+  again, so don't compare a returned value with one you still hold.
 - **Coroutines stay on one side.** Create, resume, and yield a coroutine either
   in your compiled code or inside the loaded chunk — not across the boundary.
 
 ## Sharing values with loaded code
 
-The default environment lets a loaded chunk read your program's globals:
+The default environment lets a loaded chunk read your program's globals: any
+name missing from the chunk's own globals table falls through to the compiled
+program's, and a global the chunk assigns is mirrored back.
 
 ```lua
 -- In your compiled code
@@ -171,6 +186,10 @@ shared_value = 123
 local chunk, error_message = load("return shared_value", "globals", "t")
 assert(chunk, error_message)
 assert(chunk() == 123)
+
+-- And a global the chunk sets is visible to the compiled code
+load("written_by_chunk = 7", "globals", "t")()
+assert(written_by_chunk == 7)
 ```
 
 You can also give a chunk its own environment by passing a table:
@@ -207,8 +226,15 @@ environment — either the compiled one or the loaded one.
   implemented).
 - `string.dump` of a compiled or C function returns a callable snapshot,
   not bytecode (see above); only VM-loaded functions dump to real bytecode.
-- Tables, metatables, userdata, and coroutines don't share identity across the
-  two environments.
+- Metatables and coroutines do not cross the boundary. A table or userdata is
+  handed over as a stable proxy for its lifetime, but a value returned from a
+  chunk is converted again on arrival, so identity is not preserved in that
+  direction.
+- `debug` exists on both sides but is not the same library: the compiled
+  program's global offers the metatable, uservalue, `traceback` and upvalue
+  entries (upvalue names are empty and `upvaluejoin` raises), while a chunk's own
+  `debug` — or its `require "debug"` — is the VM's complete one. See
+  [Lua 5.5 compatibility](./compatibility.md#the-debug-library).
 
 ## Testing
 
