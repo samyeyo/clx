@@ -1248,7 +1248,7 @@
                         <div class="label">Open Source License</div>
                     </div>
                     <div class="about-stat">
-                        <div class="value">Lua 5.5</div>
+                        <div class="value">Lua 5.5.1</div>
                         <div class="label">Compatibility</div>
                     </div>
                 </div>
@@ -1329,7 +1329,7 @@
 <span class="prompt">$</span> cd clx
 <span class="prompt">$</span> ./build.sh install</div>
                     </div>
-                    <p>This installs the <span class="inline-code">clx</span> compiler to <span class="inline-code">/usr/local/bin</span>, the core runtime libraries (<span class="inline-code">libclx.a</span>, <span class="inline-code">libclx_size.a</span>, <span class="inline-code">libclx_capi.a</span>, <span class="inline-code">libclx_capi_size.a</span>, <span class="inline-code">libclx_lua.a</span>) to <span class="inline-code">/usr/local/lib</span>, the per-module std archives (<span class="inline-code">libclx_&lt;module&gt;.a</span> / <span class="inline-code">libclx_&lt;module&gt>_size.a</span> for base, package, string, table, math, io, os, utf8, coroutine) to <span class="inline-code">/usr/local/lib/clx/</span>, and the headers (<span class="inline-code">clx.h</span>, <span class="inline-code">clx_runtime.h</span>, <span class="inline-code">clx_simd.h</span>, plus the Lua 5.5 C API headers <span class="inline-code">lua.h</span>, <span class="inline-code">lauxlib.h</span>, <span class="inline-code">lualib.h</span>) to <span class="inline-code">/usr/local/include</span>. Run <span class="inline-code">./build.sh uninstall</span> to remove it.</p>
+                    <p>This installs the <span class="inline-code">clx</span> compiler to <span class="inline-code">/usr/local/bin</span>, the core runtime libraries (<span class="inline-code">libclx.a</span>, <span class="inline-code">libclx_size.a</span>, <span class="inline-code">libclx_capi.a</span>, <span class="inline-code">libclx_capi_size.a</span>, <span class="inline-code">libclx_lua.a</span>) to <span class="inline-code">/usr/local/lib</span>, the per-module std archives (<span class="inline-code">libclx_&lt;module&gt;.a</span> / <span class="inline-code">libclx_&lt;module&gt>_size.a</span> for base, package, string, table, math, io, os, utf8, coroutine, debug) to <span class="inline-code">/usr/local/lib/clx/</span>, and the headers (<span class="inline-code">clx.h</span>, <span class="inline-code">clx_runtime.h</span>, <span class="inline-code">clx_simd.h</span>, plus the Lua 5.5 C API headers <span class="inline-code">lua.h</span>, <span class="inline-code">lauxlib.h</span>, <span class="inline-code">lualib.h</span>) to <span class="inline-code">/usr/local/include</span>. Run <span class="inline-code">./build.sh uninstall</span> to remove it.</p>
 
                     <h4>Windows</h4>
                     <div class="code-block">
@@ -1537,7 +1537,7 @@ print("Fibonacci(20) = " .. fib(20))</div>
                 </div>
                 <div class="doc-section">
                     <h3>Language Features</h3>
-                    <p>clx supports most Lua 5.5 features including variables, control flow, functions, tables, metatables, coroutines, standard libraries, and bitwise operations. <span class="inline-code">load()</span>, <span class="inline-code">loadfile()</span>, and <span class="inline-code">dofile()</span> are registered only for programs compiled with <span class="inline-code">--dynamic</span>; they execute source in the embedded Lua VM and are absent from ordinary AOT and <span class="inline-code">--minimal</span> builds. <span class="inline-code">require()</span> of Lua file modules through <span class="inline-code">package.path</span> also requires <span class="inline-code">--dynamic</span>: those files are compiled and executed on the embedded VM rather than AOT-compiled. Under <span class="inline-code">--dynamic</span>, <span class="inline-code">string.dump()</span> of a loaded chunk returns stock-format bytecode that <span class="inline-code">load()</span> reads back; dumping a compiled or C function returns a callable snapshot in every build mode. The <span class="inline-code">debug</span> library is not exposed as a global in either mode — the <span class="inline-code">--dynamic</span> bridge environment does not copy it either.</p>
+                    <p>clx supports most Lua 5.5 features including variables, control flow, functions, tables, metatables, coroutines, standard libraries, and bitwise operations. <span class="inline-code">load()</span>, <span class="inline-code">loadfile()</span>, and <span class="inline-code">dofile()</span> are registered only for programs compiled with <span class="inline-code">--dynamic</span>; they execute source in the embedded Lua VM and are absent from ordinary AOT and <span class="inline-code">--minimal</span> builds. <span class="inline-code">require()</span> of Lua file modules through <span class="inline-code">package.path</span> also requires <span class="inline-code">--dynamic</span>: those files are compiled and executed on the embedded VM rather than AOT-compiled. Under <span class="inline-code">--dynamic</span>, <span class="inline-code">string.dump()</span> of a loaded chunk returns stock-format bytecode that <span class="inline-code">load()</span> reads back; dumping a compiled or C function returns a callable snapshot in every build mode. The <span class="inline-code">debug</span> library is a normal global like the other standard libraries: its compiled-code entries that need frame or line tables raise, and a <span class="inline-code">--dynamic</span> chunk reaches the embedded VM's complete copy with <span class="inline-code">require "debug"</span>.</p>
                     <h4>Variables and Types</h4>
                     <div class="code-block">
                         <div class="code-header"><span class="lang">lua</span></div>
@@ -1826,8 +1826,9 @@ end
                     <h3>Things to keep in mind</h3>
                     <ul>
                         <li><strong>Your compiled code is usually faster.</strong> Dynamic calls cross between the two environments with some overhead, so keep performance-critical loops out of loaded code.</li>
-                        <li><strong>Libraries are self-contained.</strong> Loaded code uses its own copy of the standard libraries; a compiled module isn't automatically visible to it through <span class="inline-code">require</span>.</li>
-                        <li><strong>Values are converted, not shared.</strong> A table passed across the boundary is a copy or a proxy — don't rely on shared identity or metatables.</li>
+                        <li><strong>Loaded code keeps its own libraries.</strong> A chunk runs on the embedded VM's <span class="inline-code">string</span>, <span class="inline-code">math</span>, <span class="inline-code">table</span> and friends, so a compiled module isn't automatically visible through <span class="inline-code">require</span>. Inside a chunk, <span class="inline-code">require</span> checks the VM's own <span class="inline-code">package.loaded</span> first and then falls through to clx's, which shares <span class="inline-code">package.path</span> and <span class="inline-code">package.loaded</span> with your program.</li>
+                        <li><strong>The globals tables are bridged.</strong> A chunk's <span class="inline-code">_ENV</span> is the VM's own globals table; a name missing there is looked up in your compiled globals, and a global the chunk sets is mirrored back.</li>
+                        <li><strong>Bridged values get a stable proxy.</strong> Reading a compiled table or function from a chunk returns the same proxy each time, so identity and <span class="inline-code">tostring</span> agree inside the chunk. Values travelling back are converted again, so don't compare a returned value with one you still hold.</li>
                         <li><strong>Coroutines stay on one side.</strong> Keep create/resume/yield inside either the compiled code or the loaded chunk, not across the boundary.</li>
                     </ul>
                 </div>
@@ -1848,7 +1849,7 @@ end
                         <li>Requires compiling with <span class="inline-code">--dynamic</span>; skipped in <span class="inline-code">--minimal</span> builds.</li>
                         <li><span class="inline-code">load</span> accepts a source string only (no reader-function form).</li>
                         <li><span class="inline-code">string.dump</span> of a compiled or C function returns a callable snapshot, not bytecode; only functions created by <span class="inline-code">load()</span> dump to real bytecode.</li>
-                        <li>Tables, metatables, userdata, and coroutines don't share identity across the two environments.</li>
+                        <li>Metatables and coroutines don't cross the boundary; a returned value is converted again, so identity is not preserved on the way back.</li>
                     </ul>
                     <p>For full details, see <span class="inline-code">doc/dynamic-lua.md</span>.</p>
                 </div>
@@ -1890,9 +1891,9 @@ end
 <span class="flag">--size</span>        Optimize for size (default)
 <span class="flag">--fast</span>        Optimize for speed
 <span class="flag">--cpp</span>         Generate C++ source files, don't compile
-<span class="flag">--minimal</span>   Link base + package only; add std modules back with --modules (drops string, table, math, io, os, utf8, coroutine)
+<span class="flag">--minimal</span>   Link base + package only; add std modules back with --modules (drops string, table, math, io, os, utf8, coroutine, debug)
 <span class="flag">--dynamic</span>   Link the embedded Lua 5.5 VM and enable load, loadfile, and dofile
-<span class="flag">--modules</span> &lt;list&gt;  Link std modules (string, table, math, io, os, utf8, coroutine) or precompiled C++/C modules (comma-separated)</div>
+<span class="flag">--modules</span> &lt;list&gt;  Link std modules (string, table, math, io, os, utf8, coroutine, debug) or precompiled C++/C modules (comma-separated)</div>
                     </div>
                 </div>
                 <div class="doc-section">
@@ -2261,7 +2262,7 @@ utils.help()</div>
                 <div class="doc-section">
                     <h3>Options Reference</h3>
                     <div class="code-block">
-                        <div class="code-body"><span class="flag">--modules</span> &lt;list&gt;   Link std modules (string, table, math, io, os, utf8, coroutine) or prebuilt C++/C modules (comma-separated)
+                        <div class="code-body"><span class="flag">--modules</span> &lt;list&gt;   Link std modules (string, table, math, io, os, utf8, coroutine, debug) or prebuilt C++/C modules (comma-separated)
 <span class="flag">--fast</span>             Link <span class="fn">libclx.a</span> (optimize for speed; plus <span class="fn">libclx_capi.a</span> when a C module is linked)
 <span class="flag">--size</span>             Link <span class="fn">libclx_size.a</span> (default; plus <span class="fn">libclx_capi_size.a</span> when a C module is linked)
 <span class="flag">--minimal</span>          Link base + package only; add std modules back with <span class="flag">--modules</span>
@@ -2656,7 +2657,7 @@ clx::<span class="fn">type_error</span>(L, 1, <span class="str">"number"</span>,
                             </tbody>
                         </table>
                     </div>
-                    <p>This matches the compiled-code side of clx: the <span class="inline-code">debug</span> library is not exposed as a compiled-code global either (see <a href="#doc-compatibility">Lua 5.5 Compatibility</a>).</p>
+                    <p>These hooks are unavailable because a compiled closure has no frame or line tables, which matches the compiled-code side: <span class="inline-code">debug.getinfo</span>, <span class="inline-code">debug.getlocal</span>/<span class="inline-code">setlocal</span> and <span class="inline-code">debug.sethook</span>/<span class="inline-code">gethook</span> raise there too, while the rest of the <span class="inline-code">debug</span> library works (see <a href="#doc-compatibility">Lua 5.5 Compatibility</a>).</p>
 
                     <h4>To-be-closed variables</h4>
                     <div class="doc-table-wrap">
@@ -2678,7 +2679,7 @@ clx::<span class="fn">type_error</span>(L, 1, <span class="str">"number"</span>,
                                 <tr><th>Function</th><th>Behaviour</th></tr>
                             </thead>
                             <tbody>
-                                <tr><td><span class="inline-code">lua_checkstack</span></td><td>always returns <span class="inline-code">1</span>; there is no fixed stack limit, so runaway recursion can exhaust memory instead of raising <span class="inline-code">"stack overflow"</span></td></tr>
+                                <tr><td><span class="inline-code">lua_checkstack</span></td><td>always returns <span class="inline-code">1</span>; depth is bounded by the C stack rather than a slot budget, and clx raises stock's <span class="inline-code">"stack overflow"</span> before the C stack is exhausted</td></tr>
                                 <tr><td><span class="inline-code">luaL_openselectedlibs</span></td><td>no-op, which makes the <span class="inline-code">luaL_openlibs(L)</span> macro a no-op. Standard libraries are already open (unless you build with <span class="inline-code">--minimal</span>)</td></tr>
                                 <tr><td><span class="inline-code">luaL_register</span></td><td>not present — removed from Lua in 5.2</td></tr>
                             </tbody>
@@ -2851,7 +2852,7 @@ clx::<span class="fn">type_error</span>(L, 1, <span class="str">"number"</span>,
                     Lua 5.5 Compatibility
                 </h2>
                 <div class="doc-section">
-                    <p><span class="bright">clx</span> targets Lua 5.5 compatibility. The entire core language, control flow, tables, metatables, coroutines, and standard libraries are supported out of the box — the items below are grouped by area. This is a snapshot — real-world testing is still ongoing.</p>
+                    <p><span class="bright">clx</span> targets Lua 5.5.1 compatibility — the official 5.5.1 test suite runs against compiled binaries. The entire core language, control flow, tables, metatables, coroutines, and standard libraries are supported out of the box; the items below are grouped by area. This is a snapshot — real-world testing is still ongoing.</p>
 
                     <div class="compat-group">
                         <div class="compat-group-label">Core Language</div>
@@ -2935,7 +2936,7 @@ clx::<span class="fn">type_error</span>(L, 1, <span class="str">"number"</span>,
                             <span class="compat-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>package</span>
                             <span class="compat-chip partial"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>debug</span>
                         </div>
-                        <p style="margin-top:16px">Every library above ships in the AOT runtime, except <span class="inline-code">debug</span>, which is not exposed as a global in either mode; dynamic code's default bridge environment does not copy it either.</p>
+                        <p style="margin-top:16px">Every library above ships in the AOT runtime, including <span class="inline-code">debug</span> — its metatable, uservalue, <span class="inline-code">traceback</span> and upvalue read/write entries work (upvalue names come back empty and <span class="inline-code">debug.upvaluejoin</span> raises), while the entries that need an interpreter's frame and line tables raise, and <span class="inline-code">debug.getregistry</span> returns an empty table. A <span class="inline-code">--dynamic</span> build additionally gives loaded chunks the embedded VM's complete <span class="inline-code">debug</span>, reachable with <span class="inline-code">require "debug"</span> inside the chunk.</p>
                     </div>
                 </div>
 
@@ -2965,7 +2966,7 @@ clx::<span class="fn">type_error</span>(L, 1, <span class="str">"number"</span>,
                         </div>
                         <div class="feature-card">
                             <div class="feature-title">debug library</div>
-                            <div class="feature-desc">Not exposed as a compiled-code global; the <span class="inline-code">--dynamic</span> bridge environment also does not copy <span class="inline-code">debug</span>. Loaded chunks can only reach it if you put it in the environment yourself.</div>
+                            <div class="feature-desc">Ships as a standard module: <span class="inline-code">getmetatable</span>, <span class="inline-code">setmetatable</span> (for every type), uservalues, <span class="inline-code">traceback</span> and upvalue reads/writes work on compiled code (upvalue names come back empty and <span class="inline-code">upvaluejoin</span> raises); <span class="inline-code">getlocal</span>, <span class="inline-code">setlocal</span>, <span class="inline-code">sethook</span>, <span class="inline-code">gethook</span> and <span class="inline-code">getinfo</span> on compiled closures raise, since compiled frames carry no line tables, and <span class="inline-code">getregistry</span> returns an empty table. Under <span class="inline-code">--dynamic</span>, a chunk's <span class="inline-code">require "debug"</span> returns the embedded VM's complete library.</div>
                         </div>
                     </div>
                 </div>
