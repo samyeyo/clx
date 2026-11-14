@@ -49,7 +49,8 @@ assert_eq(math.type(tonumber("ff", 16)), "integer", "Base conversion yields inte
 print("\n----------------- 4. Boundary values")
 
 assert_eq(tonumber("7fffffffffffffff", 16), 9223372036854775807, "Int64 max via base 16")
-assert_eq(tonumber("9223372036854775807"), 9223372036854775807.0, "Int64 max decimal string")
+assert_eq(tonumber("9223372036854775807"), 9223372036854775807, "Int64 max decimal string")
+assert_eq(math.type(tonumber("9223372036854775807")), "integer", "Int64 max decimal string yields integer")
 
 print("\n----------------- 5. Failure cases return nil")
 

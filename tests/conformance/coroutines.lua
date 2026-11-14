@@ -188,14 +188,17 @@ else
     end
 
     do
+        local yielded = false
         local co = coroutine.create(function()
             local thr = coroutine.running()
-            local ok, err = pcall(coroutine.close, thr)
-            coroutine.yield(ok, err)
+            pcall(coroutine.close, thr)
+            yielded = true
+            coroutine.yield()
         end)
         local results = {coroutine.resume(co)}
-        assert_eq(results[2], false, "6.9 close self from within returns false")
-        assert_eq(type(results[3]), "string", "6.10 close self error is a string")
+        assert_eq(#results, 1, "6.9 close self from within ends the coroutine")
+        assert_eq(results[1], true, "6.10 close self is not an error")
+        assert_eq(yielded, false, "6.11 close self returns to its caller")
     end
 end
 

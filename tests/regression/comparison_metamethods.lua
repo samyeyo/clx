@@ -30,7 +30,9 @@ assert_eq(t1 == "s", false, "table-vs-string-false")
 assert_eq(false == nil, false, "bool-vs-nil")
 assert_eq("x" == 5, false, "string-vs-number")
 assert_eq(t3 == t4, true, "other-mt-eq")
-assert_eq(t3 == t1, false, "cross-mt-false")
+-- stock Lua 5.5 calls the first operand's __eq even when the two metatables differ (the result is
+-- the metamethod's truthiness), so t3 == t1 is true, not false
+assert_eq(t3 == t1, true, "cross-mt-eq-called")
 assert_eq(t1 ~= nil, true, "ne-table-nil")
 
 local n, f = 1, 1.0

@@ -79,12 +79,12 @@ local h4 = function()
 end
 assert_error_contains(function() h4() end, "indexing nil local raises")
 
--- indexing a string base
+-- indexing a string base: stock resolves through the string metatable, so an integer key is absent
 local h5 = function()
     local s = "hello"
     return s[1]
 end
-assert_error_contains(function() h5() end, "indexing string with integer raises")
+assert_eq(h5(), nil, "indexing string with integer returns nil like stock")
 
 print("----------------- out-of-range reads on numeric arrays return nil")
 

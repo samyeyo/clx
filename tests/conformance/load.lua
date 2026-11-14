@@ -109,7 +109,8 @@ do
     print("[OK] dofile API check skipped (host OS file IO)")
 end
 
--- 11. global keyword works inside load() — LUA_COMPAT_GLOBAL must not be set.
+-- 11. global declarations work inside load(); the embedded VM is built with LUA_COMPAT_GLOBAL, so
+-- 'global' is also usable as an ordinary name, as in the official interpreter.
 do
     local f = load("global x = 42; return x")
     assert_eq(f(), 42, "load() with global keyword")
