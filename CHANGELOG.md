@@ -6,6 +6,39 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 
 ---
 
+## [Unreleased]
+
+### Added
+
+* The `debug` standard library, as a per-module archive (`libclx_debug.a`) and a global like the other libraries. `getmetatable` (ignores `__metatable`), `setmetatable` (any type), `getuservalue`/`setuservalue` and `traceback` (message plus a `stack traceback:` header, no frames) work on compiled code; `getlocal`, `setlocal`, `sethook`, `gethook` and `getinfo` on a compiled closure raise, since compiled frames carry no line tables. `debug.getupvalue`/`setupvalue`/`upvalueid` read and write a closure's capture cells with the same numbering the C API adapter uses — so a shared capture reads and writes like stock — though names come back empty and `debug.upvalueid` is a stable `userdata: 0x…` string rather than a light userdata. `debug.upvaluejoin` raises `debug.upvaluejoin is not available in compiled code` instead of rebinding a cell the emitted C++ lambda would never read, and `debug.getregistry` returns an empty table Under `--dynamic`, `debug.getinfo` and `debug.getupvalue` are answered for `load`-ed chunks by the embedded VM's debug data, and a chunk's `require "debug"` returns the VM's complete library
+
+### Changed
+
+* Fast functions no longer raise the stack-overflow error from inside the recursive body.
+* Vendored Lua VM bumped from 5.5.0 to 5.5.1. The tree is byte-identical to the official 5.5.1 source tarball and stays unpatched; `deps/fetch_lua.sh` fetches 5.5.1 by default
+* `tests/lua55/` now holds the official `lua-5.5.1-tests.tar.gz` testsuite. Six spots that cannot run against a compiled clx binary are commented out in place and marked with `-- clx: disabled -- …` so they can be found and restored
+
+### Fixed
+
+* `coroutine.close()` with no argument closes the running coroutine, as in Lua 5.5: closing the main thread raises `cannot close main thread`, and a coroutine that closes itself (with or without passing its own thread) unwinds instead of returning, runs its `<close>` handlers, and finishes without an error — even when the close happens inside a `__close` during error unwinding. `coroutine.close` on a suspended coroutine whose `__close` raises now returns `false, err` instead of swallowing the error
+* `collectgarbage` argument errors raised from `--dynamic` chunks now read like stock: `bad argument #1 to 'collectgarbage' (invalid option 'bogus')` with the caller's `file:line`. The VM-globals shim forwarded the call, so the error came from one C frame deeper, where the function name resolved to `?` and the location was dropped; the shim now checks the option and the `param` name in its own frame
+* Global deletion under `--dynamic`. `_ENV` is the VM's real globals table, so once a chunk has written a name its later `x = nil` is a direct table delete and never reaches the `__newindex` shim, which left clx's mirrored `_G` holding the old value and resurrected it on the next read. Names written through the shim are now remembered, and a remembered name missing from the real table is treated as the chunk deleting it
+* Calls whose last argument expands to more than 16 values (`f(table.unpack(t))` with a long array, a vararg pass-through) wrote past a fixed 16-slot stack buffer (`_dyn_buf[16]`) and corrupted the frame; generated code now uses the growable `clx::DynArgs`
+* `global` is not a reserved word in the embedded VM: 5.5.1 ships `LUA_COMPAT_GLOBAL` on by default, so `load("global = 1; return global")` parses as an assignment like the official 5.5 interpreter, while `global x = 42` / `global<const> y` declarations behave as before
+* A local that the optimizer proves numeric is no longer emitted as a native `double` when a later assignment in the same scope can produce nil
+* Integer/float comparisons are exact again. `==`, `~=`, `<`, `<=`, `>`, `>=` between an `Int64` and a `Double` used to round the integer through `double`, so `(1 << 53) + 1 == 2.0^53 + 1.0` was true and `math.maxinteger < 2.0^63` was false. They now follow stock Lua's `LTintfloat`/`LEintfloat`/`luaV_equalobj` rules (integral float within `int64` range compared as integers, everything else ordered by value, NaN never compares), both in the runtime helpers (`clx::eq`, `lt`, `le`, `gt`, `ge`) and in the generated fast paths
+* Comparisons whose integer operand cannot be expressed as an exact `int64` (`#t`, calls, table reads) stay on the general path instead of being compared against the constant `0`, which made `#s > 0` and `#s == 4` false in compiled code
+* `table.sort` keeps `Int64` elements as integers; the numeric fast path used to convert every element to `double`, so sorting a list near `2^63` silently lost precision
+* A C stack overflow is measured against the current fiber's own stack, computed from the calling thread and saved/restored across a coroutine switch, so a recycled fiber keeps its own threshold and raises stock's `stack overflow` instead of aborting
+* `--dynamic` chunks run with the embedded VM's own globals table. `_ENV` and `_G` are that table, `rawget`/`pairs` see exactly what they would on the VM, a name missing there falls through to the compiled program's globals, and a write from either side is visible to the other
+* A clx callable or table read by a loaded chunk maps to one stable VM proxy (identity and `tostring` agree inside the chunk), and a chunk's `require` answers from the VM's own `package.loaded` first — so `require "debug"` reaches the VM's library — then falls through to clx's `require` with the shared `package.path` and `package.loaded`
+
+### Tests
+
+* `tests/lua55/` now runs on all three platforms from the same logic: `run.sh` for macOS and Linux, `run.bat` for Windows (a thin wrapper around `run.ps1`), both driving a shared `harness.lua` that rebuilds `all.lua`'s prelude from the vendored suite at run time. Per-file, `--all`, `--list`, `--extra`, `SOFT`/`PORT` and the per-test timeout behave identically everywhere, and options like `TIMEOUT`, `SOFT` and `BUILD` are available on Windows too
+* `tests/lua55/run.sh` gives every test an empty pipe on stdin, so the `io.stdin:seek` checks see a non-seekable stream instead of inheriting the terminal
+* Against the official 5.5.1 suite, all 29 tests driven by `all.lua` pass, in both per-file mode and `--all`; `bwcoercion.lua` also passes via `--extra`. Six failing spots are disabled in place with `-- clx: disabled` comments rather than left red: `files.lua`'s `/dev/full` flush checks (macOS has no `/dev/full`), its three `<progname> -e …` popen/execute entries (the program under test is a compiled binary, not a Lua interpreter) and its `sh -c 'kill -s HUP $$'` entry (macOS reports `signal`, upstream's Linux run reports `exit`; stock Lua 5.5 fails this one on macOS too), `attrib.lua`'s `package.loadlib("donotexist", …)` assertion (clx reports `open` where stock-without-a-loader reports `absent`) and its "external strings" block (needs the suite's C libraries from `make -C libs`), and `big.lua`'s trailing `coroutine.yield` (a per-file run has no enclosing coroutine; `all.lua` resumes it with `assert(f() == 'a')` instead of the two-step `b`/`a` handshake)
+
 ## [0.5.0] - 2026-11-01
 
 ### Added
