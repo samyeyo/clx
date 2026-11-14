@@ -10,9 +10,11 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <cerrno>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
+#include <sys/wait.h>
 #if defined(_WIN32) || defined(_WIN64)
 #include <cstdio>
 
@@ -48,52 +50,101 @@ MultiValue os_clock(LState *L, const LValue *args, size_t count) {
     return MultiValue(clx::number(static_cast<double>(std::clock()) / CLOCKS_PER_SEC));
 }
 
+//------------------ date_specifier_ok: strftime conversion characters os.date accepts, so an invalid
+//------------------ specifier raises stock's error instead of leaking raw text through strftime
+static bool date_specifier_ok(char c) {
+    return std::strchr("aAbBcCdDeFgGhHIjmMnprRStTuUVwWxXyYzZ%", c) != nullptr;
+}
+
+//------------------ date_modifier_ok: conversions that accept the 'E' and 'O' alternatives
+static bool date_modifier_ok(char c, char mod) {
+    const char *set = (mod == 'E') ? "cCxXyY" : "deHImMSuUVwWy";
+    return std::strchr(set, c) != nullptr;
+}
+
+//------------------ format_date: stock's os.date format walker — plain bytes (embedded NULs included) are
+//------------------ copied verbatim, each conversion is expanded by one strftime call, invalid specifiers
+//------------------ raise "bad argument #1 to 'date' (invalid conversion specifier '...')"
+static MultiValue format_date(LState *L, const char *s, size_t len, struct tm *stm) {
+    const char *se = s + len;
+    std::string out;
+    while (s < se) {
+        if (*s != '%') {
+            out.push_back(*s++);
+            continue;
+        }
+        const char *spec_beg = s++;
+        if (s < se && *s == '%') {
+            out.push_back('%');
+            s++;
+            continue;
+        }
+        while (s < se && std::strchr("-_0^#", *s) != nullptr)
+            s++;
+        while (s < se && std::isdigit(static_cast<unsigned char>(*s)))
+            s++;
+        bool ok = (s < se);
+        if (ok && (*s == 'E' || *s == 'O')) {
+            char mod = *s++;
+            ok = (s < se) && date_modifier_ok(*s, mod);
+        }
+        if (ok)
+            ok = date_specifier_ok(*s);
+        if (!ok) {
+            std::string bad(spec_beg, se);
+            throw_runtime_error(bad_arg_msg(L, 1, "os.date", ("invalid conversion specifier '" + bad + "'").c_str()));
+        }
+        s++;
+        std::string spec(spec_beg, s);
+        char buf[256];
+        size_t n = std::strftime(buf, sizeof(buf), spec.c_str(), stm);
+        if (n == 0)
+            throw_runtime_error("date result cannot be represented in this installation");
+        out.append(buf, n);
+    }
+    return MultiValue(clx::string(L, out.data(), out.size()));
+}
+
 //------------------ os_date: returns formatted date/time string or table
 MultiValue os_date(LState *L, const LValue *args, size_t count) {
-    const char *format = opt_string(L, count >= 1 ? args[0] : LValue(), "%c");
+    LValue fmt = clx::string(L, "%c");
+    if (count >= 1 && args[0].type != Nil) {
+        double coerced;
+        if (args[0].type != String && !args[0].to_number(coerced))
+            throw_runtime_error(bad_arg_msg(L, 1, "os.date", "string expected"));
+        fmt = args[0];
+    }
     time_t t = std::time(nullptr);
-    if (count >= 2 && args[1].type != Nil) {
-        int64_t ti = check_integer(L, args[1]);
-        t = static_cast<time_t>(ti);
+    if (count >= 2 && args[1].type != Nil)
+        t = static_cast<time_t>(check_integer(L, args[1]));
+
+    const char *s = fmt.as_string();
+    size_t len = fmt.string_len();
+    bool utc = (len > 0 && s[0] == '!');
+    if (utc) {
+        s++;
+        len--;
     }
-    if (format[0] == '!' && format[1] != '\0') {
-        format += 1;
-        struct tm gmt;
-        gmtime(&t, &gmt);
-        if (format[0] == 't') {
-            return MultiValue(clx::number(static_cast<double>(mktime(&gmt))));
-        }
-        char buf[256];
-        size_t n = std::strftime(buf, sizeof(buf), format, &gmt);
-        if (n == 0)
-            buf[0] = '\0';
-        return MultiValue(clx::string(L, buf));
+
+    struct tm stm;
+    if ((utc ? gmtime(&t, &stm) : localtime(&t, &stm)) == nullptr)
+        throw_runtime_error("date result cannot be represented in this installation");
+
+    if (len == 2 && s[0] == '*' && s[1] == 't') {
+        LValue tbl = L->create_table();
+        LTable *tb = static_cast<LTable *>(tbl.as_pointer());
+        tb->settable(LValue(L->intern_string("year")), LValue(static_cast<int64_t>(stm.tm_year + 1900)));
+        tb->settable(LValue(L->intern_string("month")), LValue(static_cast<int64_t>(stm.tm_mon + 1)));
+        tb->settable(LValue(L->intern_string("day")), LValue(static_cast<int64_t>(stm.tm_mday)));
+        tb->settable(LValue(L->intern_string("hour")), LValue(static_cast<int64_t>(stm.tm_hour)));
+        tb->settable(LValue(L->intern_string("min")), LValue(static_cast<int64_t>(stm.tm_min)));
+        tb->settable(LValue(L->intern_string("sec")), LValue(static_cast<int64_t>(stm.tm_sec)));
+        tb->settable(LValue(L->intern_string("wday")), LValue(static_cast<int64_t>(stm.tm_wday + 1)));
+        tb->settable(LValue(L->intern_string("yday")), LValue(static_cast<int64_t>(stm.tm_yday + 1)));
+        tb->settable(LValue(L->intern_string("isdst")), LValue(static_cast<bool>(stm.tm_isdst > 0)));
+        return MultiValue(tbl);
     }
-    if (format[0] == '*') {
-        if (format[1] == 't') {
-            struct tm tm;
-            localtime(&t, &tm);
-            LValue tbl = L->create_table();
-            LTable *tb = static_cast<LTable *>(tbl.as_pointer());
-            tb->settable(LValue(L->intern_string("year")), LValue(static_cast<int64_t>(tm.tm_year + 1900)));
-            tb->settable(LValue(L->intern_string("month")), LValue(static_cast<int64_t>(tm.tm_mon + 1)));
-            tb->settable(LValue(L->intern_string("day")), LValue(static_cast<int64_t>(tm.tm_mday)));
-            tb->settable(LValue(L->intern_string("hour")), LValue(static_cast<int64_t>(tm.tm_hour)));
-            tb->settable(LValue(L->intern_string("min")), LValue(static_cast<int64_t>(tm.tm_min)));
-            tb->settable(LValue(L->intern_string("sec")), LValue(static_cast<int64_t>(tm.tm_sec)));
-            tb->settable(LValue(L->intern_string("wday")), LValue(static_cast<int64_t>(tm.tm_wday + 1)));
-            tb->settable(LValue(L->intern_string("yday")), LValue(static_cast<int64_t>(tm.tm_yday + 1)));
-            tb->settable(LValue(L->intern_string("isdst")), LValue(static_cast<bool>(tm.tm_isdst)));
-            return MultiValue(tbl);
-        }
-    }
-    struct tm tm;
-    localtime(&t, &tm);
-    char buf[256];
-    size_t n = std::strftime(buf, sizeof(buf), format, &tm);
-    if (n == 0)
-        buf[0] = '\0';
-    return MultiValue(clx::string(L, buf));
+    return format_date(L, s, len, &stm);
 }
 
 //------------------ os_difftime: returns difference in seconds between two times
@@ -105,6 +156,26 @@ MultiValue os_difftime(LState *L, const LValue *args, size_t count) {
     return MultiValue(clx::number(t2 - t1));
 }
 
+//------------------ exec_result: stock luaL_execresult — a wait status decoded into (ok, "exit"|"signal",
+//------------------ code), so os.execute and a popen handle's close report the same triple
+MultiValue exec_result(LState *L, int status) {
+    if (status == -1) {
+        int en = errno;
+        char buf[256];
+        std::snprintf(buf, sizeof(buf), "%s", std::strerror(en));
+        return MultiValue({ LValue(), LValue(L->intern_string(buf)), clx::integer(en) });
+    }
+#if defined(_WIN32) || defined(_WIN64)
+    int code = status;
+    const char *what = "exit";
+#else
+    int code = WIFSIGNALED(status) ? WTERMSIG(status) : WEXITSTATUS(status);
+    const char *what = WIFSIGNALED(status) ? "signal" : "exit";
+#endif
+    return MultiValue({ code == 0 ? clx::boolean(true) : clx::LValue(), clx::string(L, what),
+        clx::integer(static_cast<int64_t>(code)) });
+}
+
 //------------------ os_execute: executes a system command
 MultiValue os_execute(LState *L, const LValue *args, size_t count) {
     if (count == 0 || args[0].type == Nil) {
@@ -112,8 +183,7 @@ MultiValue os_execute(LState *L, const LValue *args, size_t count) {
         return MultiValue(clx::boolean(r != 0));
     }
     const char *cmd = check_string(L, args[0]);
-    int r = std::system(cmd);
-    return MultiValue(clx::integer(static_cast<int64_t>(r)));
+    return exec_result(L, std::system(cmd));
 }
 
 //------------------ os_exit: terminates the program with a status code
@@ -142,14 +212,13 @@ MultiValue os_remove(LState *L, const LValue *args, size_t count) {
     if (count == 0)
         throw_runtime_error(bad_arg_msg(L, 1, "os.remove", "string expected, got no value"));
     const char *path = check_string(L, args[0]);
-    std::error_code ec;
-    if (!std::filesystem::remove(path, ec) && ec) {
-        if (ec.value() == static_cast<int>(std::errc::no_such_file_or_directory)) {
-            return MultiValue(clx::boolean(true));
-        }
+    //------------------ std::filesystem::remove() reports a missing file as "not removed" with a clear
+    //------------------ error_code, so stock's nil, "name: reason", errno needs the C library call instead
+    if (std::remove(path) != 0) {
+        int en = errno;
         char buf[384];
-        std::snprintf(buf, sizeof(buf), "cannot remove file '%s': %s", path, ec.message().c_str());
-        throw_runtime_error(buf);
+        std::snprintf(buf, sizeof(buf), "%s: %s", path, std::strerror(en));
+        return MultiValue({ LValue(), LValue(L->intern_string(buf)), clx::integer(en) });
     }
     return MultiValue(clx::boolean(true));
 }
@@ -163,9 +232,9 @@ MultiValue os_rename(LState *L, const LValue *args, size_t count) {
     std::error_code ec;
     std::filesystem::rename(oldname, newname, ec);
     if (ec) {
-        char buf[512];
-        std::snprintf(buf, sizeof(buf), "cannot rename file '%s' to '%s': %s", oldname, newname, ec.message().c_str());
-        throw_runtime_error(buf);
+        //------------------ stock os.rename reports the failure as nil, reason, errno
+        int en = ec.value();
+        return MultiValue({ LValue(), LValue(L->intern_string(std::strerror(en))), clx::integer(en) });
     }
     return MultiValue(clx::boolean(true));
 }
@@ -176,7 +245,11 @@ MultiValue os_setlocale(LState *L, const LValue *args, size_t count) {
         const char *cur = std::setlocale(LC_ALL, nullptr);
         return MultiValue(clx::string(L, cur ? cur : "C"));
     }
-    const char *locale = check_string(L, args[0]);
+    //------------------ stock takes an optional string: nil (or a missing argument) queries the
+    //------------------ current locale for the category instead of being a type error
+    const char *locale = nullptr;
+    if (args[0].type != Nil)
+        locale = check_string(L, args[0]);
     int category = LC_ALL;
     if (count >= 2 && args[1].type != Nil) {
         const char *cat = check_string(L, args[1]);
@@ -205,32 +278,56 @@ MultiValue os_setlocale(LState *L, const LValue *args, size_t count) {
 
 //------------------ os_time: returns current time or converts a table to a time value
 MultiValue os_time(LState *L, const LValue *args, size_t count) {
-    if (count == 0 || args[0].type == Nil) {
-        return MultiValue(clx::number(static_cast<double>(std::time(nullptr))));
-    }
+    if (count == 0 || args[0].type == Nil)
+        return MultiValue(clx::integer(static_cast<int64_t>(std::time(nullptr))));
+
     LTable *tbl = check_table(L, args[0]);
     struct tm tm;
     std::memset(&tm, 0, sizeof(tm));
-    auto get_field = [&](const char *name) -> int {
+
+    //------------------ field: stock's getfield — an absent field either takes its default or raises
+    //------------------ "missing in date table", a non-integral one raises "is not an integer", and an
+    //------------------ int whose shifted value leaves int range raises "is out-of-bound"
+    auto field = [&](const char *name, bool has_default, int64_t dflt, int64_t delta) -> int {
         LValue p = tbl->gettable(LValue(L->intern_string(name)));
-        if (p.type != Nil) {
-            double d;
-            if (p.to_number(d))
-                return static_cast<int>(d);
+        std::string key(name);
+        if (p.type == Nil) {
+            if (!has_default)
+                throw_runtime_error(("field '" + key + "' missing in date table").c_str());
+            return static_cast<int>(dflt - delta);
         }
-        return 0;
+        int64_t iv;
+        if (!to_integer(p, iv))
+            throw_runtime_error(("field '" + key + "' is not an integer").c_str());
+        bool in_range = (iv >= 0) ? (iv - delta <= INT_MAX) : (INT_MIN + delta <= iv);
+        if (!in_range)
+            throw_runtime_error(("field '" + key + "' is out-of-bound").c_str());
+        return static_cast<int>(iv - delta);
     };
-    tm.tm_sec = get_field("sec");
-    tm.tm_min = get_field("min");
-    tm.tm_hour = get_field("hour");
-    tm.tm_mday = get_field("day");
-    tm.tm_mon = get_field("month") - 1;
-    tm.tm_year = get_field("year") - 1900;
-    tm.tm_isdst = -1;
+
+    tm.tm_year = field("year", false, 0, 1900);
+    tm.tm_mon = field("month", false, 0, 1);
+    tm.tm_mday = field("day", false, 0, 0);
+    tm.tm_hour = field("hour", true, 12, 0);
+    tm.tm_min = field("min", true, 0, 0);
+    tm.tm_sec = field("sec", true, 0, 0);
+    LValue isdst = tbl->gettable(LValue(L->intern_string("isdst")));
+    tm.tm_isdst = (isdst.type == Nil) ? -1 : (to_boolean(isdst) ? 1 : 0);
+
     time_t t = mktime(&tm);
     if (t == static_cast<time_t>(-1))
-        throw_runtime_error("time result cannot be represented in this system");
-    return MultiValue(clx::number(static_cast<double>(t)));
+        throw_runtime_error("time result cannot be represented in this installation");
+
+    tbl->settable(LValue(L->intern_string("year")), LValue(static_cast<int64_t>(tm.tm_year + 1900)));
+    tbl->settable(LValue(L->intern_string("month")), LValue(static_cast<int64_t>(tm.tm_mon + 1)));
+    tbl->settable(LValue(L->intern_string("day")), LValue(static_cast<int64_t>(tm.tm_mday)));
+    tbl->settable(LValue(L->intern_string("hour")), LValue(static_cast<int64_t>(tm.tm_hour)));
+    tbl->settable(LValue(L->intern_string("min")), LValue(static_cast<int64_t>(tm.tm_min)));
+    tbl->settable(LValue(L->intern_string("sec")), LValue(static_cast<int64_t>(tm.tm_sec)));
+    tbl->settable(LValue(L->intern_string("wday")), LValue(static_cast<int64_t>(tm.tm_wday + 1)));
+    tbl->settable(LValue(L->intern_string("yday")), LValue(static_cast<int64_t>(tm.tm_yday + 1)));
+    tbl->settable(LValue(L->intern_string("isdst")), LValue(static_cast<bool>(tm.tm_isdst > 0)));
+    return MultiValue(clx::integer(static_cast<int64_t>(t)));
 }
 
 //------------------ os_tmpname: generates a temporary file path
