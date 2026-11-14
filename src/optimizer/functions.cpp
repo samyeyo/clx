@@ -79,6 +79,44 @@ void pass_callables(const ASTContext &ctx, AnalysisState &state, PassScratch &sk
         traverse_node(ctx, ctx.nodes[fdef.second].as.func_def.body_block, cb);
     }
 
+    //------------------ math.type reports "integer"/"float": a native double parameter would answer
+    //------------------ for the caller, so every parameter it inspects must stay a boxed LValue
+    for (const auto &fdef : func_defs) {
+        auto &native_vec = state.func_param_native[fdef.first];
+        const auto &fn = ctx.nodes[fdef.second].as.func_def;
+        std::vector<std::string_view> pnames;
+        for (size_t p = 0; p < fn.param_count; ++p) {
+            uint32_t p_idx = ctx.block_statements[fn.first_param + p];
+            pnames.push_back(std::string_view(ctx.nodes[p_idx].as.ident.name, ctx.nodes[p_idx].as.ident.length));
+        }
+        auto cb = [&](uint32_t idx) {
+            const auto &cn = ctx.nodes[idx];
+            if (cn.type != NodeType::CallExpression)
+                return;
+            uint32_t tgt = cn.as.call_expr.target;
+            if (tgt >= ctx.nodes.size() || ctx.nodes[tgt].type != NodeType::TableAccess)
+                return;
+            const auto &ta = ctx.nodes[tgt].as.table_access;
+            if (ta.table >= ctx.nodes.size() || ctx.nodes[ta.table].type != NodeType::Identifier
+                || ta.key >= ctx.nodes.size() || ctx.nodes[ta.key].type != NodeType::String)
+                return;
+            if (std::string_view(ctx.nodes[ta.table].as.ident.name, ctx.nodes[ta.table].as.ident.length) != "math"
+                || std::string_view(ctx.nodes[ta.key].as.string.text, ctx.nodes[ta.key].as.string.length) != "type")
+                return;
+            for (uint32_t ai = 0; ai < cn.as.call_expr.arg_count; ++ai) {
+                uint32_t a_idx = ctx.block_statements[cn.as.call_expr.first_arg + ai];
+                if (a_idx >= ctx.nodes.size() || ctx.nodes[a_idx].type != NodeType::Identifier)
+                    continue;
+                std::string_view an(ctx.nodes[a_idx].as.ident.name, ctx.nodes[a_idx].as.ident.length);
+                for (size_t p = 0; p < pnames.size(); ++p) {
+                    if (pnames[p] == an)
+                        native_vec[p] = false;
+                }
+            }
+        };
+        traverse_node(ctx, fn.body_block, cb);
+    }
+
     std::set<std::string_view> escaped_funcs;
     for (uint32_t i = 0; i < ctx.nodes.size(); ++i) {
         const auto &n = ctx.nodes[i];
@@ -558,7 +596,19 @@ void pass_callables(const ASTContext &ctx, AnalysisState &state, PassScratch &sk
                         if (!nd_exact || nidx == 0xFFFFFFFF || nidx >= ctx.nodes.size())
                             return;
                         const auto &n = ctx.nodes[nidx];
+                        //------------------ the native impl forms are self-recursive lambdas: the name has no
+                        //------------------ local slot there, so a bare reference to it (e.g. passing the
+                        //------------------ function as a value) must keep the ordinary closure body
+                        if (n.type == NodeType::Identifier && !n.as.ident.is_global
+                            && std::string_view(n.as.ident.name, n.as.ident.length) == fname) {
+                            nd_exact = false;
+                            return;
+                        }
                         if (n.type == NodeType::CallExpression) {
+                            for (uint32_t i = 0; i < n.as.call_expr.arg_count; ++i)
+                                self(self, ctx.block_statements[n.as.call_expr.first_arg + i]);
+                            if (!nd_exact)
+                                return;
                             uint32_t tg = n.as.call_expr.target;
                             if (tg < ctx.nodes.size() && ctx.nodes[tg].type == NodeType::Identifier
                                 && !ctx.nodes[tg].as.ident.is_global
@@ -602,7 +652,11 @@ void pass_callables(const ASTContext &ctx, AnalysisState &state, PassScratch &sk
                         } else if (n.type == NodeType::UnaryOp) {
                             self(self, n.as.unary_op.expr);
                         } else if (n.type == NodeType::CallExpression) {
-                            self(self, n.as.call_expr.target);
+                            //------------------ a plain Identifier target is the call itself, not a value use:
+                            //------------------ walking it would trip the bare-reference rule below and
+                            //------------------ disqualify every self-recursive function
+                            if (ctx.nodes[n.as.call_expr.target].type != NodeType::Identifier)
+                                self(self, n.as.call_expr.target);
                             for (uint32_t i = 0; i < n.as.call_expr.arg_count; ++i)
                                 self(self, ctx.block_statements[n.as.call_expr.first_arg + i]);
                         } else if (n.type == NodeType::IfStatement) {

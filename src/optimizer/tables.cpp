@@ -100,12 +100,14 @@ void pass_pure_arrays(const ASTContext &ctx, AnalysisState &state, PassScratch &
                         }
                     }
                     if (tc.count > 0) {
+                        //------------------ any explicit key (a string, but also [nil], [i] or a negative
+                        //------------------ integer) means the table is not a plain positional array
                         bool has_string_key = false;
                         bool all_numeric = true;
                         for (uint32_t ei = 0; ei < tc.count && !has_string_key && all_numeric; ++ei) {
                             uint32_t ek = ctx.block_statements[tc.first_item + ei * 2];
                             uint32_t ev = ctx.block_statements[tc.first_item + ei * 2 + 1];
-                            if (ek < ctx.nodes.size() && ctx.nodes[ek].type == NodeType::String) {
+                            if (ek != 0xFFFFFFFF) {
                                 has_string_key = true;
                             }
                             if (ev >= ctx.nodes.size() || !yields_number(ctx, state, ev, &known_numbers)) {
@@ -294,6 +296,22 @@ void pass_pure_arrays(const ASTContext &ctx, AnalysisState &state, PassScratch &
                         state.tables_with_dynamic_length.insert(_arg_name);
                 }
             }
+            {
+                //------------------ any table a call can reach may be grown by the callee, even when it is
+                //------------------ nested in an argument expression (setmetatable({}, {__newindex = t})):
+                //------------------ its length must stay a runtime question
+                auto mark_escaped = [&](uint32_t nid) {
+                    const auto &nd2 = ctx.nodes[nid];
+                    if (nd2.type != NodeType::Identifier || nd2.as.ident.is_global)
+                        return;
+                    state.tables_with_dynamic_length.insert(
+                        std::string_view(nd2.as.ident.name, nd2.as.ident.length));
+                };
+                for (uint32_t ai = 0; ai < n.as.call_expr.arg_count; ++ai) {
+                    uint32_t a_idx = ctx.block_statements[n.as.call_expr.first_arg + ai];
+                    traverse_node(ctx, a_idx, mark_escaped);
+                }
+            }
 
             for (uint32_t i = 0; i < n.as.call_expr.arg_count; ++i) {
                 uint32_t v_orig = ctx.block_statements[n.as.call_expr.first_arg + i];
@@ -316,6 +334,29 @@ void pass_pure_arrays(const ASTContext &ctx, AnalysisState &state, PassScratch &
                             }
                         }
                     }
+                }
+            }
+        } else if (n.type == NodeType::TableConstructor) {
+            //------------------ a table stored in another table escapes: its length can change behind a
+            //------------------ later __newindex/__index chain, so it must not be folded to a constant
+            auto mark_stored = [&](uint32_t nid) {
+                const auto &nd2 = ctx.nodes[nid];
+                if (nd2.type != NodeType::Identifier || nd2.as.ident.is_global)
+                    return;
+                state.tables_with_dynamic_length.insert(
+                    std::string_view(nd2.as.ident.name, nd2.as.ident.length));
+            };
+            for (uint32_t ei = 0; ei < n.as.table_cons.count; ++ei) {
+                uint32_t ev = ctx.block_statements[n.as.table_cons.first_item + ei * 2 + 1];
+                traverse_node(ctx, ev, mark_stored);
+                //------------------ storing a whole table in another table makes it escape as a value:
+                //------------------ a pure numeric array cannot be handed out as a clx table
+                while (ev < ctx.nodes.size() && ctx.nodes[ev].type == NodeType::ParenExpression)
+                    ev = ctx.nodes[ev].as.paren_expr.expr;
+                if (ev < ctx.nodes.size() && ctx.nodes[ev].type == NodeType::Identifier
+                    && !ctx.nodes[ev].as.ident.is_global) {
+                    disqualified_arrays.insert(
+                        std::string_view(ctx.nodes[ev].as.ident.name, ctx.nodes[ev].as.ident.length));
                 }
             }
         } else if (n.type == NodeType::ReturnStatement) {

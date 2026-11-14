@@ -151,6 +151,9 @@ struct AnalysisState {
     bool emit_native_impl = false;
     bool in_function_def = false;
     bool in_fast_function = false;
+    //------------------ current_vararg_table: cpp name of the enclosing function's named vararg table
+    //------------------ ("function f(...t)"); `...` then expands that table instead of the raw arguments
+    std::string current_vararg_table;
     bool expect_multivalue = false;
     bool in_native_impl = false;
     //------------------ dbl-overload emission state: emit_dbl_impl selects the triple-bound
@@ -261,6 +264,18 @@ inline bool is_purely_integer_expr(const ASTContext &ctx, const AnalysisState &s
     if (n.type == NodeType::ParenExpression)
         return is_purely_integer_expr(ctx, state, n.as.paren_expr.expr);
     if (n.type == NodeType::TableAccess) {
+        //------------------ math.maxinteger/mininteger are Int64 constants in stock Lua: reading them
+        //------------------ never yields a float, so no int-array or struct proof is needed
+        if (ctx.nodes[n.as.table_access.table].type == NodeType::Identifier
+            && ctx.nodes[n.as.table_access.table].as.ident.is_global
+            && ctx.nodes[n.as.table_access.key].type == NodeType::String) {
+            std::string_view mn(
+                ctx.nodes[n.as.table_access.table].as.ident.name, ctx.nodes[n.as.table_access.table].as.ident.length);
+            std::string_view mk(
+                ctx.nodes[n.as.table_access.key].as.string.text, ctx.nodes[n.as.table_access.key].as.string.length);
+            if (mn == "math" && (mk == "maxinteger" || mk == "mininteger"))
+                return true;
+        }
         if (struct_field_kind(ctx, state, node_idx) == FieldKind::Int)
             return true;
         if (ctx.nodes[n.as.table_access.table].type == NodeType::Identifier) {

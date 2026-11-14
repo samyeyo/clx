@@ -554,6 +554,42 @@ void pass_numeric_params(const ASTContext &ctx, AnalysisState &state, PassScratc
         }
     }
 
+    //------------------ parameters handed to a callee that does not prove them numeric keep their
+    //------------------ runtime type: lowering them to a native double would coerce a string to 0
+    //------------------ A metamethod receives the raw operands, which may be tables carrying their own
+    //------------------ metamethods (__le doing `a - b`), so its parameters must keep the runtime type.
+    //------------------ Collect functions that are the value of a __-prefixed table field.
+    std::set<uint32_t> metamethod_funcs;
+    auto is_meta_key = [&](uint32_t kidx) {
+        if (kidx >= ctx.nodes.size())
+            return false;
+        const auto &k = ctx.nodes[kidx];
+        return k.type == NodeType::String && k.as.string.length >= 3 && k.as.string.text[0] == '_'
+            && k.as.string.text[1] == '_';
+    };
+    for (const auto &node : ctx.nodes) {
+        if (node.type == NodeType::TableConstructor) {
+            for (uint32_t i = 0; i < node.as.table_cons.count; ++i) {
+                uint32_t k = ctx.block_statements[node.as.table_cons.first_item + i * 2];
+                uint32_t v = ctx.block_statements[node.as.table_cons.first_item + i * 2 + 1];
+                if (v < ctx.nodes.size() && ctx.nodes[v].type == NodeType::FunctionDef && is_meta_key(k))
+                    metamethod_funcs.insert(v);
+            }
+        } else if (node.type == NodeType::Assignment) {
+            for (uint32_t i = 0; i < node.as.assign.target_count && i < node.as.assign.value_count; ++i) {
+                uint32_t t = ctx.block_statements[node.as.assign.first_target + i];
+                uint32_t v = ctx.block_statements[node.as.assign.first_value + i];
+                if (t >= ctx.nodes.size() || v >= ctx.nodes.size())
+                    continue;
+                if (ctx.nodes[t].type != NodeType::TableAccess || ctx.nodes[v].type != NodeType::FunctionDef)
+                    continue;
+                if (is_meta_key(ctx.nodes[t].as.table_access.key))
+                    metamethod_funcs.insert(v);
+            }
+        }
+    }
+
+    std::set<std::pair<uint32_t, std::string>> blocked_params;
     bool np_changed = true;
     for (int iter = 0; iter < 10 && np_changed; ++iter) {
         np_changed = false;
@@ -562,8 +598,25 @@ void pass_numeric_params(const ASTContext &ctx, AnalysisState &state, PassScratc
             if (nd.type != NodeType::FunctionDef)
                 continue;
             auto &fparams = func_def_params[ni];
-            if (fparams.empty())
+            if (fparams.empty() || metamethod_funcs.count(ni))
                 continue;
+
+            //------------------ a parameter read for its truthiness (or/and/not/nil test) can be nil
+            //------------------ at run time: a native double would turn that nil into 0, which is truthy
+            auto block_param = [&](uint32_t idx) {
+                if (idx >= ctx.nodes.size() || ctx.nodes[idx].type != NodeType::Identifier)
+                    return;
+                std::string_view nm(ctx.nodes[idx].as.ident.name, ctx.nodes[idx].as.ident.length);
+                for (auto &fp : fparams) {
+                    if (fp == nm) {
+                        blocked_params.insert({ ni, std::string(nm) });
+                        state.param_numbers[ni].erase(std::string(nm));
+                    }
+                }
+            };
+            auto is_nil_node = [&](uint32_t idx) {
+                return idx < ctx.nodes.size() && ctx.nodes[idx].type == NodeType::NilLiteral;
+            };
 
             std::vector<uint32_t> stack = { nd.as.func_def.body_block };
             std::set<uint32_t> visited;
@@ -596,12 +649,14 @@ void pass_numeric_params(const ASTContext &ctx, AnalysisState &state, PassScratc
                     stack.push_back(nn.as.for_stmt.body_block);
                 }
                 if (nn.type == NodeType::IfStatement) {
+                    block_param(nn.as.if_stmt.condition);
                     stack.push_back(nn.as.if_stmt.condition);
                     stack.push_back(nn.as.if_stmt.then_block);
                     if (nn.as.if_stmt.else_block != 0xFFFFFFFF)
                         stack.push_back(nn.as.if_stmt.else_block);
                 }
                 if (nn.type == NodeType::WhileStatement || nn.type == NodeType::RepeatStatement) {
+                    block_param(nn.as.while_stmt.condition);
                     stack.push_back(nn.as.while_stmt.condition);
                     stack.push_back(nn.as.while_stmt.body_block);
                 }
@@ -610,6 +665,9 @@ void pass_numeric_params(const ASTContext &ctx, AnalysisState &state, PassScratc
                     stack.push_back(nn.as.bin_op.right);
                 }
                 if (nn.type == NodeType::UnaryOp) {
+                    if (nn.as.unary_op.op == static_cast<int>(UnaryOp::Not)
+                        || nn.as.unary_op.op == static_cast<int>(UnaryOp::BNot))
+                        block_param(nn.as.unary_op.expr);
                     stack.push_back(nn.as.unary_op.expr);
                 }
                 if (nn.type == NodeType::ParenExpression) {
@@ -625,17 +683,35 @@ void pass_numeric_params(const ASTContext &ctx, AnalysisState &state, PassScratc
 
                 if (nn.type == NodeType::BinaryOp) {
                     int op = nn.as.bin_op.op;
-                    if ((op >= static_cast<int>(BinaryOp::Add) && op <= static_cast<int>(BinaryOp::Div))
-                        || (op >= static_cast<int>(BinaryOp::Mod) && op <= static_cast<int>(BinaryOp::Shr))) {
+                    if (op == static_cast<int>(BinaryOp::Or) || op == static_cast<int>(BinaryOp::And)) {
+                        block_param(nn.as.bin_op.left);
+                        block_param(nn.as.bin_op.right);
+                    }
+                    if ((op == static_cast<int>(BinaryOp::Eq) || op == static_cast<int>(BinaryOp::Ne))
+                        && (is_nil_node(nn.as.bin_op.left) || is_nil_node(nn.as.bin_op.right))) {
+                        block_param(nn.as.bin_op.left);
+                        block_param(nn.as.bin_op.right);
+                    }
+                    bool is_arith = (op >= static_cast<int>(BinaryOp::Add) && op <= static_cast<int>(BinaryOp::Div))
+                        || (op >= static_cast<int>(BinaryOp::Mod) && op <= static_cast<int>(BinaryOp::Pow));
+                    bool is_bitwise = op >= static_cast<int>(BinaryOp::BitAnd) && op <= static_cast<int>(BinaryOp::Shr);
+                    if (is_arith || is_bitwise) {
                         auto check_arith = [&](uint32_t idx) {
                             if (idx < ctx.nodes.size() && ctx.nodes[idx].type == NodeType::Identifier) {
                                 std::string_view nm(ctx.nodes[idx].as.ident.name, ctx.nodes[idx].as.ident.length);
                                 for (auto &fp : fparams) {
-                                    if (fp == nm) {
-                                        if (!state.param_numbers[ni].count(std::string(nm))) {
-                                            state.param_numbers[ni].insert(std::string(nm));
-                                            np_changed = true;
-                                        }
+                                    if (fp != nm)
+                                        continue;
+                                    //------------------ a bitwise operand may be a string coerced by its
+                                    //------------------ metatable, so it cannot become a native double
+                                    if (is_bitwise) {
+                                        block_param(idx);
+                                        return;
+                                    }
+                                    if (!blocked_params.count({ ni, std::string(nm) })
+                                        && !state.param_numbers[ni].count(std::string(nm))) {
+                                        state.param_numbers[ni].insert(std::string(nm));
+                                        np_changed = true;
                                     }
                                 }
                             }
@@ -648,6 +724,32 @@ void pass_numeric_params(const ASTContext &ctx, AnalysisState &state, PassScratc
                     for (uint32_t ai = 0; ai < nn.as.call_expr.arg_count; ++ai)
                         stack.push_back(ctx.block_statements[nn.as.call_expr.first_arg + ai]);
                     uint32_t tgt = nn.as.call_expr.target;
+                    //------------------ builtins that observe the runtime type (or truthiness) of their
+                    //------------------ argument cannot receive a parameter lowered to a native double
+                    static const std::set<std::string_view> kTypeObservers = { "type", "tostring", "print", "rawlen",
+                        "select", "assert", "error" };
+                    bool observes_type = false;
+                    if (tgt < ctx.nodes.size() && ctx.nodes[tgt].type == NodeType::Identifier
+                        && !func_name_node.count(std::string_view(
+                               ctx.nodes[tgt].as.ident.name, ctx.nodes[tgt].as.ident.length))) {
+                        observes_type = kTypeObservers.count(
+                                            std::string_view(ctx.nodes[tgt].as.ident.name, ctx.nodes[tgt].as.ident.length))
+                            > 0;
+                    } else if (tgt < ctx.nodes.size() && ctx.nodes[tgt].type == NodeType::TableAccess) {
+                        //------------------ math.type reports "integer"/"float", so a native double argument
+                        //------------------ would answer for the caller: the parameter must keep its subtype
+                        const auto &ta = ctx.nodes[tgt].as.table_access;
+                        if (ta.table < ctx.nodes.size() && ctx.nodes[ta.table].type == NodeType::Identifier
+                            && ta.key < ctx.nodes.size() && ctx.nodes[ta.key].type == NodeType::String) {
+                            std::string_view tn(ctx.nodes[ta.table].as.ident.name, ctx.nodes[ta.table].as.ident.length);
+                            std::string_view kn(ctx.nodes[ta.key].as.string.text, ctx.nodes[ta.key].as.string.length);
+                            observes_type = (tn == "math" && kn == "type");
+                        }
+                    }
+                    if (observes_type) {
+                        for (uint32_t ai = 0; ai < nn.as.call_expr.arg_count; ++ai)
+                            block_param(ctx.block_statements[nn.as.call_expr.first_arg + ai]);
+                    }
                     if (tgt < ctx.nodes.size() && ctx.nodes[tgt].type == NodeType::Identifier) {
                         std::string_view callee(ctx.nodes[tgt].as.ident.name, ctx.nodes[tgt].as.ident.length);
                         auto cit = func_name_node.find(callee);
@@ -662,13 +764,20 @@ void pass_numeric_params(const ASTContext &ctx, AnalysisState &state, PassScratc
                                         std::string_view arg_nm(
                                             ctx.nodes[arg_nid].as.ident.name, ctx.nodes[arg_nid].as.ident.length);
                                         std::string callee_pn(cparams[ai]);
-                                        if (state.param_numbers[ci].count(callee_pn)
-                                            && !state.param_numbers[ni].count(std::string(arg_nm))) {
-                                            for (auto &fp : fparams) {
-                                                if (fp == arg_nm) {
+                                        bool callee_numeric = state.param_numbers[ci].count(callee_pn) > 0;
+                                        for (auto &fp : fparams) {
+                                            if (fp != arg_nm)
+                                                continue;
+                                            if (callee_numeric) {
+                                                if (!blocked_params.count({ ni, std::string(arg_nm) })
+                                                    && !state.param_numbers[ni].count(std::string(arg_nm))) {
                                                     state.param_numbers[ni].insert(std::string(arg_nm));
                                                     np_changed = true;
                                                 }
+                                            } else {
+                                                blocked_params.insert({ ni, std::string(arg_nm) });
+                                                if (state.param_numbers[ni].erase(std::string(arg_nm)) > 0)
+                                                    np_changed = true;
                                             }
                                         }
                                     }
