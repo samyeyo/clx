@@ -11,20 +11,63 @@
 
 namespace clx {
 
-//------------------ create_bridge
+//------------------ create_bridge - leaves the callable closure on the Lua stack
 NativeBridge *create_bridge(LState *clx_L, lua_State *L, const LValue &callable) {
     DynamicVM *vm = DynamicVM::acquire(clx_L);
+    const int cache = vm->bridge_cache_registry_ref();
+    const void *key = callable.as_pointer();
+
+    //------------------ a clx callable already bridged keeps a single VM closure, so identity holds
+    if (cache != LUA_NOREF && key) {
+        lua_rawgeti(L, LUA_REGISTRYINDEX, cache);
+        lua_pushlightuserdata(L, const_cast<void *>(key));
+        lua_rawget(L, -2);
+        if (lua_isfunction(L, -1)) {
+            lua_remove(L, -2);
+            return nullptr;
+        }
+        lua_pop(L, 2);
+    }
+
     NativeBridge *nb = new NativeBridge();
     nb->vm = vm;
     nb->clx_callable = callable;
+    nb->node.bridge = nb;
+    nb->node.prev = nullptr;
+    nb->node.next = nullptr;
+    vm->link_bridge(&nb->node);
     void *ud = lua_newuserdata(L, sizeof(NativeBridge *));
     *static_cast<NativeBridge **>(ud) = nb;
-    luaL_newmetatable(L, "clx_callable");
+    if (luaL_newmetatable(L, "clx_callable")) {
+        lua_pushlightuserdata(L, static_cast<void *>(clx_L));
+        lua_pushcclosure(L, clx_vm_native_bridge_gc, 1);
+        lua_setfield(L, -2, "__gc");
+    }
     lua_setmetatable(L, -2);
     lua_pushcclosure(L, clx_vm_native_bridge_call, 1);
-    int ref = luaL_ref(L, LUA_REGISTRYINDEX);
-    nb->registry_ref = ref;
+
+    //------------------ publish the closure in the weak cache; it vanishes with the closure
+    if (cache != LUA_NOREF && key) {
+        lua_rawgeti(L, LUA_REGISTRYINDEX, cache);
+        lua_pushlightuserdata(L, const_cast<void *>(key));
+        lua_pushvalue(L, -3);
+        lua_rawset(L, -3);
+        lua_pop(L, 1);
+    }
     return nb;
+}
+
+//------------------ clx_vm_native_bridge_gc - drop the bridge when Lua collects the closure
+extern "C" int clx_vm_native_bridge_gc(lua_State *L) {
+    clx::NativeBridge *nb = *static_cast<clx::NativeBridge **>(lua_touserdata(L, 1));
+    if (!nb)
+        return 0;
+    clx::LState *clx_L = static_cast<clx::LState *>(lua_touserdata(L, lua_upvalueindex(1)));
+    clx::DynamicVM *vm = clx_L ? clx::DynamicVM::find(clx_L) : nullptr;
+    if (vm)
+        vm->unlink_bridge(&nb->node);
+    delete nb;
+    return 0;
 }
 
 //------------------ write_back_table - sync clx LTable back to Lua VM table
@@ -127,6 +170,8 @@ extern "C" int clx_vm_native_bridge_call(lua_State *L) {
 
     std::vector<TableTrack> table_tracks;
 
+    RootRange cv_rr(clx_L, cv_args.data(), cv_args.size());
+
     for (int i = nargs - 1; i >= 0; --i) {
         if (lua_type(L, i + 1) == LUA_TTABLE) {
             lua_pushvalue(L, i + 1);
@@ -144,10 +189,25 @@ extern "C" int clx_vm_native_bridge_call(lua_State *L) {
         }
     }
 
-    RootRange cv_rr(clx_L, cv_args.data(), cv_args.size());
+    //------------------ report the calling chunk's position and call shape, so a library error in a
+    //------------------ dynamic chunk reads like stock's ("[string ...]:1: ...", "calling 'x' on bad self")
+    CallSite bridge_site = { "", 0, false, false };
+    {
+        //------------------ level 0 is this C function, so its "n" info says how the call was written
+        //------------------ (method vs plain); level 1 supplies the chunk name and line
+        lua_Debug ar0;
+        if (lua_getstack(L, 0, &ar0) && lua_getinfo(L, "n", &ar0)) {
+            bridge_site.is_method = ar0.namewhat != nullptr && std::strcmp(ar0.namewhat, "method") == 0;
+            bridge_site.name_short = ar0.name != nullptr;
+        }
+        lua_Debug ar;
+        if (lua_getstack(L, 1, &ar) && lua_getinfo(L, "Sl", &ar)) {
+            bridge_site.file = ar.short_src;
+            bridge_site.line = ar.currentline;
+        }
+    }
 
     try {
-        static constexpr CallSite bridge_site = { __FILE__, __LINE__, false, false };
         MultiValue mv
             = call_function(clx_L, nb->clx_callable, cv_args.data(), cv_args.size(), &bridge_site);
 
@@ -163,8 +223,14 @@ extern "C" int clx_vm_native_bridge_call(lua_State *L) {
         }
 
         size_t nret = mv.count;
-        for (size_t i = 0; i < nret; ++i)
-            clx_to_vm_value_(clx_L, L, mv[i]);
+        if (nret > 0) {
+            std::vector<LValue> rets(mv.count);
+            for (size_t i = 0; i < nret; ++i)
+                rets[i] = mv[i];
+            RootRange rets_rr(clx_L, rets.data(), rets.size());
+            for (size_t i = 0; i < nret; ++i)
+                clx_to_vm_value_(clx_L, L, rets[i]);
+        }
         return static_cast<int>(nret);
     } catch (const LRuntimeException &e) {
 

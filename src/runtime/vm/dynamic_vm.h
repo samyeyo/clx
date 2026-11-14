@@ -25,6 +25,15 @@ struct ProxyNode {
     ProxyNode* next;
 };
 
+struct NativeBridge;
+
+//------------------ BridgeNode - intrusive list node for live NativeBridge callables
+struct BridgeNode {
+    NativeBridge* bridge;
+    BridgeNode* prev;
+    BridgeNode* next;
+};
+
 //------------------ DynamicVM - one per clx::LState
 class DynamicVM {
 public:
@@ -51,6 +60,8 @@ public:
     int build_env_table(const LValue& preferred);
     int default_env_registry_ref() const;
 
+    int bridge_cache_registry_ref() const { return bridge_cache_ref_; }
+
     static DynamicVM* find(LState* clx_L);
 
     //------------------ Proxy list maintenance
@@ -58,6 +69,10 @@ public:
     void unlink_proxy(ProxyNode* node);
 
     void mark_proxy_roots(struct LState::GCStack& wl);
+
+    //------------------ Bridge list maintenance (keeps clx callables alive)
+    void link_bridge(BridgeNode* node);
+    void unlink_bridge(BridgeNode* node);
 
     void pace_vm_gc();
 
@@ -68,12 +83,16 @@ private:
     lua_State* L_;
     int registry_root_;
     int env_table_ref_;
+    int bridge_cache_ref_ = LUA_NOREF;
+    int gc_fn_ref_ = LUA_NOREF;
     bool opened_libs_;
     ProxyNode* proxy_head_ = nullptr;
+    BridgeNode* bridge_head_ = nullptr;
     unsigned proxy_alloc_since_gc_ = 0;
 
     void build_parking_lot();
     int build_default_env();
+    void build_bridge_cache();
 };
 
 }

@@ -85,7 +85,12 @@ bool vm_pcall_function_(LState *clx_L, int lua_ref, const LValue *args, size_t n
     for (size_t i = 0; i < nargs; ++i)
         clx_to_vm_value_(clx_L, L, args[i]);
 
+    //------------------ the VM unwinds errors with longjmp, so clx root frames opened inside the call never
+    //------------------ run their destructors: cutting the chain back to the head we entered with drops them
+    //------------------ all, without scanning (and dereferencing) their already-dead stack storage
+    RootRange *saved_top_root = clx_L->top_root;
     int rc = lua_pcallk(L, static_cast<int>(nargs), LUA_MULTRET, 0, 0, nullptr);
+    clx_L->top_root = saved_top_root;
     if (rc != LUA_OK) {
 
         LValue err = clx_vm_capture_error_(clx_L, L);
@@ -104,6 +109,7 @@ bool vm_pcall_function_(LState *clx_L, int lua_ref, const LValue *args, size_t n
         return true;
     }
     std::vector<LValue> tmp(static_cast<size_t>(results));
+    RootRange tmp_rr(clx_L, tmp.data(), tmp.size());
     for (int i = 0; i < results; ++i)
         tmp[i] = vm_to_clx_value_(clx_L, L, base + i);
     out = MultiValue(tmp.data(), tmp.size(), clx_L);

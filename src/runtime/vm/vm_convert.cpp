@@ -18,6 +18,11 @@
 #include <limits>
 
 extern "C" int clx_vm_userdata_index(lua_State* L);
+extern "C" int clx_vm_type(lua_State* L);
+extern "C" int clx_vm_rawget(lua_State* L);
+extern "C" int clx_vm_rawset(lua_State* L);
+extern "C" int clx_vm_next(lua_State* L);
+extern "C" int clx_vm_rawlen(lua_State* L);
 extern "C" int clx_vm_proxy_index(lua_State* L);
 extern "C" int clx_vm_proxy_newindex(lua_State* L);
 extern "C" int clx_vm_proxy_pairs(lua_State* L);
@@ -42,6 +47,43 @@ thread_local ConvertCache s_convert_cache;
 
 namespace clx {
 
+namespace {
+
+//------------------ push_cached_object - re-push a previously created proxy for this clx object, if still alive
+bool push_cached_object(LState* clx_L, lua_State* L, LHeader* header)
+{
+    if (!header)
+        return false;
+    int cache = DynamicVM::acquire(clx_L)->bridge_cache_registry_ref();
+    if (cache == LUA_NOREF)
+        return false;
+    lua_rawgeti(L, LUA_REGISTRYINDEX, cache);
+    lua_pushlightuserdata(L, static_cast<void*>(header));
+    lua_rawget(L, -2);
+    bool hit = !lua_isnil(L, -1);
+    lua_remove(L, -2);
+    if (!hit)
+        lua_pop(L, 1);
+    return hit;
+}
+
+//------------------ store_cached_object - publish the object on top of the stack under its clx header
+void store_cached_object(LState* clx_L, lua_State* L, LHeader* header)
+{
+    if (!header)
+        return;
+    int cache = DynamicVM::acquire(clx_L)->bridge_cache_registry_ref();
+    if (cache == LUA_NOREF)
+        return;
+    lua_rawgeti(L, LUA_REGISTRYINDEX, cache);
+    lua_pushlightuserdata(L, static_cast<void*>(header));
+    lua_pushvalue(L, -3);
+    lua_rawset(L, -3);
+    lua_pop(L, 1);
+}
+
+}
+
 //------------------ clx_to_vm_value_
 void clx_to_vm_value_(LState* clx_L, lua_State* L, const LValue& v)
 {
@@ -53,12 +95,9 @@ void clx_to_vm_value_(LState* clx_L, lua_State* L, const LValue& v)
         lua_pushboolean(L, v.as_bool() ? 1 : 0);
         return;
     case Int64: {
-        int64_t i = v.val.payload.i64;
-
-        if (i >= INT32_MIN && i <= INT32_MAX)
-            lua_pushinteger(L, static_cast<lua_Integer>(i));
-        else
-            lua_pushnumber(L, static_cast<lua_Number>(static_cast<double>(i)));
+        //------------------ lua_Integer is 64-bit here, so the full clx range crosses losslessly;
+        //------------------ never demote to double or integer-ness (and wrapping) is lost
+        lua_pushinteger(L, static_cast<lua_Integer>(v.val.payload.i64));
         return;
     }
     case Double:
@@ -79,6 +118,8 @@ void clx_to_vm_value_(LState* clx_L, lua_State* L, const LValue& v)
         if (v.as_pointer()) {
 
             LHeader* h = v.as_pointer();
+            if (push_cached_object(clx_L, L, h))
+                return;
             ProxyNode* node = static_cast<ProxyNode*>(lua_newuserdata(L, sizeof(ProxyNode)));
             node->header = h;
             node->prev = nullptr;
@@ -123,6 +164,7 @@ void clx_to_vm_value_(LState* clx_L, lua_State* L, const LValue& v)
 
                 lua_setmetatable(L, -2);
             }
+            store_cached_object(clx_L, L, h);
         } else {
             lua_pushnil(L);
         }
@@ -130,8 +172,13 @@ void clx_to_vm_value_(LState* clx_L, lua_State* L, const LValue& v)
     case Function:
         if (v.as_pointer()) {
 
-            NativeBridge* nb = create_bridge(clx_L, L, v);
-            lua_rawgeti(L, LUA_REGISTRYINDEX, nb->registry_ref);
+            LCFunction* cf = static_cast<LCFunction*>(v.as_pointer());
+            if (cf->flags & LFLAG_VM_PROXY) {
+
+                lua_rawgeti(L, LUA_REGISTRYINDEX, static_cast<VMFunction*>(cf)->registry_ref);
+            } else {
+                create_bridge(clx_L, L, v);
+            }
         } else {
             lua_pushnil(L);
         }
@@ -140,6 +187,8 @@ void clx_to_vm_value_(LState* clx_L, lua_State* L, const LValue& v)
 
         if (v.as_pointer()) {
             LHeader* h = v.as_pointer();
+            if (push_cached_object(clx_L, L, h))
+                return;
             ProxyNode* node = static_cast<ProxyNode*>(lua_newuserdata(L, sizeof(ProxyNode)));
             node->header = h;
             node->prev = nullptr;
@@ -159,6 +208,7 @@ void clx_to_vm_value_(LState* clx_L, lua_State* L, const LValue& v)
             } else {
                 lua_setmetatable(L, -2);
             }
+            store_cached_object(clx_L, L, h);
         } else {
             lua_pushnil(L);
         }
@@ -264,18 +314,20 @@ LValue vm_to_clx_value_(LState* clx_L, lua_State* L, int idx)
                 lua_pop(L, 1);
                 tbl->array[i] = val.val;
                 tbl->array_types[i] = val.type;
+                tbl->array_size = i + 1;
                 if (i == run && val.type != Nil)
                     ++run;
             }
-            tbl->array_size = len;
             tbl->array_lim = run;
         }
 
         lua_pushnil(L);
         while (lua_next(L, abs_idx) != 0) {
-            LValue key = vm_to_clx_value_(clx_L, L, -2);
-            LValue val = vm_to_clx_value_(clx_L, L, -1);
-            tbl->settable(key, val);
+            LValue kv[2];
+            clx::RootRange kv_rr(clx_L, kv, 2);
+            kv[0] = vm_to_clx_value_(clx_L, L, -2);
+            kv[1] = vm_to_clx_value_(clx_L, L, -1);
+            tbl->settable(kv[0], kv[1]);
             lua_pop(L, 1);
         }
 
@@ -340,12 +392,12 @@ LValue vm_to_clx_value_(LState* clx_L, lua_State* L, int idx)
 
             if (lua_rawequal(L, -1, -2) == 1) {
                 lua_pop(L, 2);
-                LHeader* h = nullptr;
+                NativeBridge* nb = nullptr;
                 void* ud = lua_touserdata(L, idx);
                 if (ud)
-                    h = *static_cast<LHeader**>(ud);
-                if (h)
-                    return LValue(h);
+                    nb = *static_cast<NativeBridge**>(ud);
+                if (nb)
+                    return nb->clx_callable;
                 return LValue();
             }
             lua_pop(L, 2);
@@ -374,6 +426,29 @@ LValue clx_vm_capture_error_(LState* clx_L, lua_State* L)
     LValue v = clx_L->intern_lvalue(msg, len);
     lua_pop(L, 1);
     return v;
+}
+
+//------------------ clx_vm_require - a loaded chunk's require: the VM's own package.loaded answers first,
+//------------------ so `require"debug"` reaches the VM's real library instead of the compiled-code stub,
+//------------------ and everything else falls through to clx's require (shared path/loaded state)
+extern "C" int clx_vm_require(lua_State* L)
+{
+    int vm_loaded_ref = static_cast<int>(lua_tointeger(L, lua_upvalueindex(1)));
+    if (lua_type(L, 1) == LUA_TSTRING) {
+        lua_rawgeti(L, LUA_REGISTRYINDEX, vm_loaded_ref);
+        lua_pushvalue(L, 1);
+        lua_rawget(L, -2);
+        if (!lua_isnil(L, -1)) {
+            lua_remove(L, -2);
+            return 1;
+        }
+        lua_pop(L, 2);
+    }
+    lua_pushvalue(L, lua_upvalueindex(2));
+    lua_insert(L, 1);
+    int nargs = lua_gettop(L) - 1;
+    lua_call(L, nargs, LUA_MULTRET);
+    return lua_gettop(L);
 }
 
 //------------------ clx_vm_install_traceback_
@@ -408,9 +483,25 @@ extern "C" int clx_vm_env_newindex(lua_State* L)
     clx::LTable* tbl = static_cast<clx::LTable*>(lua_touserdata(L, lua_upvalueindex(2)));
     if (!clx_L || !tbl)
         return 0;
-    clx::LValue key = vm_to_clx_value_(clx_L, L, 2);
-    clx::LValue val = vm_to_clx_value_(clx_L, L, 3);
-    tbl->settable(key, val);
+
+    //------------------ the default environment keeps every chunk-written global in clx and none in the VM
+    //------------------ table: a name stored in the VM table would be assigned there directly next time and
+    //------------------ never reach __newindex, leaving compiled code with the first value it mirrored
+    if (lua_tointeger(L, lua_upvalueindex(4)) == 1) {
+        if (!lua_isnoneornil(L, lua_upvalueindex(5))) {
+            lua_pushvalue(L, lua_upvalueindex(5));
+            lua_pushvalue(L, 2);
+            lua_pushboolean(L, 1);
+            lua_rawset(L, -3);
+            lua_pop(L, 1);
+        }
+    }
+
+    clx::LValue kv[2];
+    clx::RootRange kv_rr(clx_L, kv, 2);
+    kv[0] = vm_to_clx_value_(clx_L, L, 2);
+    kv[1] = vm_to_clx_value_(clx_L, L, 3);
+    tbl->settable(kv[0], kv[1]);
     return 0;
 }
 
@@ -442,20 +533,16 @@ extern "C" int clx_vm_env_pairs_iter(lua_State* L)
     clx::LTable* tbl = static_cast<clx::LTable*>(lua_touserdata(L, lua_upvalueindex(2)));
     if (!clx_L || !tbl)
         return 0;
-    size_t idx = static_cast<size_t>(lua_tointeger(L, lua_upvalueindex(3)));
-    size_t array_size = tbl->array_size;
-    while (idx < array_size) {
-        if (tbl->array_types[idx] != clx::Nil) {
-            lua_pushinteger(L, static_cast<lua_Integer>(idx + 1));
-            clx::LValue val(tbl->array[idx], tbl->array_types[idx]);
-            clx_to_vm_value_(clx_L, L, val);
-            lua_pushinteger(L, static_cast<lua_Integer>(idx + 2));
-            lua_replace(L, lua_upvalueindex(3));
-            return 2;
-        }
-        ++idx;
-    }
-    return 0;
+
+    //------------------ walk the whole clx table (array and hash) the way stock pairs does
+    clx::LValue t(clx::Table, tbl);
+    clx::LValue k = clx::vm_to_clx_value_(clx_L, L, 2);
+    clx::MultiValue res = clx::next(clx_L, t, k);
+    if (res.count == 0 || res[0].type == clx::Nil)
+        return 0;
+    clx_to_vm_value_(clx_L, L, res[0]);
+    clx_to_vm_value_(clx_L, L, res[1]);
+    return 2;
 }
 
 //------------------ clx_userdata __index
@@ -519,9 +606,12 @@ extern "C" int clx_vm_proxy_newindex(lua_State* L)
     if (!h || h->type != static_cast<uint8_t>(clx::Table))
         return 0;
     clx::LTable* tbl = static_cast<clx::LTable*>(h);
-    clx::LValue key = clx::vm_to_clx_value_(clx_L, L, 2);
-    clx::LValue val = clx::vm_to_clx_value_(clx_L, L, 3);
-    tbl->settable(key, val);
+
+    clx::LValue kv[2];
+    clx::RootRange kv_rr(clx_L, kv, 2);
+    kv[0] = clx::vm_to_clx_value_(clx_L, L, 2);
+    kv[1] = clx::vm_to_clx_value_(clx_L, L, 3);
+    tbl->settable(kv[0], kv[1]);
     return 0;
 }
 
@@ -575,6 +665,121 @@ extern "C" int clx_vm_proxy_pairs(lua_State* L)
     return 3;
 }
 
+//------------------ clx_vm_proxy_table_of - the clx LTable behind a clx_proxy userdata, or null
+static clx::LTable* clx_vm_proxy_table_of(lua_State* L, int idx)
+{
+    void* ud = luaL_testudata(L, idx, "clx_proxy");
+    if (!ud)
+        return nullptr;
+    clx::LHeader* h = *static_cast<clx::LHeader**>(ud);
+    if (!h || h->type != static_cast<uint8_t>(clx::Table))
+        return nullptr;
+    return static_cast<clx::LTable*>(h);
+}
+
+//------------------ clx_vm_type - type() that reports a clx proxy as the value it stands for
+extern "C" int clx_vm_type(lua_State* L)
+{
+    int t = lua_type(L, 1);
+    if (t == LUA_TNONE)
+        luaL_argerror(L, 1, "value expected");
+    if (t == LUA_TUSERDATA) {
+        if (luaL_testudata(L, 1, "clx_proxy")) {
+            lua_pushstring(L, "table");
+            return 1;
+        }
+        if (luaL_testudata(L, 1, "clx_thread")) {
+            lua_pushstring(L, "thread");
+            return 1;
+        }
+    }
+    lua_pushstring(L, lua_typename(L, t));
+    return 1;
+}
+
+//------------------ clx_vm_rawget - rawget accepting a real table or a clx_proxy
+extern "C" int clx_vm_rawget(lua_State* L)
+{
+    clx::LState* clx_L = static_cast<clx::LState*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (clx::LTable* tbl = clx_vm_proxy_table_of(L, 1)) {
+        if (lua_type(L, 2) == LUA_TNIL)
+            luaL_argerror(L, 2, "table index is nil");
+        clx::LValue key = clx::vm_to_clx_value_(clx_L, L, 2);
+        clx::LValue val = tbl->gettable(key);
+        clx::clx_to_vm_value_(clx_L, L, val);
+        return 1;
+    }
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_settop(L, 2);
+    lua_rawget(L, 1);
+    return 1;
+}
+
+//------------------ clx_vm_rawset - rawset accepting a real table or a clx_proxy
+extern "C" int clx_vm_rawset(lua_State* L)
+{
+    clx::LState* clx_L = static_cast<clx::LState*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (clx::LTable* tbl = clx_vm_proxy_table_of(L, 1)) {
+        clx::LValue kv[2];
+        clx::RootRange kv_rr(clx_L, kv, 2);
+        kv[0] = clx::vm_to_clx_value_(clx_L, L, 2);
+        kv[1] = clx::vm_to_clx_value_(clx_L, L, 3);
+        if (kv[0].type == clx::Nil)
+            luaL_argerror(L, 2, "table index is nil");
+        if (kv[0].type == clx::Double && kv[0].val.payload.f64 != kv[0].val.payload.f64)
+            luaL_argerror(L, 2, "table index is NaN");
+        tbl->settable(kv[0], kv[1]);
+        lua_pushvalue(L, 1);
+        return 1;
+    }
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_settop(L, 3);
+    lua_rawset(L, 1);
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
+//------------------ clx_vm_next - next accepting a real table or a clx_proxy
+extern "C" int clx_vm_next(lua_State* L)
+{
+    clx::LState* clx_L = static_cast<clx::LState*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (clx::LTable* tbl = clx_vm_proxy_table_of(L, 1)) {
+        clx::LValue k;
+        if (lua_gettop(L) >= 2 && lua_type(L, 2) != LUA_TNIL)
+            k = clx::vm_to_clx_value_(clx_L, L, 2);
+        clx::LValue t(clx::Table, tbl);
+        clx::MultiValue res = clx::next(clx_L, t, k);
+        if (res.count == 0 || res[0].type == clx::Nil) {
+            lua_pushnil(L);
+            return 1;
+        }
+        clx::clx_to_vm_value_(clx_L, L, res[0]);
+        clx::clx_to_vm_value_(clx_L, L, res[1]);
+        return 2;
+    }
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_settop(L, 2);
+    if (lua_next(L, 1))
+        return 2;
+    lua_pushnil(L);
+    return 1;
+}
+
+//------------------ clx_vm_rawlen - rawlen accepting a real table, a string or a clx_proxy
+extern "C" int clx_vm_rawlen(lua_State* L)
+{
+    clx::LState* clx_L = static_cast<clx::LState*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (clx::LTable* tbl = clx_vm_proxy_table_of(L, 1)) {
+        lua_pushinteger(L, static_cast<lua_Integer>(clx::rawlen(clx::LValue(clx::Table, tbl))));
+        return 1;
+    }
+    int t = lua_type(L, 1);
+    if (t != LUA_TTABLE && t != LUA_TSTRING)
+        luaL_argerror(L, 1, "table or string expected");
+    lua_pushinteger(L, static_cast<lua_Integer>(lua_rawlen(L, 1)));
+    return 1;
+}
+
 //------------------ clx_vm_proxy_call - Lua __call metamethod
 extern "C" int clx_vm_proxy_call(lua_State* L)
 {
@@ -587,11 +792,15 @@ extern "C" int clx_vm_proxy_call(lua_State* L)
         return 0;
     clx::LTable* tbl = static_cast<clx::LTable*>(h);
     clx::LTable* mt = tbl_metatable(tbl);
+    //------------------ the proxy metatable carries a __call entry, so the VM gets here for every table
+    //------------------ call; without a real __call that call must fail like stock, not return nothing
     if (!mt)
-        return 0;
+        return luaL_error(L, "attempt to call a table value");
     clx::LValue call_func = mt->gettable(clx_L->str_call);
     if (call_func.type != clx::Function)
-        return 0;
+        return luaL_error(L, "attempt to call a %s value", call_func.type == clx::ValueType::Nil
+                ? "table"
+                : clx::stock_type_name(call_func));
 
     int nargs = lua_gettop(L) - 1;
     const size_t clx_nargs = static_cast<size_t>(nargs) + 1;
@@ -603,11 +812,10 @@ extern "C" int clx_vm_proxy_call(lua_State* L)
     else
         clx_args = stack_buf;
 
+    clx::RootRange args_rr(clx_L, clx_args, clx_nargs);
     clx_args[0] = clx::LValue(clx::Table, tbl);
     for (int i = 0; i < nargs; ++i)
         clx_args[i + 1] = clx::vm_to_clx_value_(clx_L, L, i + 2);
-
-    clx::RootRange args_rr(clx_L, clx_args, clx_nargs);
 
     clx::MultiValue ret;
     try {

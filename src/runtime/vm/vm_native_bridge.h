@@ -16,7 +16,7 @@ namespace clx {
 struct NativeBridge {
     DynamicVM *vm;
     LValue clx_callable;
-    int registry_ref;
+    BridgeNode node;
 };
 
 //------------------ create_bridge - wrap a clx LValue as a Lua C closure
@@ -26,6 +26,7 @@ NativeBridge *create_bridge(LState *clx_L, lua_State *L, const LValue &callable)
 
 extern "C" {
 int clx_vm_native_bridge_call(lua_State *L);
+int clx_vm_native_bridge_gc(lua_State *L);
 }
 
 #endif

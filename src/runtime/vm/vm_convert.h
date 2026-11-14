@@ -33,6 +33,9 @@ extern void (*clx_free_vm_proxy_ptr)(LState* clx_L, LHeader* proxy);
 
 extern "C" {
 
+//------------------ clx_vm_require - VM-side require: VM standard libraries first, then clx's require
+int clx_vm_require(lua_State* L);
+
 int clx_vm_env_index(lua_State* L);
 int clx_vm_env_newindex(lua_State* L);
 int clx_vm_env_pairs(lua_State* L);
