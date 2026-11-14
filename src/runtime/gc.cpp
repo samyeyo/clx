@@ -300,10 +300,18 @@ static CLX_INLINE_HOT void gc_push_for_trace(LState::GCStack &wl, LHeader *h, LV
         wl.push(h);
 }
 
+//------------------ weak_mode_of — cached __mode bits of a table's metatable (1 = weak keys, 2 = weak values)
+static uint8_t weak_mode_of(LState *L, LTable *t);
+//------------------ weak_clearable — stock clears weak references only to these four kinds (never strings)
+static bool weak_clearable(const LValue &v);
+
 static bool gc_trace_table_young(LState *L, LTable *t, LState::GCStack &wl) {
     bool has_nonold = false;
+    //------------------ weak entries are not traced through: the weak pass of the same cycle decides them
+    //------------------ from what the strong graph reached (weak-keyed values are ephemerons)
+    uint8_t wm = weak_mode_of(L, t);
     for (size_t i = 0; i < t->array_size; ++i) {
-        if (t->array_types[i] == Nil)
+        if (t->array_types[i] == Nil || (wm & 2))
             continue;
         LValue v(t->array[i], t->array_types[i]);
         if (!v.is_gc_obj())
@@ -328,6 +336,8 @@ static bool gc_trace_table_young(LState *L, LTable *t, LState::GCStack &wl) {
         if (e.ktype == Nil)
             return;
         for (int which = 0; which < 2; ++which) {
+            if (which == 0 ? (wm & 1) : (wm & 3))
+                continue;
             LValue v(which == 0 ? e.key : e.val, which == 0 ? e.ktype : e.vtype);
             if (!v.is_gc_obj())
                 continue;
@@ -493,6 +503,8 @@ void LState::gc_minor() {
     //------------------ roots: root-frame chain, state threads, permanent roots
     if (_G)
         push_if_needed(LValue(Table, _G));
+    if (package_table)
+        push_if_needed(LValue(Table, package_table));
     if (main_thread)
         push_if_needed(LValue(Thread, main_thread));
     if (running_thread && running_thread != main_thread)
@@ -500,6 +512,21 @@ void LState::gc_minor() {
     gc_walk_roots(top_root, push_if_needed);
     for (const LValue &r : permanent_roots)
         push_if_needed(r);
+
+    //------------------ roots: metatables set through debug.setmetatable plus the debug registry
+    if (string_metatable)
+        push_if_needed(LValue(Table, string_metatable));
+    for (LTable *mt : type_metatables)
+        if (mt)
+            push_if_needed(LValue(Table, mt));
+    if (registry)
+        push_if_needed(LValue(Table, registry));
+
+    //------------------ roots: VM proxy wrappers (VMFunction, VMTableProxy) and bridged clx callables.
+    //------------------ These live outside the slab and are only reachable through the VM's own object
+    //------------------ graph, so without this walk a minor collection frees every live proxy.
+    if (clx_mark_vm_proxies_ptr)
+        clx_mark_vm_proxies_ptr(this, wl);
 
     //------------------ roots: gc_recent. Objects here were allocated since the previous collection and
     //------------------ are now ordinary objects: normal reachability decides them. Rooting every one of
@@ -530,14 +557,26 @@ void LState::gc_minor() {
                 owner->flags &= ~LFLAG_REMEMBERED;
         } else if (owner->type == static_cast<uint8_t>(UserData)) {
             LUserdata *ud = static_cast<LUserdata *>(owner);
+            bool keeps_young = false;
             if (ud->metatable && ud->metatable->age != AGE_OLD) {
+                keeps_young = true;
                 if (ud->metatable->marked == 0) {
                     ud->metatable->marked = 1;
                     wl.push(ud->metatable);
                 }
-            } else {
-                owner->flags &= ~LFLAG_REMEMBERED;
             }
+            if (ud->uservalue.is_gc_obj()) {
+                LHeader *vh = ud->uservalue.as_pointer();
+                if (vh && vh->age != AGE_OLD) {
+                    keeps_young = true;
+                    if (vh->marked == 0) {
+                        vh->marked = 1;
+                        wl.push(vh);
+                    }
+                }
+            }
+            if (!keeps_young)
+                owner->flags &= ~LFLAG_REMEMBERED;
         } else if (owner->type == static_cast<uint8_t>(Thread)) {
 
             if (!gc_trace_thread_young(this, static_cast<LThread *>(owner), wl))
@@ -606,6 +645,124 @@ void LState::gc_minor() {
                 ud->metatable->marked = 1;
                 wl.push(ud->metatable);
             }
+            if (ud->uservalue.is_gc_obj()) {
+                LHeader *vh = ud->uservalue.as_pointer();
+                if (vh && vh->age != AGE_OLD && vh->marked == 0) {
+                    vh->marked = 1;
+                    wl.push(vh);
+                }
+            }
+        }
+    }
+
+    //------------------ weak tables: a young key/value this cycle did not reach is dead. Weak-keyed
+    //------------------ tables are ephemerons, so their values are marked from live keys first.
+    if (metatabled_tables) {
+        auto weak_dead_young = [&](const LValue &v) {
+            if (!weak_clearable(v))
+                return false;
+            LHeader *h = v.as_pointer();
+            if (!h || h->type != static_cast<uint8_t>(v.type))
+                return false;
+            return h->age != AGE_OLD && h->marked == 0;
+        };
+        auto trace_young = [&](LHeader *start) {
+            if (start->marked == 0) {
+                start->marked = 1;
+                wl.push(start);
+            }
+            while (!wl.empty()) {
+                LHeader *curr = wl.back();
+                wl.pop_back();
+                if (curr->flags & LFLAG_VM_PROXY)
+                    continue;
+                if (curr->type == static_cast<uint8_t>(Table))
+                    gc_trace_table_young(this, static_cast<LTable *>(curr), wl);
+                else if (curr->type == static_cast<uint8_t>(Thread))
+                    gc_trace_thread_young(this, static_cast<LThread *>(curr), wl);
+                else if (curr->type == static_cast<uint8_t>(Function))
+                    gc_trace_function_young(this, static_cast<LCFunction *>(curr), wl);
+            }
+        };
+        for (;;) {
+            bool progress = false;
+            for (LTable *obj = metatabled_tables; obj; obj = obj->ext->meta_next) {
+                LTableExt *ex = obj->ext;
+                if (!ex || weak_mode_of(this, obj) != 1)
+                    continue;
+                for (size_t _i = 0; _i < obj->array_size; ++_i) {
+                    if (obj->array_types[_i] == Nil)
+                        continue;
+                    LValue v(obj->array[_i], obj->array_types[_i]);
+                    if (!weak_clearable(v) || v.as_pointer()->marked != 0)
+                        continue;
+                    if (v.as_pointer()->age == AGE_OLD)
+                        continue;
+                    trace_young(v.as_pointer());
+                    progress = true;
+                }
+                for (size_t _i = 0; _i < ex->hash_size; ++_i) {
+                    if (ex->entries[_i].ktype == Nil)
+                        continue;
+                    if (weak_dead_young(LValue(ex->entries[_i].key, ex->entries[_i].ktype)))
+                        continue;
+                    LValue v(ex->entries[_i].val, ex->entries[_i].vtype);
+                    if (!weak_clearable(v) || v.as_pointer()->marked != 0)
+                        continue;
+                    if (v.as_pointer()->age == AGE_OLD)
+                        continue;
+                    trace_young(v.as_pointer());
+                    progress = true;
+                }
+            }
+            if (!progress)
+                break;
+        }
+        for (LTable *obj = metatabled_tables; obj; obj = obj->ext->meta_next) {
+            LTableExt *ex = obj->ext;
+            if (!ex)
+                continue;
+            uint8_t wm = weak_mode_of(this, obj);
+            if (!wm)
+                continue;
+            if (wm & 2) {
+                for (size_t _i = 0; _i < obj->array_size; ++_i) {
+                    if (obj->array_types[_i] == Nil)
+                        continue;
+                    if (!weak_dead_young(LValue(obj->array[_i], obj->array_types[_i])))
+                        continue;
+                    obj->array[_i] = TValue();
+                    obj->array_types[_i] = Nil;
+                    if (obj->array_lim > _i)
+                        obj->array_lim = _i;
+                }
+            }
+            if (ex->hash_size == 0)
+                continue;
+            bool removed = false;
+            for (size_t _i = 0; _i < ex->hash_size; ++_i) {
+                HashEntry &e = ex->entries[_i];
+                if (e.ktype == Nil)
+                    continue;
+                bool dead = false;
+                if (wm & 1)
+                    dead = weak_dead_young(LValue(e.key, e.ktype));
+                if (!dead && (wm & 2))
+                    dead = weak_dead_young(LValue(e.val, e.vtype));
+                if (!dead)
+                    continue;
+                e.key.payload.u64 = HASH_TOMBSTONE;
+                e.ktype = Nil;
+                e.val = TValue();
+                e.vtype = Nil;
+                ex->hash_count--;
+                ex->hash_tombs++;
+                if (ex->hash_bitmap)
+                    ex->hash_bitmap[_i / 64] &= ~(1ULL << (_i % 64));
+                removed = true;
+            }
+            if (removed)
+                ex->hash_version++;
         }
     }
 
@@ -625,7 +782,13 @@ void LState::gc_minor() {
                 gc_trace_remember_nonold_children(static_cast<LTable *>(h));
             } else if (h->type == static_cast<uint8_t>(UserData)) {
                 LUserdata *ud = static_cast<LUserdata *>(h);
-                if (ud->metatable && ud->metatable->age != AGE_OLD)
+                bool young_child = ud->metatable && ud->metatable->age != AGE_OLD;
+                if (ud->uservalue.is_gc_obj()) {
+                    LHeader *vh = ud->uservalue.as_pointer();
+                    if (vh && vh->age != AGE_OLD)
+                        young_child = true;
+                }
+                if (young_child)
                     gc_remember(ud);
             } else if (h->type == static_cast<uint8_t>(Thread)) {
                 LThread *th = static_cast<LThread *>(h);
@@ -788,12 +951,30 @@ void LState::gc_minor() {
     wl.clear();
 }
 
-//------------------ LState::gc_step — incremental GC sweep step
-bool LState::gc_step() {
-    if (gc_phase != GCPhase::Sweeping)
+//------------------ LState::gc_step — incremental GC step; 'size' is collectgarbage("step", size)
+//------------------ and scales the work done, zero meaning "finish a whole cycle"
+bool LState::gc_step(int64_t size) {
+    if (size == 0) {
+        if (gc_phase == GCPhase::Sweeping)
+            while (!gc_step(-1))
+                ;
+        collect_garbage();
         return true;
+    }
+
+    if (gc_phase != GCPhase::Sweeping) {
+        if (gc_draining || gc_minor_active)
+            return true;
+        gc_collect_mark();
+        if (gc_phase != GCPhase::Sweeping)
+            return true;
+    }
 
     size_t budget = GC_STEP_BUDGET;
+    if (size > 0) {
+        size_t scaled = static_cast<size_t>((size * static_cast<int64_t>(gc_stepmul)) / 8);
+        budget = scaled ? scaled : 1;
+    }
     LHeader *curr = gc_sweep_cursor;
     LHeader *prev = gc_prev;
 
@@ -867,6 +1048,22 @@ bool LState::gc_step() {
             gc_bytes_at_minor = allocated_bytes;
         }
 
+        //------------------ Re-partition: minors walk only allocated_objects, so move every AGE_OLD
+        //------------------ survivor back to old_objects. Single O(heap) pass per completed cycle.
+        {
+            LHeader **link = &allocated_objects;
+            while (*link) {
+                LHeader *o = *link;
+                if (o->age == AGE_OLD) {
+                    *link = o->next;
+                    o->next = old_objects;
+                    old_objects = o;
+                } else {
+                    link = &o->next;
+                }
+            }
+        }
+
         size_t live = allocated_bytes;
         //------------------ Pacing: one collection is a synchronous mark+sweep of O(heap), so
 
@@ -895,8 +1092,48 @@ void LState::collect_garbage() {
         gc_major_pending = false;
 }
 
-//------------------ LState::collect_garbage_full — mark-sweep collection
-void LState::collect_garbage_full() {
+static uint8_t weak_mode_of(LState *L, LTable *t) {
+    LTableExt *ex = t->ext;
+    if (!ex || !ex->metatable)
+        return 0;
+    LTable *mt = ex->metatable;
+    uint32_t stamp = mt->ext ? mt->ext->hash_version : 0;
+    if (ex->weak_meta == mt && ex->weak_stamp == stamp)
+        return ex->weak_mode;
+    uint8_t mode = 0;
+    LValue mv = mt->gettable(L->str_mode);
+    if (mv.type == ValueType::String) {
+        const char *s = mv.as_string();
+        uint32_t len = mv.string_len();
+        for (uint32_t i = 0; i < len; ++i) {
+            if (s[i] == 'k')
+                mode |= 1;
+            else if (s[i] == 'v')
+                mode |= 2;
+        }
+    }
+    ex->weak_mode = mode;
+    ex->weak_meta = mt;
+    ex->weak_stamp = stamp;
+    return mode;
+}
+
+//------------------ weak_clearable — stock clears weak references only to these four kinds (never strings)
+static bool weak_clearable(const LValue &v) {
+    ValueType t = v.type;
+    return t == Table || t == Thread || t == Function || t == UserData;
+}
+
+//------------------ weak_dead — a clearable value that this mark did not reach
+static bool weak_dead(const LValue &v) {
+    if (!weak_clearable(v))
+        return false;
+    LHeader *h = v.as_pointer();
+    return h && h->type == static_cast<uint8_t>(v.type) && h->marked == 0;
+}
+
+//------------------ LState::gc_collect_mark — marks from every root and arms the incremental sweep
+void LState::gc_collect_mark() {
     if (gc_draining)
         return;
     //------------------ Reunite generations: gc_step sweeps a single chain, so splice old_objects
@@ -911,7 +1148,12 @@ void LState::collect_garbage_full() {
     auto &wl = gc_worklist;
     wl.clear();
 
-    //------------------ arena tables: reset stale marks (never cleared by sweep)
+    //------------------ clear every leftover mark first: a minor interrupted mid-sweep, or a collection
+    //------------------ that returned before its sweep, leaves marks set. gc_mark_value treats a marked
+    //------------------ object as already traced, so a stale mark on _G would skip the whole global table
+    //------------------ and let its reachable values be swept as garbage.
+    for (LHeader *o = allocated_objects; o; o = o->next)
+        o->marked = 0;
     for (FuncArena *ar = active_arenas; ar; ar = ar->next_active)
         for (LTable *at = ar->tables; at; at = static_cast<LTable *>(at->next))
             at->marked = 0;
@@ -928,6 +1170,8 @@ void LState::collect_garbage_full() {
 
     if (_G)
         push_if_needed(LValue(Table, _G));
+    if (package_table)
+        push_if_needed(LValue(Table, package_table));
     if (main_thread)
         push_if_needed(LValue(Thread, main_thread));
     if (running_thread && running_thread != main_thread)
@@ -936,6 +1180,15 @@ void LState::collect_garbage_full() {
 
     for (const LValue &r : permanent_roots)
         push_if_needed(r);
+
+    //------------------ roots: metatables set through debug.setmetatable plus the debug registry
+    if (string_metatable)
+        push_if_needed(LValue(Table, string_metatable));
+    for (LTable *mt : type_metatables)
+        if (mt)
+            push_if_needed(LValue(Table, mt));
+    if (registry)
+        push_if_needed(LValue(Table, registry));
 
     if (!gc_recent.empty()) {
         for (size_t _ri = 0; _ri < gc_recent.top; ++_ri) {
@@ -954,6 +1207,9 @@ void LState::collect_garbage_full() {
     if (clx_mark_vm_proxies_ptr)
         clx_mark_vm_proxies_ptr(this, wl);
 
+    std::vector<LTable *> weak_tables;
+
+    auto propagate = [&]() {
     while (!wl.empty()) {
         LHeader *curr = wl.back();
         wl.pop_back();
@@ -964,7 +1220,12 @@ void LState::collect_garbage_full() {
 
         if (curr->type == static_cast<uint8_t>(Table)) {
             LTable *t = static_cast<LTable *>(curr);
-            {
+            uint8_t wm = weak_mode_of(this, t);
+            if (wm)
+                weak_tables.push_back(t);
+            //------------------ weak values are not traced from the array part; integer keys are always
+            //------------------ alive, so a weak-keys-only table keeps those values strong
+            if (!(wm & 2)) {
                 const uint8_t *types_raw = reinterpret_cast<const uint8_t *>(t->array_types);
                 size_t i = 0;
 #if defined(CLX_HAS_AVX2)
@@ -1018,28 +1279,36 @@ void LState::collect_garbage_full() {
                     push_if_needed(LValue(t->array[i], t->array_types[i]));
             }
             LTableExt *ex = t->ext;
-            if (ex) {
+            bool weak_k = (wm & 1) != 0;
+            bool weak_v = (wm & 2) != 0;
+            if (ex)                    {
                 if (ex->hash_bitmap) {
                     size_t bm_words = (ex->hash_size + 63) / 64;
+                    size_t seen = 0;
                     for (size_t word = 0; word < bm_words; ++word) {
                         uint64_t bits = ex->hash_bitmap[word];
                         while (bits) {
                             size_t idx = word * 64 + clx_ctzll(bits);
                             if (idx >= ex->hash_size)
                                 break;
-                            LValue kv(ex->entries[idx].key, ex->entries[idx].ktype);
-                            push_if_needed(kv);
-                            push_if_needed(LValue(ex->entries[idx].val, ex->entries[idx].vtype));
+                            ++seen;
+                            if (!weak_k)
+                                push_if_needed(LValue(ex->entries[idx].key, ex->entries[idx].ktype));
+                            //------------------ weak-keyed values wait for the ephemeron pass below
+                            if (!weak_k && !weak_v)
+                                push_if_needed(LValue(ex->entries[idx].val, ex->entries[idx].vtype));
                             bits &= bits - 1;
                         }
                     }
+                    (void)seen;
                 } else {
                     for (size_t _i = 0; _i < ex->hash_size; ++_i) {
                         if (ex->entries[_i].ktype == Nil)
                             continue;
-                        LValue kv(ex->entries[_i].key, ex->entries[_i].ktype);
-                        push_if_needed(kv);
-                        push_if_needed(LValue(ex->entries[_i].val, ex->entries[_i].vtype));
+                        if (!weak_k)
+                            push_if_needed(LValue(ex->entries[_i].key, ex->entries[_i].ktype));
+                        if (!weak_k && !weak_v)
+                            push_if_needed(LValue(ex->entries[_i].val, ex->entries[_i].vtype));
                     }
                 }
                 if (ex->metatable && ex->metatable->marked == 0) {
@@ -1070,6 +1339,95 @@ void LState::collect_garbage_full() {
                 ud->metatable->marked = 1;
                 wl.push(ud->metatable);
             }
+            if (ud->uservalue.is_gc_obj()) {
+                LHeader *vh = ud->uservalue.as_pointer();
+                if (vh && vh->marked == 0) {
+                    vh->marked = 1;
+                    wl.push(vh);
+                }
+            }
+        }
+    }
+    };
+
+    propagate();
+
+    //------------------ weak-keyed tables are ephemerons: a value is reachable only through its key, so
+    //------------------ values are marked in rounds until nothing new appears (a marked value can expose
+    //------------------ more live keys) and only then are the dead entries dropped
+    if (!weak_tables.empty()) {
+        for (;;) {
+            size_t before_size = weak_tables.size();
+            bool progress = false;
+            for (size_t ti = 0; ti < weak_tables.size(); ++ti) {
+                LTable *t = weak_tables[ti];
+                LTableExt *ex = t->ext;
+                if (!ex || ex->weak_mode != 1)
+                    continue;
+                size_t before = wl.size();
+                for (size_t _i = 0; _i < t->array_size; ++_i)
+                    if (t->array_types[_i] != Nil)
+                        push_if_needed(LValue(t->array[_i], t->array_types[_i]));
+                for (size_t _i = 0; _i < ex->hash_size; ++_i) {
+                    if (ex->entries[_i].ktype == Nil)
+                        continue;
+                    LValue k(ex->entries[_i].key, ex->entries[_i].ktype);
+                    if (weak_dead(k))
+                        continue;
+                    push_if_needed(LValue(ex->entries[_i].val, ex->entries[_i].vtype));
+                }
+                if (wl.size() > before)
+                    progress = true;
+            }
+            propagate();
+            if (!progress && weak_tables.size() == before_size)
+                break;
+        }
+        for (size_t ti = 0; ti < weak_tables.size(); ++ti) {
+            LTable *t = weak_tables[ti];
+            LTableExt *ex = t->ext;
+            if (!ex || !ex->weak_mode)
+                continue;
+            bool weak_k = (ex->weak_mode & 1) != 0;
+            bool weak_v = (ex->weak_mode & 2) != 0;
+            if (weak_v) {
+                for (size_t _i = 0; _i < t->array_size; ++_i) {
+                    if (t->array_types[_i] == Nil)
+                        continue;
+                    if (!weak_dead(LValue(t->array[_i], t->array_types[_i])))
+                        continue;
+                    t->array[_i] = TValue();
+                    t->array_types[_i] = Nil;
+                    if (t->array_lim > _i)
+                        t->array_lim = _i;
+                }
+            }
+            if (ex->hash_size == 0)
+                continue;
+            bool removed = false;
+            for (size_t _i = 0; _i < ex->hash_size; ++_i) {
+                HashEntry &e = ex->entries[_i];
+                if (e.ktype == Nil)
+                    continue;
+                bool dead = false;
+                if (weak_k)
+                    dead = weak_dead(LValue(e.key, e.ktype));
+                if (!dead && weak_v)
+                    dead = weak_dead(LValue(e.val, e.vtype));
+                if (!dead)
+                    continue;
+                e.key.payload.u64 = HASH_TOMBSTONE;
+                e.ktype = Nil;
+                e.val = TValue();
+                e.vtype = Nil;
+                ex->hash_count--;
+                ex->hash_tombs++;
+                if (ex->hash_bitmap)
+                    ex->hash_bitmap[_i / 64] &= ~(1ULL << (_i % 64));
+                removed = true;
+            }
+            if (removed)
+                ex->hash_version++;
         }
     }
 
@@ -1236,30 +1594,15 @@ void LState::collect_garbage_full() {
     gc_finalizable = nullptr;
     gc_finalizable_ud = nullptr;
     object_count = 0;
+}
+
+//------------------ LState::collect_garbage_full — mark, then drain the sweep to completion
+void LState::collect_garbage_full() {
+    if (gc_draining)
+        return;
+    gc_collect_mark();
     while (!gc_step())
         ;
-
-    //------------------ Re-partition: minors walk only allocated_objects, so move every AGE_OLD
-    //------------------ survivor back to old_objects. Single O(heap) pass on a cold path.
-    {
-        LHeader **link = &allocated_objects;
-        while (*link) {
-            LHeader *o = *link;
-            if (o->age == AGE_OLD) {
-                *link = o->next;
-                o->next = old_objects;
-                old_objects = o;
-            } else {
-                link = &o->next;
-            }
-        }
-    }
-
-    //------------------ generational bookkeeping: the remembered set is NOT cleared here —
-
-    if (gc_mode == GCMode::Generational) {
-        gc_bytes_at_minor = allocated_bytes;
-    }
 }
 
 }
