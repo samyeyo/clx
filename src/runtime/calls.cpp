@@ -19,8 +19,40 @@
 
 namespace clx {
 
+//------------------ kMaxCallChain: stock resolves a '__call' chain iteratively and refuses more than 15
+//------------------ metamethod levels, which clx mirrors because its chain is a native recursion
+static constexpr int kMaxCallChain = 15;
+
+//------------------ CallChainScope: one '__call' dispatch, popped again when the nested call returns
+struct CallChainScope {
+    int &depth;
+
+    explicit CallChainScope(int &d)
+        : depth(d) {
+        ++depth;
+    }
+
+    ~CallChainScope() { --depth; }
+};
+
+//------------------ ChainReset: a real function ends the chain, so its body starts dispatching at zero
+//------------------ (stock resolves the whole chain before the function runs)
+struct ChainReset {
+    int &depth;
+    int saved;
+
+    explicit ChainReset(int &d)
+        : depth(d)
+        , saved(d) {
+        depth = 0;
+    }
+
+    ~ChainReset() { depth = saved; }
+};
+
 //------------------ call_function — call a value as function
 MultiValue call_function(LState *L, const LValue &func, const LValue *args, size_t count, const CallSite *cs) {
+    stack_check(L);
     L->current_site = cs;
 
     LValue *func_ind[1] = { const_cast<LValue *>(&func) };
@@ -28,6 +60,7 @@ MultiValue call_function(LState *L, const LValue &func, const LValue *args, size
     RootRange rr(L, const_cast<LValue *>(args), args ? count : 0, func_ind, 1);
 
     if (func.type == Function) {
+        ChainReset chain_reset(L->call_chain_depth);
         LCFunction *f = static_cast<LCFunction *>(func.as_pointer());
         LCFunction *saved_func = L->current_func;
         L->current_func = f;
@@ -46,6 +79,9 @@ MultiValue call_function(LState *L, const LValue &func, const LValue *args, size
         if (mt) {
             LValue m = mt->gettable(L->str_call);
             if (m.type != Nil) {
+                if (L->call_chain_depth >= kMaxCallChain)
+                    throw LRuntimeException(LValue(L->intern_string("'__call' chain too long")));
+                CallChainScope chain_scope(L->call_chain_depth);
                 size_t nargs = count + 1;
                 LValue *new_args;
                 alignas(LValue) unsigned char stack_buf[16 * sizeof(LValue)];
@@ -99,18 +135,28 @@ MultiValue pcall_function(LState *L, const LValue &func, const LValue *args, siz
             return MultiValue(true);
         if (ret.count == 1)
             return MultiValue(true, ret[0]);
-        MultiValue out;
-        out.alloc_L = L;
-        out.push_back(true);
+        //------------------ one allocation for the whole result: push_back grows the shared overflow heap
+        //------------------ quadratically (each step copies every earlier slot), which is unusable when a
+        //------------------ protected call returns hundreds of thousands of values
+        std::vector<LValue> vals;
+        vals.reserve(ret.count + 1);
+        vals.push_back(LValue(true));
         for (size_t i = 0; i < ret.count; ++i)
-            out.push_back(ret[i]);
-        return out;
+            vals.push_back(ret[i]);
+        return MultiValue(vals, L);
     } catch (const LRuntimeException &e) {
-        LValue err_val = e.error_obj;
-        if (err_val.type != String) {
-            err_val = LValue(L->intern_string(e.what()));
+        //------------------ a __close that raised while this error unwound replaced it (stock rethrows the
+        //------------------ last close error), so report that one and drop the pending slot
+        LValue err_obj = e.error_obj;
+        if (L->has_close_err) {
+            err_obj = L->close_err;
+            L->has_close_err = false;
         }
-        return MultiValue(false, err_val);
+        //------------------ stock's pcall returns whatever error object was raised (a table, a number, ...),
+        //------------------ not a rendered message; a nil object becomes the 'no error object' placeholder
+        if (err_obj.type == ValueType::Nil)
+            return MultiValue(false, LValue(L->intern_string("<no error object>")));
+        return MultiValue(false, err_obj);
     } catch (const std::exception &e) {
         return MultiValue(false, LValue(L->intern_string(e.what())));
     }
@@ -118,6 +164,7 @@ MultiValue pcall_function(LState *L, const LValue &func, const LValue *args, siz
 
 //------------------ call_direct — fast path for LCFunction direct calls
 MultiValue call_direct(LState *L, const LValue &func, const LValue *args, size_t count, const CallSite *cs) {
+    stack_check(L);
     if (func.type == ValueType::Function) {
         LCFunction *f = static_cast<LCFunction *>(func.as_pointer());
         if (f->direct) {
