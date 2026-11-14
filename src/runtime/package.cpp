@@ -18,19 +18,20 @@ namespace clx {
 #define CLX_LPATH_DEFAULT ".\\?.lua;.\\?\\init.lua"
 #define CLX_CPATH_DEFAULT ".\\?.dll"
 #define CLX_DIRSEP '\\'
+#define CLX_DIRSEP_STR "\\"
 #else
 #define CLX_LPATH_DEFAULT "./?.lua;./?/init.lua"
 #define CLX_CPATH_DEFAULT "./?.so"
 #define CLX_DIRSEP '/'
+#define CLX_DIRSEP_STR "/"
 #endif
 
-//------------------ Reads a field of the package table, returns nil LValue when absent
+//------------------ Reads a field of the package table the searchers were created against, returns nil
+//------------------ LValue when absent; the global `package` is not consulted, matching stock's upvalues
 static LValue get_package_field(LState *L, const char *key, size_t keylen) {
-    LValue pack_val = get_global(L, "package");
-    if (pack_val.type != Table)
+    if (!L->package_table)
         return LValue();
-    LTable *pack = static_cast<LTable *>(pack_val.as_pointer());
-    return pack->gettable(LValue(L->intern_string(key, keylen)));
+    return L->package_table->gettable(LValue(L->intern_string(key, keylen)));
 }
 
 //------------------ Checks whether a file is readable (fopen probe, closed immediately)
@@ -59,21 +60,30 @@ static void split_path(const char *path, size_t len, std::vector<std::string> &o
 }
 
 //------------------ Replaces every occurrence of 'from' with 'to' in s
-static std::string replace_char(std::string s, char from, char to) {
-    if (from == to)
+//------------------ replace_all: whole-substring replacement, the same luaL_gsub pass stock's searchpath uses
+static std::string replace_all(const std::string &s, const std::string &from, const std::string &to) {
+    if (from.empty())
         return s;
-    for (size_t i = 0; i < s.size(); ++i) {
-        if (s[i] == from)
-            s[i] = to;
+    std::string out;
+    size_t i = 0;
+    while (i < s.size()) {
+        size_t hit = s.find(from, i);
+        if (hit == std::string::npos) {
+            out.append(s, i, std::string::npos);
+            break;
+        }
+        out.append(s, i, hit - i);
+        out += to;
+        i = hit + from.size();
     }
-    return s;
+    return out;
 }
 
 //------------------ package_searchpath: resolve module name through path templates, returning the first readable file or ""
 std::string package_searchpath(LState *L, const char *name, size_t name_len, const char *path, size_t path_len,
-    char sep, char rep, std::string *tried) {
+    const char *sep, size_t sep_len, const char *rep, size_t rep_len, std::string *tried) {
     (void)L;
-    std::string filename = replace_char(std::string(name, name_len), sep, rep);
+    std::string filename = replace_all(std::string(name, name_len), std::string(sep, sep_len), std::string(rep, rep_len));
     std::vector<std::string> templates;
     split_path(path, path_len, templates);
     for (const std::string &tpl : templates) {
@@ -101,12 +111,22 @@ static MultiValue pkg_searchpath(LState *L, const LValue *args, size_t count) {
         throw_runtime_error("bad argument #1 to 'searchpath' (string expected)");
     if (count < 2 || args[1].type != String)
         throw_runtime_error("bad argument #2 to 'searchpath' (string expected)");
-    char sep = (count >= 3 && args[2].type == String && args[2].string_len() > 0) ? args[2].as_string()[0] : '.';
-    char rep = (count >= 4 && args[3].type == String && args[3].string_len() > 0) ? args[3].as_string()[0] : CLX_DIRSEP;
+    const char *sep = ".";
+    size_t sep_len = 1;
+    if (count >= 3 && args[2].type == String) {
+        sep = args[2].as_string();
+        sep_len = args[2].string_len();
+    }
+    const char *rep = CLX_DIRSEP_STR;
+    size_t rep_len = 1;
+    if (count >= 4 && args[3].type == String) {
+        rep = args[3].as_string();
+        rep_len = args[3].string_len();
+    }
 
     std::string tried;
-    std::string found = package_searchpath(
-        L, args[0].as_string(), args[0].string_len(), args[1].as_string(), args[1].string_len(), sep, rep, &tried);
+    std::string found = package_searchpath(L, args[0].as_string(), args[0].string_len(), args[1].as_string(),
+        args[1].string_len(), sep, sep_len, rep, rep_len, &tried);
     if (!found.empty())
         return MultiValue(LValue(L->intern_string(found.data(), found.size())));
     return MultiValue(LValue(), LValue(L->intern_string(tried.data(), tried.size())));
@@ -120,8 +140,9 @@ static MultiValue pkg_searcher_preload(LState *L, const LValue *args, size_t cou
     LValue preload = get_package_field(L, "preload", 7);
     if (preload.type == Table) {
         LValue loader = static_cast<LTable *>(preload.as_pointer())->gettable(name);
+        //------------------ stock hands preload loaders the searcher tag as their extra argument
         if (loader.type == Function)
-            return MultiValue(loader);
+            return MultiValue(loader, LValue(L->intern_string(":preload:", 9)));
     }
     std::string msg = "\n\tno field package.preload['";
     msg.append(args[0].as_string(), args[0].string_len());
@@ -137,22 +158,39 @@ static MultiValue pkg_searcher_luafile_aot(LState *L, const LValue *args, size_t
     if (path.type != String)
         return MultiValue(LValue(), LValue(L->intern_string("\n\tpackage.path is not a string")));
     std::string tried;
-    std::string found = package_searchpath(
-        L, args[0].as_string(), args[0].string_len(), path.as_string(), path.string_len(), '.', CLX_DIRSEP, &tried);
+    std::string found = package_searchpath(L, args[0].as_string(), args[0].string_len(), path.as_string(),
+        path.string_len(), ".", 1, CLX_DIRSEP_STR, 1, &tried);
     if (found.empty())
         return MultiValue(LValue(), LValue(L->intern_string(tried.data(), tried.size())));
     std::string msg = "\n\tfound '" + found + "' but loading Lua files requires compiling with --dynamic";
     return MultiValue(LValue(), LValue(L->intern_string(msg.data(), msg.size())));
 }
 
-//------------------ pkg_searcher_c - package.searchers[3]: C modules must be linked statically (see --modules)
+//------------------ pkg_searcher_c - package.searchers[3]: lists the tried cpath files, then reports that C
+//------------------ modules must be linked statically at compile time (see --modules)
 static MultiValue pkg_searcher_c(LState *L, const LValue *args, size_t count) {
-    (void)L;
-    (void)args;
-    (void)count;
-    return MultiValue(LValue(),
-        LValue(
-            L->intern_string("\n\tno C loader (C modules must be linked statically at compile time; see --modules)")));
+    if (count < 1 || args[0].type != String)
+        return MultiValue(LValue(), LValue());
+    LValue cpath = get_package_field(L, "cpath", 5);
+    if (cpath.type != String)
+        return MultiValue(LValue(), LValue(L->intern_string("\n\tpackage.cpath is not a string")));
+    std::string tried;
+    package_searchpath(L, args[0].as_string(), args[0].string_len(), cpath.as_string(), cpath.string_len(), ".", 1,
+        CLX_DIRSEP_STR, 1, &tried);
+    tried += "\n\tno C loader (C modules must be linked statically at compile time; see --modules)";
+    return MultiValue(LValue(), LValue(L->intern_string(tried.data(), tried.size())));
+}
+
+//------------------ pkg_loadlib - package.loadlib: clx links native modules at compile time, so no runtime
+//------------------ loading is possible; the failure is reported the way stock reports an unopenable file
+static MultiValue pkg_loadlib(LState *L, const LValue *args, size_t count) {
+    if (count < 1 || args[0].type != String)
+        throw_runtime_error("bad argument #1 to 'loadlib' (string expected)");
+    std::string msg = "dynamic loading of '";
+    msg.append(args[0].as_string(), args[0].string_len());
+    msg += "' is not supported: link native modules at compile time with --modules";
+    return MultiValue(LValue(), LValue(L->intern_string(msg.data(), msg.size())),
+        LValue(L->intern_string("open", 4)));
 }
 
 //------------------ pack_require: implements Lua's require() by iterating package.searchers
@@ -164,11 +202,9 @@ static MultiValue pack_require(LState *L, const LValue *args, size_t count) {
     LValue env = (count > 1 && args[1].type != Nil) ? args[1] : LValue();
     LValue loaded_key = LValue(L->intern_string("loaded"));
 
-    LValue pack_val = get_global(L, "package");
-    if (pack_val.type != Table)
-        throw_runtime_error("global 'package' is not a table");
-
-    LTable *pack = static_cast<LTable *>(pack_val.as_pointer());
+    LTable *pack = L->package_table;
+    if (!pack)
+        throw_runtime_error("'package' library is not open");
 
     LValue loaded_ptr = pack->gettable(loaded_key);
     if (loaded_ptr.type != Table)
@@ -177,7 +213,8 @@ static MultiValue pack_require(LState *L, const LValue *args, size_t count) {
 
     LValue mod_key = LValue(L->intern_string(modname));
     LValue already_loaded = loaded->gettable(mod_key);
-    if (already_loaded.type != Nil) {
+    //------------------ stock treats a false entry as "not loaded" and runs the module again
+    if (already_loaded.type != Nil && already_loaded.as_bool()) {
         return MultiValue(already_loaded);
     }
 
@@ -197,33 +234,43 @@ static MultiValue pack_require(LState *L, const LValue *args, size_t count) {
         static constexpr CallSite loader_site = { __FILE__, __LINE__, false, false };
         MultiValue res = call_function_rooted(L, loader, loader_args, 1, &loader_site);
 
-        if (res.count > 1 && res[1].type == String)
+        LValue loader_fn = (res.count > 0) ? res[0] : LValue();
+        if (loader_fn.type != Function && res.count > 1 && res[1].type == String)
             msgs.append(res[1].as_string(), res[1].string_len());
 
-        LValue loader_fn = (res.count > 0) ? res[0] : LValue();
         if (loader_fn.type == Function) {
+            //------------------ stock passes the searcher's extra value to the loader as a second
+            //------------------ argument and returns it to the caller next to the module
+            LValue extra = (res.count > 1) ? res[1] : LValue();
+            LValue call_args[2] = { mod_key, extra };
             //------------------ The loader runs with the env passed to require (nil = real _G)
             LTable *saved_G = L->_G;
             LValue saved_G_val(ValueType::Table, saved_G);
             LValue *loader_ind[1] = { &saved_G_val };
-            RootRange loader_rr(L, loader_args, 1, loader_ind, 1);
+            RootRange loader_rr(L, call_args, 2, loader_ind, 1);
             if (env.type == Table)
                 L->_G = static_cast<LTable *>(env.as_pointer());
             MultiValue mod;
             try {
                 static constexpr CallSite loader_fn_site = { __FILE__, __LINE__, false, false };
-                mod = call_function(L, loader_fn, loader_args, 1, &loader_fn_site);
+                mod = call_function(L, loader_fn, call_args, 2, &loader_fn_site);
             } catch (...) {
                 L->_G = saved_G;
                 throw;
             }
             L->_G = saved_G;
 
-            LValue result = (mod.count > 0) ? mod[0] : LValue(true);
-            if (result.type == Nil)
-                result = LValue(true);
-            loaded->settable(mod_key, result);
-            return MultiValue(result);
+            //------------------ stock stores a non-nil chunk result in package.loaded and keeps a value
+            //------------------ the chunk stored itself; only a still-nil entry becomes true
+            LValue result = (mod.count > 0) ? mod[0] : LValue();
+            if (result.type != Nil)
+                loaded->settable(mod_key, result);
+            LValue final_val = loaded->gettable(mod_key);
+            if (final_val.type == Nil) {
+                final_val = LValue(true);
+                loaded->settable(mod_key, final_val);
+            }
+            return MultiValue(final_val, extra);
         }
     }
 
@@ -255,7 +302,9 @@ void luastd_package(LState *L) {
     pack->settable(LValue(L->intern_string("searchers")), searchers_tbl);
 
     pack->settable(LValue(L->intern_string("searchpath")), L->create_closure(pkg_searchpath));
+    pack->settable(LValue(L->intern_string("loadlib")), L->create_closure(pkg_loadlib));
 
+    L->package_table = pack;
     set_global(L, "package", pack_tbl);
 
     LValue require_func = L->create_closure(pack_require);

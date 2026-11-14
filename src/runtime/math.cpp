@@ -11,10 +11,62 @@
 
 namespace clx {
 
-//------------------ rng: returns thread-local 64-bit Mersenne Twister RNG
-static std::mt19937_64 &rng() {
-    static std::mt19937_64 gen(std::random_device { }());
-    return gen;
+//------------------ RandState: the four words of stock Lua's xoshiro256** generator
+struct RandState {
+    uint64_t s[4];
+};
+
+static uint64_t rand_rotl(uint64_t x, int n) {
+    return (x << n) | (x >> (64 - n));
+}
+
+//------------------ rand_next: one xoshiro256** step, identical to stock lmathlib nextrand
+static uint64_t rand_next(RandState &st) {
+    uint64_t res = rand_rotl(st.s[1] * 5, 7) * 9;
+    uint64_t t = st.s[1] << 17;
+    st.s[2] ^= st.s[0];
+    st.s[3] ^= st.s[1];
+    st.s[1] ^= st.s[2];
+    st.s[0] ^= st.s[3];
+    st.s[2] ^= t;
+    st.s[3] = rand_rotl(st.s[3], 45);
+    return res;
+}
+
+//------------------ rand_setseed: stock setseed, including the 16 discarded values that spread the seed
+static void rand_setseed(RandState &st, uint64_t n1, uint64_t n2) {
+    st.s[0] = n1;
+    st.s[1] = 0xff;
+    st.s[2] = n2;
+    st.s[3] = 0;
+    for (int i = 0; i < 16; ++i)
+        rand_next(st);
+}
+
+//------------------ rng: thread-local generator state, seeded from the clock like stock luaL_makeseed
+static RandState &rng() {
+    static RandState st = [] {
+        std::random_device rd;
+        RandState s { };
+        rand_setseed(s, (static_cast<uint64_t>(rd()) << 32) ^ rd(), 0);
+        return s;
+    }();
+    return st;
+}
+
+//------------------ rand_to_float: stock I2d for 53-bit mantissas: keep the top 53 bits
+static double rand_to_float(uint64_t x) {
+    return static_cast<double>(x >> 11) * (1.0 / 9007199254740992.0);
+}
+
+//------------------ rand_project: stock project, rejection into [0, n]
+static uint64_t rand_project(uint64_t ran, uint64_t n, RandState &st) {
+    uint64_t lim = n;
+    for (int sh = 1; (lim & (lim + 1)) != 0; sh *= 2)
+        lim |= (lim >> sh);
+    while ((ran &= lim) > n)
+        ran = rand_next(st);
+    return ran;
 }
 
 //------------------ math_abs: returns absolute value of a number
@@ -126,10 +178,10 @@ MultiValue math_fmod(LState *L, const LValue *args, size_t count) {
 //------------------ math_max: returns the maximum of its arguments
 MultiValue math_max(LState *L, const LValue *args, size_t count) {
     if (count == 0)
-        clx::error(L, bad_arg_msg(L, 1, "math.max", "number expected, got no value").c_str());
+        clx::error(L, bad_arg_msg(L, 1, "math.max", "value expected").c_str());
     LValue m = args[0];
     for (size_t i = 1; i < count; ++i)
-        if ((m < args[i]).as_bool())
+        if (clx::lt(L, m, args[i]).as_bool())
             m = args[i];
     return MultiValue(m);
 }
@@ -137,10 +189,10 @@ MultiValue math_max(LState *L, const LValue *args, size_t count) {
 //------------------ math_min: returns the minimum of its arguments
 MultiValue math_min(LState *L, const LValue *args, size_t count) {
     if (count == 0)
-        clx::error(L, bad_arg_msg(L, 1, "math.min", "number expected, got no value").c_str());
+        clx::error(L, bad_arg_msg(L, 1, "math.min", "value expected").c_str());
     LValue m = args[0];
     for (size_t i = 1; i < count; ++i)
-        if ((args[i] < m).as_bool())
+        if (clx::lt(L, args[i], m).as_bool())
             m = args[i];
     return MultiValue(m);
 }
@@ -228,46 +280,45 @@ MultiValue math_tointeger(LState *L, const LValue *args, size_t count) {
 
 //------------------ math_random: returns pseudo-random number
 MultiValue math_random(LState *L, const LValue *args, size_t count) {
-    auto &gen = rng();
-    if (count == 0) {
-        std::uniform_real_distribution<double> dist(0.0, 1.0);
-        return MultiValue(clx::number(dist(gen)));
+    RandState &st = rng();
+    uint64_t rv = rand_next(st);
+    int64_t low, up;
+    switch (count) {
+    case 0:
+        return MultiValue(clx::number(rand_to_float(rv)));
+    case 1:
+        low = 1;
+        up = clx::check_integer(L, args[0]);
+        if (up == 0)
+            return MultiValue(clx::integer(static_cast<int64_t>(rv)));
+        break;
+    case 2:
+        low = clx::check_integer(L, args[0]);
+        up = clx::check_integer(L, args[1]);
+        break;
+    default:
+        clx::error(L, "wrong number of arguments");
     }
-    int64_t m = clx::check_integer(L, args[0]);
-    if (count == 1) {
-        if (m == 0) {
-            std::uniform_int_distribution<int64_t> dist(
-                std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::max());
-            return MultiValue(clx::integer(dist(gen)));
-        }
-        if (m > 0) {
-            std::uniform_int_distribution<int64_t> dist(1, m);
-            return MultiValue(clx::integer(dist(gen)));
-        }
+    if (low > up)
         clx::error(L, bad_arg_msg(L, 1, "math.random", "interval is empty").c_str());
-    }
-    int64_t n = clx::check_integer(L, args[1]);
-    if (m > n)
-        clx::error(L, bad_arg_msg(L, 2, "math.random", "interval is empty").c_str());
-    std::uniform_int_distribution<int64_t> dist(m, n);
-    return MultiValue(clx::integer(dist(gen)));
+    uint64_t p = rand_project(rv, static_cast<uint64_t>(up) - static_cast<uint64_t>(low), st);
+    return MultiValue(clx::integer(static_cast<int64_t>(p + static_cast<uint64_t>(low))));
 }
 
 //------------------ math_randomseed: seeds the random number generator
 MultiValue math_randomseed(LState *L, const LValue *args, size_t count) {
-    auto &gen = rng();
+    RandState &st = rng();
+    uint64_t n1, n2;
     if (count == 0) {
         std::random_device rd;
-        uint64_t seed = (static_cast<uint64_t>(rd()) << 32) ^ rd();
-        gen.seed(seed);
-        return MultiValue({ clx::integer(static_cast<int64_t>(seed >> 32)),
-            clx::integer(static_cast<int64_t>(seed & 0xFFFFFFFFULL)) });
+        n1 = (static_cast<uint64_t>(rd()) << 32) ^ rd();
+        n2 = rand_next(st);
+    } else {
+        n1 = static_cast<uint64_t>(clx::check_integer(L, args[0]));
+        n2 = static_cast<uint64_t>((count > 1) ? clx::check_integer(L, args[1]) : 0);
     }
-    int64_t x = clx::check_integer(L, args[0]);
-    int64_t y = (count > 1) ? clx::check_integer(L, args[1]) : 0;
-    uint64_t seed = (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) | static_cast<uint32_t>(y);
-    gen.seed(seed);
-    return MultiValue({ clx::integer(x), clx::integer(y) });
+    rand_setseed(st, n1, n2);
+    return MultiValue({ clx::integer(static_cast<int64_t>(n1)), clx::integer(static_cast<int64_t>(n2)) });
 }
 
 //------------------ math_type: returns "integer"/"float" for numbers, nil for any other value (1 value, never 0)

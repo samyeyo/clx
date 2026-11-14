@@ -173,21 +173,45 @@ static MultiValue utf8_char(LState *L, const LValue *args, size_t count) {
 
 //------------------ codes_iter: iterator function for utf8.codes
 static MultiValue codes_iter(LState *L, const LValue *a, size_t c) {
-    if (c < 2)
+    if (c < 1)
         return MultiValue();
-    LUserdata *u = static_cast<LUserdata *>(a[0].as_pointer());
-    CodesUd *ud = static_cast<CodesUd *>(u->data());
-    if (ud->pos >= ud->len)
+    //------------------ the state may be the string itself (stock's iter_aux signature, which callers
+    //------------------ can invoke directly) or the userdata carrying it and the lax flag
+    const char *s = nullptr;
+    size_t len = 0;
+    bool lax = false;
+    if (a[0].type == ValueType::String) {
+        s = a[0].as_string();
+        len = a[0].string_len();
+    } else if (a[0].type == ValueType::UserData) {
+        LUserdata *u = static_cast<LUserdata *>(a[0].as_pointer());
+        CodesUd *ud = static_cast<CodesUd *>(u->data());
+        s = ud->s;
+        len = ud->len;
+        lax = ud->lax;
+    } else {
+        return MultiValue();
+    }
+    //------------------ the control is the byte offset of the next character; a negative or huge value
+    //------------------ wraps like stock's unsigned cast and simply ends the iteration
+    uint64_t n = 0;
+    if (c >= 2) {
+        if (a[1].type == ValueType::Int64)
+            n = static_cast<uint64_t>(a[1].as_integer());
+        else if (a[1].type == ValueType::Double)
+            n = static_cast<uint64_t>(static_cast<int64_t>(a[1].as_number()));
+    }
+    while (n < len && ((static_cast<unsigned char>(s[n]) & 0xC0) == 0x80))
+        n++;
+    if (n >= len)
         return MultiValue();
     uint32_t cp;
-    int n = utf8_decode_lax(ud->s, ud->len, ud->pos, cp, ud->lax);
-    if (n <= 0)
+    int dlen = utf8_decode_lax(s, len, n, cp, lax);
+    if (dlen <= 0)
         throw_runtime_error(file_line_prefix(L) + "invalid UTF-8 code");
-    if (ud->pos + (size_t)n < ud->len && (((unsigned char)ud->s[ud->pos + n] & 0xC0) == 0x80))
+    if (n + (size_t)dlen < len && (((unsigned char)s[n + dlen] & 0xC0) == 0x80))
         throw_runtime_error(file_line_prefix(L) + "invalid UTF-8 code");
-    size_t cur = ud->pos + 1;
-    ud->pos += (size_t)n;
-    return MultiValue({ clx::integer(static_cast<int64_t>(cur)), clx::integer(static_cast<int64_t>(cp)) });
+    return MultiValue({ clx::integer(static_cast<int64_t>(n + 1)), clx::integer(static_cast<int64_t>(cp)) });
 }
 
 //------------------ utf8_codes: returns an iterator over UTF-8 codepoints in a string
@@ -214,8 +238,10 @@ static MultiValue utf8_codes(LState *L, const LValue *args, size_t count) {
 static MultiValue utf8_codepoint(LState *L, const LValue *args, size_t count) {
     size_t len;
     const char *s = get_string(L, args, count, len, 1, "utf8.codepoint");
-    int64_t posi = (count >= 2 && args[1].type != Nil) ? check_integer(L, args[1]) : 1;
-    int64_t pose = (count >= 3 && args[2].type != Nil) ? check_integer(L, args[2]) : posi;
+    //------------------ stock runs both indices through u_posrelat, so a negative end index (-1) counts
+    //------------------ back from the end of the string instead of yielding an empty interval
+    int64_t posi = u_posrelat((count >= 2 && args[1].type != Nil) ? check_integer(L, args[1]) : 1, len);
+    int64_t pose = u_posrelat((count >= 3 && args[2].type != Nil) ? check_integer(L, args[2]) : posi, len);
     bool lax = (count >= 4) ? to_boolean(args[3]) : false;
     if (posi < 1)
         throw_runtime_error(bad_arg_msg(L, 2, "utf8.codepoint", "out of bounds"));
@@ -239,7 +265,7 @@ static MultiValue utf8_codepoint(LState *L, const LValue *args, size_t count) {
         vals[out++] = clx::integer((int64_t)(int32_t)code);
         p = next;
     }
-    MultiValue res(vals, out);
+    MultiValue res(vals, out, L);
     delete[] vals;
     return res;
 }

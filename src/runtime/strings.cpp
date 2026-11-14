@@ -186,6 +186,8 @@ MultiValue str_rep(LState *L, const LValue *args, size_t count) {
     }
     if (n <= 0 || (len | lsep) == 0)
         return MultiValue(LValue(L->intern_string("", 0)));
+    if (len + lsep < len || static_cast<uint64_t>(n) > (INT64_MAX - lsep) / (len + lsep))
+        throw_runtime_error("resulting string too large");
     size_t totallen = ((size_t)n * (len + lsep)) - lsep;
     if (totallen <= 6) {
         char buf[8];
@@ -422,11 +424,23 @@ MultiValue str_format(LState *L, const LValue *args, size_t count) {
         }
         case 'p': {
             checkformat(form, "-", false);
+            //------------------ stock formats lua_topointer, which is non-NULL for every garbage
+            //------------------ collected value: tables, functions, threads, userdata and strings all
+            //------------------ carry their object address in the payload, so report that instead of null
             const void *ptr = nullptr;
-            if (args[arg - 1].type == String)
-                ptr = args[arg - 1].as_string();
-            else if (args[arg - 1].type == ValueType::Table)
+            switch (args[arg - 1].type) {
+            case ValueType::Table:
+            case ValueType::Function:
+            case ValueType::Thread:
+            case ValueType::UserData:
                 ptr = args[arg - 1].as_pointer();
+                break;
+            case ValueType::String:
+                ptr = args[arg - 1].as_string();
+                break;
+            default:
+                break;
+            }
             if (ptr == nullptr) {
                 ptr = "(null)";
                 form[std::strlen(form) - 1] = 's';
@@ -437,8 +451,48 @@ MultiValue str_format(LState *L, const LValue *args, size_t count) {
         case 'q': {
             if (form[2] != '\0')
                 throw_runtime_error("specifier '%q' cannot have modifiers");
-            size_t slen;
-            const char *ss = get_string(L, args, count, slen, arg, "string.format");
+            const LValue &qv = (arg <= count) ? args[arg - 1] : LValue();
+            //------------------ stock addliteral: numbers get a Lua numeral, nil/boolean their keyword,
+            //------------------ everything else has no literal form
+            if (qv.type == ValueType::Int64 || qv.type == ValueType::Double) {
+                char lit[64];
+                int nw;
+                if (qv.type == ValueType::Int64) {
+                    //------------------ mininteger has no decimal literal that reads back as an integer
+                    if (qv.val.payload.i64 == INT64_MIN)
+                        nw = std::snprintf(lit, sizeof(lit), "0x%llx", static_cast<unsigned long long>(qv.val.payload.i64));
+                    else
+                        nw = std::snprintf(lit, sizeof(lit), "%lld", static_cast<long long>(qv.val.payload.i64));
+                } else {
+                    double d = qv.val.payload.f64;
+                    if (d == HUGE_VAL)
+                        nw = std::snprintf(lit, sizeof(lit), "1e9999");
+                    else if (d == -HUGE_VAL)
+                        nw = std::snprintf(lit, sizeof(lit), "-1e9999");
+                    else if (d != d)
+                        nw = std::snprintf(lit, sizeof(lit), "(0/0)");
+                    else {
+                        nw = std::snprintf(lit, sizeof(lit), "%a", d);
+                        //------------------ a locale decimal comma would make the numeral unparsable
+                        for (int _ci = 0; _ci < nw; ++_ci)
+                            if (lit[_ci] == ',')
+                                lit[_ci] = '.';
+                    }
+                }
+                if (nw > 0)
+                    result.append_owned(lit, static_cast<uint32_t>(nw));
+                break;
+            }
+            if (qv.type == ValueType::Nil || qv.type == ValueType::Boolean) {
+                std::string kw = qv.to_string(L);
+                result.append_owned(kw.data(), static_cast<uint32_t>(kw.size()));
+                break;
+            }
+            if (qv.type != ValueType::String)
+                throw_runtime_error("bad argument #" + std::to_string(arg)
+                    + " to 'format' (value has no literal form)");
+            size_t slen = qv.string_len();
+            const char *ss = qv.as_string();
             result.append("\"", 1);
             for (size_t i = 0; i < slen; i++) {
                 unsigned char qc = (unsigned char)ss[i];
@@ -754,7 +808,7 @@ static const char *match_capture(MatchState *ms, const char *s, int l) {
 //------------------ match — main recursive pattern-matching engine
 static const char *match(MatchState *ms, const char *s, const char *p) {
     if (ms->matchdepth-- == 0)
-        throw_runtime_error("pattern too complex");
+        throw_runtime_error(file_line_prefix(ms->L) + "pattern too complex");
 init:
     if (p != ms->p_end) {
         switch (*p) {
@@ -1102,7 +1156,11 @@ MultiValue str_gsub(LState *L, const LValue *args, size_t count) {
     const char *src = get_string(L, args, count, srcl, 1, "string.gsub");
     const char *p = get_string(L, args, count, lp, 2, "string.gsub");
 
-    ValueType tr_type = (count >= 3) ? args[2].type : Nil;
+    //------------------ stock's luaL_argexpected reports "no value" for an absent third argument:
+    //------------------ reading args[2] unconditionally walked off the caller's argument array
+    if (count < 3)
+        throw_runtime_error(bad_arg_msg(L, 3, "string.gsub", "string/function/table expected, got no value"));
+    ValueType tr_type = args[2].type;
     int64_t max_s
         = (count >= 4 && args[3].type != Nil) ? get_integer(L, args, count, 4, "string.gsub") : (int64_t)srcl + 1;
     int anchor = (*p == '^');
@@ -1155,6 +1213,9 @@ MultiValue str_gsub(LState *L, const LValue *args, size_t count) {
                             } else {
                                 result.append(cap, static_cast<uint32_t>(capl));
                             }
+                        } else {
+                            //------------------ stock rejects a '%' that is not %% or a valid capture reference
+                            throw_runtime_error("invalid use of '%' in replacement string");
                         }
                         i++;
                     } else {
@@ -1177,13 +1238,25 @@ MultiValue str_gsub(LState *L, const LValue *args, size_t count) {
                         fargs[ci] = LValue(L->intern_string(cap, (size_t)capl));
                 }
                 static constexpr CallSite gsub_site = { "gsub", 0, false, false };
+                //------------------ the replacement runs under gsub's own C frame: stock does not allow it to yield
+                struct YieldBlock {
+                    LState *L;
+                    YieldBlock(LState *l)
+                        : L(l) { ++L->c_yield_blocked; }
+                    ~YieldBlock() { --L->c_yield_blocked; }
+                } yb(L);
                 MultiValue fret = call_function_rooted(L, args[2], fargs.data(), fargs.size(), &gsub_site);
-                if (fret.count > 0 && fret[0].type == String) {
-
-                    result.append(L, fret[0]);
-                } else {
+                LValue rv = (fret.count > 0) ? fret[0] : LValue();
+                if (rv.type == Nil || (rv.type == Boolean && !rv.as_bool())) {
                     size_t ml = e - src_pos;
                     result.append(src_pos, static_cast<uint32_t>(ml));
+                } else if (rv.type == String) {
+                    result.append(L, rv);
+                } else if (rv.type == ValueType::Int64 || rv.type == ValueType::Double) {
+                    std::string rs = rv.to_string(L);
+                    result.append_owned(rs.data(), static_cast<uint32_t>(rs.size()));
+                } else {
+                    throw_runtime_error("invalid replacement value (a " + std::string(stock_type_name(rv)) + ")");
                 }
 
             } else if (tr_type == Table) {
@@ -1191,13 +1264,26 @@ MultiValue str_gsub(LState *L, const LValue *args, size_t count) {
                 ptrdiff_t capl = get_onecapture(&ms, 0, src_pos, e, &cap);
                 LValue key = (capl == CAP_POSITION) ? LValue(static_cast<int64_t>((cap - src) + 1))
                                                     : LValue(L->intern_string(cap, (size_t)capl));
-                LValue val = static_cast<LTable *>(args[2].as_pointer())->gettable(key);
-                if (val.type == String) {
-                    result.append(L, val);
-                } else {
+                //------------------ stock indexes the replacement table with lua_gettable, so an
+                //------------------ __index metamethod (even a function) supplies the value
+                LValue val = table_get(L, args[2], key);
+                if (val.type == Nil || (val.type == Boolean && !val.as_bool())) {
                     size_t ml = e - src_pos;
                     result.append(src_pos, static_cast<uint32_t>(ml));
+                } else if (val.type == String) {
+                    result.append(L, val);
+                } else if (val.type == ValueType::Int64 || val.type == ValueType::Double) {
+                    std::string vs = val.to_string(L);
+                    result.append_owned(vs.data(), static_cast<uint32_t>(vs.size()));
+                } else {
+                    throw_runtime_error("invalid replacement value (a " + std::string(stock_type_name(val)) + ")");
                 }
+            } else if (tr_type == ValueType::Int64 || tr_type == ValueType::Double) {
+                std::string rs = args[2].to_string(L);
+                result.append_owned(rs.data(), static_cast<uint32_t>(rs.size()));
+            } else {
+                throw_runtime_error(bad_arg_msg(L, 3, "string.gsub",
+                    std::string("string/function/table expected, got ") + stock_type_name(args[2])));
             }
 
             src_pos = lastmatch = e;
@@ -1468,8 +1554,8 @@ MultiValue str_pack(LState *L, const LValue *args, size_t count) {
         unsigned ntoalign;
         size_t size;
         KOption opt = getdetails(&h, totalsize, &fmt, &size, &ntoalign);
-        if (ntoalign + size > (size_t)-1 - totalsize)
-            throw_runtime_error("result too long");
+        if (size > static_cast<size_t>(INT64_MAX) - ntoalign - totalsize)
+            throw_runtime_error(bad_arg_msg(L, arg, "string.pack", "result too long"));
         totalsize += ntoalign + size;
         buf.append(ntoalign, (char)LUAL_PACKPADBYTE);
         arg++;
