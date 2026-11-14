@@ -13,13 +13,22 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <iostream>
 #include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
 
 namespace clx {
+
+//------------------ main_stack_low: lowest safe address of the main thread's C stack (defined below)
+char *main_stack_low();
 
 //------------------ LState::LState — state constructor
 LState::LState()
@@ -41,6 +50,7 @@ LState::LState()
     str_index = LValue(intern_string("__index"));
     str_newindex = LValue(intern_string("__newindex"));
     str_gc = LValue(intern_string("__gc"));
+    str_mode = LValue(intern_string("__mode"));
     str_call = LValue(intern_string("__call"));
     str_close = LValue(intern_string("__close"));
     str_pairs = LValue(intern_string("__pairs"));
@@ -94,6 +104,49 @@ LState::LState()
         if (v > 0)
             gc_major_threshold = size_t(v) * 1024;
     }
+
+    stack_low = main_stack_low();
+}
+
+//------------------ main_stack_low: lowest address the process main stack may reach, plus a reserve for
+//------------------ the deepest frame's own locals and for unwinding
+char *main_stack_low() {
+#if defined(_WIN32)
+    ULONG_PTR low = 0, high = 0;
+    GetCurrentThreadStackLimits(&low, &high);
+    return low ? reinterpret_cast<char *>(low + (64 * 1024)) : nullptr;
+#elif defined(__APPLE__)
+    size_t size = pthread_get_stacksize_np(pthread_self());
+    char *high = static_cast<char *>(pthread_get_stackaddr_np(pthread_self()));
+    if (!high || size <= (128u * 1024u))
+        return nullptr;
+    return high - size + (64 * 1024);
+#elif defined(__linux__)
+    pthread_attr_t attr;
+    if (pthread_getattr_np(pthread_self(), &attr) != 0)
+        return nullptr;
+    void *addr = nullptr;
+    size_t size = 0;
+    int rc = pthread_attr_getstack(&attr, &addr, &size);
+    pthread_attr_destroy(&attr);
+    if (rc != 0 || !addr || size <= (128u * 1024u))
+        return nullptr;
+    return static_cast<char *>(addr) + (64 * 1024);
+#else
+    return nullptr;
+#endif
+}
+
+//------------------ throw_stack_overflow: raises stock's "stack overflow" error
+void throw_stack_overflow(LState *L) {
+    throw_runtime_error(file_line_prefix(L) + "stack overflow");
+}
+
+//------------------ raise_stack_overflow: raises the error a fast body recorded, at the site that overflowed
+void raise_stack_overflow(LState *L) {
+    L->current_site = L->stack_overflow_site;
+    L->stack_overflow_site = nullptr;
+    throw_stack_overflow(L);
 }
 
 static void dtor_free_table(LTable *t) {
@@ -176,6 +229,8 @@ void LState::invoke_gc_finalizer(LUserdata *ud, const char *tag) {
 void (*clx_io_flush_all_ptr)() = nullptr;
 void (*clx_io_write_ptr)(FILE *fp, const char *p, size_t n) = nullptr;
 MultiValue (*clx_string_dump_hook)(LState *L, const LValue *args, size_t count) = nullptr;
+bool (*clx_vm_debug_upvalue_hook)(LState *L, LHeader *fn, int64_t n, LValue &name, LValue &value) = nullptr;
+bool (*clx_vm_debug_getinfo_hook)(LState *L, const LValue &fn, const char *what, LValue &out) = nullptr;
 
 //------------------ LState::~LState — state destructor
 LState::~LState() {
@@ -271,18 +326,29 @@ LState::~LState() {
         fth = nxt0;
     }
     free_threads = nullptr;
-    std::free(overflow_heap);
+    //------------------ overflow blocks are a chain of malloc'd raw allocations (see alloc_overflow)
+    while (overflow_blocks) {
+        void *next = *static_cast<void **>(overflow_blocks);
+        std::free(overflow_blocks);
+        overflow_blocks = next;
+    }
+    overflow_heap = nullptr;
+    overflow_heap_cap = 0;
+    overflow_heap_used = 0;
     gc_worklist.free();
     gc_recent.free();
     gc_pinned.free();
 }
 
 //------------------ CloseGuard::~CloseGuard — close guard destructor
-CloseGuard::~CloseGuard() {
-    if (val.type != Table)
-        return;
-    LTable *t = static_cast<LTable *>(val.as_pointer());
-    LTable *mt = tbl_metatable(t);
+CloseGuard::~CloseGuard() noexcept(false) {
+    //------------------ <close> accepts any value carrying a __close metamethod: tables and userdata
+    //------------------ (a file handle is userdata, so restricting this to tables left files open)
+    LTable *mt = nullptr;
+    if (val.type == Table)
+        mt = tbl_metatable(static_cast<LTable *>(val.as_pointer()));
+    else if (val.type == UserData)
+        mt = static_cast<LUserdata *>(val.as_pointer())->metatable;
     if (!mt)
         return;
     LValue close_func = mt->gettable(L->str_close);
@@ -290,15 +356,61 @@ CloseGuard::~CloseGuard() {
         return;
 
     LValue args[2] = { val, LValue() };
+    size_t nargs = 1;
+    LThread *th = L->running_thread;
+    bool unwinding = std::uncaught_exceptions() > 0;
+    bool self_closing = th && (th->closing || th->self_close);
+    //------------------ stock hands __close the error being unwound, or the one an earlier __close of the
+    //------------------ same unwind raised; normal exits and clean closes get the object alone, with no
+    //------------------ second argument at all (not a nil one)
+    if (th && th->closing) {
+        if (th->close_error && th->yield_args.count > 0) {
+            args[1] = th->yield_args[0];
+            nargs = 2;
+        }
+    } else if (unwinding) {
+        if (L->has_close_err) {
+            args[1] = L->close_err;
+            nargs = 2;
+        } else if (clx_unwinding_error) {
+            args[1] = *clx_unwinding_error;
+            nargs = 2;
+        }
+    }
     try {
         static constexpr CallSite close_site = { "CloseGuard", 0, false, false };
-        call_function_rooted(L, close_func, args, 2, &close_site);
+        call_function_rooted(L, close_func, args, nargs, &close_site);
+    } catch (const CoroutineClose &) {
+        //------------------ a __close that closes its own coroutine must abort the whole thread, not be reported
+        throw;
     } catch (const LRuntimeException &e) {
-        std::cerr << "error in __close metamethod: " << e.what() << "\n";
+        LThread *t = L->running_thread;
+        if (self_closing) {
+            //------------------ while closing a coroutine the error becomes the close result (false, err)
+            t->yield_args = MultiValue(e.error_obj);
+            t->close_error = true;
+        } else if (unwinding) {
+            //------------------ stock replaces the pending error: the remaining closers and the catch site
+            //------------------ that reports it see this one instead
+            L->close_err = e.error_obj;
+            L->has_close_err = true;
+        } else {
+            throw;
+        }
     } catch (std::exception &e) {
-        std::cerr << "error in __close metamethod: " << e.what() << "\n";
+        if (unwinding) {
+            L->close_err = LValue(L->intern_string(e.what()));
+            L->has_close_err = true;
+        } else {
+            throw;
+        }
     } catch (...) {
-        std::cerr << "error in __close metamethod\n";
+        if (unwinding) {
+            L->close_err = LValue(L->intern_string("<no error object>"));
+            L->has_close_err = true;
+        } else {
+            throw;
+        }
     }
 }
 
@@ -462,6 +574,7 @@ LValue newuserdata(LState *L, size_t size) {
     ud->age = AGE_YOUNG;
     ud->metatable = nullptr;
     ud->meta_next = nullptr;
+    ud->uservalue = LValue();
     ud->size = size;
 
     ud->next = L->allocated_objects;

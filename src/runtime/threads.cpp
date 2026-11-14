@@ -26,7 +26,10 @@ LThread::LThread()
     , caller(nullptr)
     , is_main(false)
     , has_error(false)
-    , close_requested(false) {
+    , close_requested(false)
+    , self_close(false)
+    , closing(false)
+    , close_error(false) {
     type = static_cast<uint8_t>(Thread);
     marked = 0;
     next = nullptr;
@@ -64,6 +67,13 @@ static inline void root_load(LState *L, LThread *t) {
 //---------- and yield each had their own copy). Conditions preserved exactly: the two middle
 //---------- branches had identical bodies, so they are OR-ed, nothing else changes.
 static inline void coro_switch_to(LThread *from, LThread *to) {
+    //------------------ the stack-limit check follows the stack being entered: a recycled fiber keeps its
+    //------------------ own "stack overflow" threshold, and the caller's is restored on the way back
+    LState *Ls = to->state;
+    char *saved_low = Ls->stack_low;
+#if !defined(_WIN32)
+    Ls->stack_low = to->stack_memory ? to->stack_memory + (64 * 1024) : nullptr;
+#endif
 #if defined(_WIN32)
     SwitchToFiber(to->fiber);
 #elif ((defined(__APPLE__) || defined(__linux__)) && defined(__aarch64__)) || (defined(__linux__) && defined(__x86_64__))
@@ -71,6 +81,7 @@ static inline void coro_switch_to(LThread *from, LThread *to) {
 #else
     swapcontext(&from->ctx, &to->ctx);
 #endif
+    Ls->stack_low = saved_low;
 }
 
 static void fiber_entry_impl(LThread *t) {
@@ -86,15 +97,42 @@ static void fiber_entry_impl(LThread *t) {
             static constexpr CallSite coroutine_site = { "coroutine", 0, false, false };
             t->yield_args = call_function_rooted(L, t->function, args, argc, &coroutine_site);
             t->status = THREAD_DEAD;
+        } catch (const CoroutineClose &) {
+            //------------------ a __close that raised while closing keeps its error (already stored in yield_args)
+            if (t->close_error) {
+                t->has_error = true;
+            } else {
+                t->yield_args = MultiValue();
+                t->has_error = false;
+            }
+            t->closing = false;
+            t->status = THREAD_DEAD;
         } catch (const LRuntimeException &e) {
-
-            t->yield_args = MultiValue(e.error_obj);
+            //------------------ a __close that raised while unwinding replaced the error (stock reports the
+            //------------------ last one to the resumer)
+            LValue err = e.error_obj;
+            if (L->has_close_err) {
+                err = L->close_err;
+                L->has_close_err = false;
+            }
+            t->yield_args = MultiValue(err);
             t->status = THREAD_DEAD;
             t->has_error = true;
         } catch (...) {
             t->yield_args = MultiValue(clx::LValue(L->intern_string("unknown error")));
             t->status = THREAD_DEAD;
             t->has_error = true;
+        }
+
+        if (t->self_close) {
+            t->self_close = false;
+            t->closing = false;
+            if (t->close_error) {
+                t->has_error = true;
+            } else {
+                t->has_error = false;
+                t->yield_args = MultiValue();
+            }
         }
 
         if (t->pre_unwind) {
@@ -106,7 +144,10 @@ static void fiber_entry_impl(LThread *t) {
     }
 
     LThread *caller = t->caller;
-    root_stash(L, t);
+    //------------------ the fiber is finished, so every frame on its stack is gone: any chain left over
+    //------------------ belongs to already-unwound frames and must never be walked again (the stack memory
+    //------------------ is recycled). A suspended fiber keeps its live chain via yield's root_stash.
+    t->top_root = nullptr;
     root_load(L, caller);
     L->running_thread = caller;
     caller->status = THREAD_RUNNING;
@@ -153,6 +194,9 @@ LValue create_thread(LState *L, const LValue &func, double stack_size) {
     t->yield_args = MultiValue();
     t->has_error = false;
     t->close_requested = false;
+    t->self_close = false;
+    t->closing = false;
+    t->close_error = false;
     t->caller = nullptr;
     t->status = THREAD_SUSPENDED;
     t->top_root = nullptr;
@@ -208,10 +252,15 @@ LValue create_thread(LState *L, const LValue &func, double stack_size) {
 //------------------ resume: resumes a suspended coroutine (public API)
 MultiValue resume(LState *L, const LValue &thread, const LValue *args, size_t count) {
     LThread *t = static_cast<LThread *>(thread.as_pointer());
+    //------------------ every nested resume is a real C stack frame: refuse past stock's LUAI_MAXCCALLS
+    //------------------ depth instead of overflowing the process stack
+    if (L->resume_depth >= 200)
+        throw LRuntimeException(LValue(L->intern_string(file_line_prefix(L) + "C stack overflow")));
     //------------------ assign() reuses the thread's already-constructed inline slots: no temp
     //------------------ MultiValue + move-assign copy chain on every resume.
     t->resume_args.assign(args, count, L);
     t->has_error = false;
+    t->close_error = false;
 #if !defined(_WIN32)
     // fiber_trampoline() reads g_starting_thread on the thread's first entry. create_thread() also sets it,
     // but with several coroutines created before the first resume it would point at the last one created.
@@ -228,6 +277,13 @@ MultiValue resume(LState *L, const LValue &thread, const LValue *args, size_t co
     root_stash(L, L->running_thread);
     root_load(L, t);
     L->running_thread = t;
+
+    struct DepthGuard {
+        size_t &d;
+        DepthGuard(size_t &depth)
+            : d(depth) { ++d; }
+        ~DepthGuard() { --d; }
+    } depth_guard(L->resume_depth);
 
     coro_switch_to(t->caller, t);
 
@@ -258,6 +314,14 @@ MultiValue yield(LState *L, const LValue *args, size_t count) {
     LThread *t = L->running_thread;
     if (t->is_main)
         clx::error(L, "attempt to yield from outside a coroutine");
+    //------------------ stock cannot resume a coroutine across a C frame that has no continuation
+    //------------------ (a sort comparator, a gsub replacement): the C stack below would be unwound
+    if (L->c_yield_blocked > 0)
+        clx::error(L, "attempt to yield across a C-call boundary");
+    //------------------ a __close that runs while the coroutine is being closed sits under the close's own
+    //------------------ C frame: stock refuses the yield there
+    if (t->closing || t->self_close)
+        clx::error(L, "attempt to yield across a C-call boundary");
     t->yield_args.assign(args, count, L);
     if (L->gc_mode == LState::GCMode::Generational && t->age == AGE_OLD) {
         for (size_t i = 0; i < t->yield_args.count; ++i)
@@ -279,8 +343,8 @@ MultiValue yield(LState *L, const LValue *args, size_t count) {
 
     if (t->close_requested) {
         t->close_requested = false;
-        t->has_error = true;
-        throw LRuntimeException(clx::string(L, "thread is being closed"));
+        t->closing = true;
+        throw CoroutineClose();
     }
 
     ++t->yield_count;
@@ -292,20 +356,34 @@ MultiValue yield(LState *L, const LValue *args, size_t count) {
 MultiValue close_thread(LState *L, const LValue &thread) {
     LThread *t = static_cast<LThread *>(thread.as_pointer());
 
-    if (t->status == THREAD_DEAD)
+    //------------------ a dead coroutine reports its pending error once, then close succeeds like stock
+    if (t->status == THREAD_DEAD) {
+        if (t->has_error) {
+            LValue err = t->yield_args.count > 0 ? t->yield_args[0] : LValue();
+            t->has_error = false;
+            t->yield_args = MultiValue();
+            return MultiValue(false, err);
+        }
         return MultiValue(true);
+    }
 
     if (t->status == THREAD_RUNNING)
-        clx::error(L, "cannot close running coroutine");
+        clx::error(L, "cannot close a running coroutine");
     if (t->status == THREAD_NORMAL)
-        clx::error(L, "cannot close normal coroutine");
+        clx::error(L, "cannot close a normal coroutine");
 
     t->close_requested = true;
 
     MultiValue result = resume(L, thread, nullptr, 0);
 
-    if (t->status == THREAD_DEAD)
-        return MultiValue(true);
+    if (t->status == THREAD_DEAD) {
+        //------------------ the error is reported once: a later close of the same dead coroutine succeeds
+        bool failed = (result.count > 1 && !result[0].as_bool());
+        LValue err = failed ? result[1] : LValue();
+        t->has_error = false;
+        t->yield_args = MultiValue();
+        return failed ? MultiValue(false, err) : MultiValue(true);
+    }
 
     return MultiValue(false);
 }
