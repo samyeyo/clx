@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -34,7 +35,13 @@ struct FileUd {
     FILE *fp;
     bool close_on_gc;
     bool is_pipe;
+    bool is_std;
 };
+
+//------------------ cannot_close_std: stock's answer to io.close on stdin/stdout/stderr
+static inline MultiValue cannot_close_std(LState *L) {
+    return MultiValue({ LValue(), LValue(L->intern_string("cannot close standard file")) });
+}
 
 //------------------ Shared per-FILE* output batching. One fwrite() takes two mutexes
 //------------------ (flockfile/funlockfile, ~30ns each), so 2.5M single-char io.writes burn ~70ms in
@@ -52,6 +59,7 @@ struct OutBufEnt {
     int mode = 0;
     bool mode_init = false;
 };
+
 static constexpr size_t kOutBufSlots = 16;
 static constexpr size_t kOutBufCap = 8192;
 static OutBufEnt out_bufs[kOutBufSlots];
@@ -193,12 +201,6 @@ struct LinesIterUd {
     char buf[4096];
 };
 
-struct LinesFileUd {
-    FILE *fp;
-    char buf[4096];
-    bool first;
-};
-
 static FileUd *as_file(LState *L, const LValue &v, const char *fname = "io.read") {
     if (v.type != UserData)
         throw_runtime_error(bad_arg_msg(L, 1, fname, std::string("FILE* expected, got ") + stock_type_name(v)));
@@ -315,35 +317,155 @@ static ReadFmt match_read_fmt(const char *fmt, int64_t *count) {
 }
 
 //------------------ Shared file method helpers
-static MultiValue make_lines_iter(LState *L, FileUd *f) {
-    LUserdata *u = static_cast<LUserdata *>(newuserdata(L, sizeof(LinesIterUd)).as_pointer());
+//------------------ the iterator holds its state and the formats given to f:lines(...) / io.lines(...) in
+//------------------ traced gc cells rather than expecting them as arguments, so `local it = f:lines();
+//------------------ it()` reads a line like stock instead of nothing
+//------------------ exec_result (os.cpp): stock luaL_execresult, shared so a popen handle's close reports
+//------------------ the same (ok, what, code) triple as os.execute
+MultiValue exec_result(LState *L, int status);
+
+static bool take_stream_error(LState *L, FileUd *f, MultiValue &out);
+static MultiValue file_read_args(
+    LState *L, FileUd *f, const LValue *a, size_t c, bool lenient, const char *fname, bool raise_on_error);
+
+static LValue make_lines_iter(LState *L, const LValue &file_val, const LValue *fmts, size_t nfmts, bool close_at_eof) {
+    FileUd *f = as_file(L, file_val, "lines");
+    LValue ud_val = newuserdata(L, sizeof(LinesIterUd));
+    LUserdata *u = static_cast<LUserdata *>(ud_val.as_pointer());
     LinesIterUd *ud = static_cast<LinesIterUd *>(u->data());
     ud->f = f;
 
-    auto iter = [](LState *L, const LValue *a, size_t c) -> MultiValue {
-        if (c < 1)
-            return MultiValue();
-        LUserdata *u = static_cast<LUserdata *>(a[0].as_pointer());
+    RootRange rr(L, &ud_val, 1);
+    std::vector<LUpValue> cells;
+    cells.push_back(std::make_shared<LValue>(ud_val));
+    for (size_t i = 0; i < nfmts; ++i)
+        cells.push_back(std::make_shared<LValue>(fmts[i]));
+
+    auto iter = [cells, close_at_eof](LState *L, const LValue *, size_t) -> MultiValue {
+        LUserdata *u = static_cast<LUserdata *>(cells[0]->as_pointer());
         LinesIterUd *ud = static_cast<LinesIterUd *>(u->data());
         if (!ud->f->fp)
-            return MultiValue();
-        outbuf_flush_fp(ud->f->fp);
-        LValue line = read_line(L, ud->f->fp);
-        if (line.type == Nil)
-            return MultiValue();
-        return MultiValue(line);
+            throw_runtime_error("file is already closed");
+        std::vector<LValue> read_args(cells.size());
+        for (size_t i = 0; i < cells.size(); ++i)
+            read_args[i] = *cells[i];
+        MultiValue result = file_read_args(L, ud->f, read_args.data(), read_args.size(), false, "lines", true);
+        //------------------ stock's io.lines(filename) iterator closes the file itself once a read fails
+        if (close_at_eof && result.count > 0 && result[0].type == Nil && ud->f->fp) {
+            outbuf_drop_fp(ud->f->fp);
+            std::fclose(ud->f->fp);
+            ud->f->fp = nullptr;
+        }
+        return result;
     };
 
-    L->root_value(LValue(UserData, u));
-    MultiValue ret({ L->create_closure(CFunctionType(iter)), LValue(u), nil() });
-    L->unroot_value(LValue(UserData, u));
-    return ret;
+    return L->create_closure(iter, nullptr, cells);
 }
 
-static MultiValue file_read_args(LState *L, FileUd *f, const LValue *a, size_t c, bool lenient = false) {
+//------------------ read_number: stock read_number keeps the integer subtype — a numeral made of an
+//------------------ optional sign and digits reads as lua_Integer, anything with a fraction or an
+//------------------ exponent reads as lua_Number (fscanf("%lf") always produced a float); the numeral
+//------------------ is accumulated in a fixed L_MAXLENNUM buffer and a longer one fails, which also
+//------------------ decides how many bytes are left in the stream
+static LValue read_number(LState *L, FILE *fp) {
+    constexpr size_t kMaxLenNum = 200;
+    std::string tok;
+    int ch;
+    bool overflow = false;
+    auto nextc = [&]() {
+        if (tok.size() >= kMaxLenNum) {
+            overflow = true;
+            return false;
+        }
+        tok.push_back(static_cast<char>(ch));
+        ch = std::fgetc(fp);
+        return true;
+    };
+    do {
+        ch = std::fgetc(fp);
+    } while (ch != EOF && std::isspace(static_cast<unsigned char>(ch)) != 0);
+    if (ch == EOF)
+        return LValue();
+    bool hex = false;
+    size_t count = 0;
+    if (ch == '+' || ch == '-')
+        nextc();
+    if (ch == '0' && nextc()) {
+        if (ch == 'x' || ch == 'X') {
+            hex = true;
+            nextc();
+        } else {
+            count = 1;
+        }
+    }
+    auto read_digits = [&](bool is_hex) {
+        size_t n = 0;
+        auto digit = [is_hex](int c) {
+            if (c == EOF)
+                return false;
+            return is_hex ? std::isxdigit(static_cast<unsigned char>(c)) != 0
+                          : std::isdigit(static_cast<unsigned char>(c)) != 0;
+        };
+        while (digit(ch) && nextc())
+            ++n;
+        return n;
+    };
+    count += read_digits(hex);
+    bool is_float = false;
+    if (ch == '.') {
+        is_float = true;
+        nextc();
+        count += read_digits(hex);
+    }
+    int echar = hex ? 'p' : 'e';
+    if (count > 0 && (ch == echar || ch == std::toupper(echar))) {
+        nextc();
+        if (ch == '+' || ch == '-')
+            nextc();
+        read_digits(false);
+        is_float = true;
+    }
+    if (ch != EOF)
+        std::ungetc(ch, fp);
+    bool only_sign = tok.size() == 1 && (tok[0] == '+' || tok[0] == '-');
+    if (overflow || tok.empty() || only_sign)
+        return LValue();
+    LValue sv = LValue(L->intern_string(tok.c_str(), tok.size()));
+    if (!is_float) {
+        int64_t iv;
+        if (to_integer_coerced(sv, iv))
+            return integer(iv);
+    }
+    double d;
+    if (sv.to_number(d))
+        return number(d);
+    return LValue();
+}
+
+//------------------ take_stream_error: stock's luaL_fileresult failure shape (nil, message, errno) after a
+//------------------ stream operation failed. Returns false (and leaves out untouched) when ferror is clear
+static bool take_stream_error(LState *L, FileUd *f, MultiValue &out) {
+    if (!std::ferror(f->fp))
+        return false;
+    int en = errno;
+    std::clearerr(f->fp);
+    out = MultiValue({ LValue(), LValue(L->intern_string(std::strerror(en))), integer(en) });
+    return true;
+}
+
+static MultiValue file_read_args(
+    LState *L, FileUd *f, const LValue *a, size_t c, bool lenient, const char *fname, bool raise_on_error) {
     outbuf_flush_fp(f->fp);
-    if (c == 1)
-        return MultiValue(read_line(L, f->fp));
+    if (c == 1) {
+        MultiValue result(read_line(L, f->fp));
+        MultiValue failed;
+        if (take_stream_error(L, f, failed)) {
+            if (raise_on_error)
+                throw_runtime_error(failed[1].as_string());
+            return failed;
+        }
+        return result;
+    }
 
     std::vector<LValue> results;
     results.reserve(c - 1);
@@ -351,14 +473,20 @@ static MultiValue file_read_args(LState *L, FileUd *f, const LValue *a, size_t c
         if (a[i].type == Int64 || a[i].type == Double) {
             int64_t n = check_integer(L, a[i]);
             if (n <= 0) {
-                results.push_back(LValue(L->intern_string("", 0)));
+                int probe = std::fgetc(f->fp);
+                if (probe != EOF)
+                    std::ungetc(probe, f->fp);
+                results.push_back(probe != EOF ? LValue(L->intern_string("", 0)) : LValue());
                 continue;
             }
             size_t sz = static_cast<size_t>(n);
             char *dst = new char[sz + 1];
             size_t r = std::fread(dst, 1, sz, f->fp);
             dst[r] = '\0';
-            results.push_back(make_string_pooled(L, dst, r));
+            if (r == 0)
+                results.push_back(LValue());
+            else
+                results.push_back(make_string_pooled(L, dst, r));
             delete[] dst;
         } else if (a[i].type == String) {
             int64_t count = 0;
@@ -373,37 +501,44 @@ static MultiValue file_read_args(LState *L, FileUd *f, const LValue *a, size_t c
             case ReadFmt::LineKeepEol:
                 results.push_back(read_line(L, f->fp, true));
                 break;
-            case ReadFmt::Number: {
-                double d;
-                if (std::fscanf(f->fp, "%lf", &d) == 1)
-                    results.push_back(number(d));
-                else
-                    results.push_back(LValue());
+            case ReadFmt::Number:
+                results.push_back(read_number(L, f->fp));
                 break;
-            }
             case ReadFmt::Bytes: {
                 int64_t n = std::max<int64_t>(count, 0);
                 if (n == 0) {
-                    results.push_back(LValue(L->intern_string("", 0)));
+                    int probe = std::fgetc(f->fp);
+                    if (probe != EOF)
+                        std::ungetc(probe, f->fp);
+                    results.push_back(probe != EOF ? LValue(L->intern_string("", 0)) : LValue());
                     break;
                 }
                 size_t sz = static_cast<size_t>(n);
                 char *dst = new char[sz + 1];
                 size_t r = std::fread(dst, 1, sz, f->fp);
                 dst[r] = '\0';
-                results.push_back(make_string_pooled(L, dst, r));
+                if (r == 0)
+                    results.push_back(LValue());
+                else
+                    results.push_back(make_string_pooled(L, dst, r));
                 delete[] dst;
                 break;
             }
             case ReadFmt::Invalid:
             default:
-                if (!lenient) {
-                    char buf[128];
-                    throw_runtime_error(bad_arg_msg(L, (int)(i + 1), "io.read", "invalid format"));
-                }
+                if (!lenient)
+                    throw_runtime_error(bad_arg_msg(L, (int)(i + 1), fname, "invalid format"));
                 break;
             }
         }
+        if (!results.empty() && results.back().type == Nil)
+            break;
+    }
+    MultiValue failed;
+    if (take_stream_error(L, f, failed)) {
+        if (raise_on_error)
+            throw_runtime_error(failed[1].as_string());
+        return failed;
     }
     return MultiValue(results.data(), results.size(), L);
 }
@@ -428,11 +563,39 @@ static void file_write_args(LState *L, FileUd *f, const LValue *a, size_t c, boo
     }
 }
 
-//------------------ fail_nil: returns nil, errmsg per Lua file-library convention
+//------------------ fail_nil: returns nil, errmsg, errno per Lua file-library convention
 static MultiValue fail_nil(LState *L, const char *filename) {
+    int en = errno;
     char buf[256];
-    std::snprintf(buf, sizeof(buf), "%s: %s", filename, std::strerror(errno));
-    return MultiValue({ LValue(), LValue(L->intern_string(buf)) });
+    std::snprintf(buf, sizeof(buf), "%s: %s", filename, std::strerror(en));
+    return MultiValue({ LValue(), LValue(L->intern_string(buf)), clx::integer(en) });
+}
+
+//------------------ open_or_throw: io.input/io.output/io.lines raise when the file cannot be opened
+//------------------ (stock catches the luaL_fileresult and reports it as an error keeping the reason)
+static FILE *open_or_throw(const char *filename, const char *mode) {
+    FILE *fp = std::fopen(filename, mode);
+    if (!fp) {
+        int en = errno;
+        std::string msg = std::string("cannot open file '") + filename + "' (" + std::strerror(en) + ")";
+        throw_runtime_error(msg);
+    }
+    return fp;
+}
+
+//------------------ file_tostring: stock's __tostring for file handles
+static MultiValue file_tostring(LState *L, const LValue *a, size_t c) {
+    if (c < 1 || a[0].type != UserData)
+        return MultiValue();
+    LUserdata *ud = static_cast<LUserdata *>(a[0].as_pointer());
+    if (ud->size < sizeof(FileUd))
+        return MultiValue();
+    FileUd *f = static_cast<FileUd *>(ud->data());
+    if (!f->fp)
+        return MultiValue(LValue(L->intern_string("file (closed)")));
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "file (%p)", static_cast<void *>(f->fp));
+    return MultiValue(LValue(L->intern_string(buf)));
 }
 
 static LValue make_file(LState *L, FILE *fp, bool close_on_gc, bool is_pipe = false) {
@@ -441,6 +604,7 @@ static LValue make_file(LState *L, FILE *fp, bool close_on_gc, bool is_pipe = fa
     f->fp = fp;
     f->close_on_gc = close_on_gc;
     f->is_pipe = is_pipe;
+    f->is_std = false;
 
     LTable *mt = static_cast<LTable *>(L->create_table().as_pointer());
     LValue file_mt(Table, mt);
@@ -448,6 +612,8 @@ static LValue make_file(LState *L, FILE *fp, bool close_on_gc, bool is_pipe = fa
     L->root_value(file_mt);
 
     auto meth_close = [](LState *L, const LValue *a, size_t c) -> MultiValue {
+        if (c < 1)
+            throw_runtime_error(bad_arg_msg(L, 1, "close", "FILE* expected, got no value"));
         FileUd *f = as_file(L, a[0]);
         if (!f->fp)
             return MultiValue(clx::boolean(true));
@@ -458,12 +624,8 @@ static LValue make_file(LState *L, FILE *fp, bool close_on_gc, bool is_pipe = fa
         else
             r = fclose(f->fp);
         f->fp = nullptr;
-        if (f->is_pipe) {
-
-            if (r == 0)
-                return MultiValue({ clx::boolean(true), string(L, "exit"), integer(static_cast<int64_t>(r)) });
-            return MultiValue({ clx::LValue(), string(L, "exit"), integer(static_cast<int64_t>(r)) });
-        }
+        if (f->is_pipe)
+            return exec_result(L, r);
         if (r != 0) {
             char buf[128];
             std::snprintf(buf, sizeof(buf), "cannot close file: %s", std::strerror(errno));
@@ -484,12 +646,14 @@ static LValue make_file(LState *L, FILE *fp, bool close_on_gc, bool is_pipe = fa
     };
 
     auto meth_lines = [](LState *L, const LValue *a, size_t c) -> MultiValue {
-        FileUd *f = as_file(L, a[0]);
-        return make_lines_iter(L, f);
+        if (c > 251)
+            throw_runtime_error(bad_arg_msg(L, 252, "lines", "too many arguments"));
+        return make_lines_iter(L, a[0], c > 1 ? a + 1 : nullptr, c > 1 ? c - 1 : 0, false);
     };
 
-    auto meth_read
-        = [](LState *L, const LValue *a, size_t c) -> MultiValue { return file_read_args(L, as_file(L, a[0]), a, c); };
+    auto meth_read = [](LState *L, const LValue *a, size_t c) -> MultiValue {
+        return file_read_args(L, as_file(L, a[0]), a, c, false, "read", false);
+    };
 
     auto meth_seek = [](LState *L, const LValue *a, size_t c) -> MultiValue {
         FileUd *f = as_file(L, a[0]);
@@ -508,9 +672,8 @@ static LValue make_file(LState *L, FILE *fp, bool close_on_gc, bool is_pipe = fa
         if (c >= 3 && a[2].type != Nil)
             offset = check_integer(L, a[2]);
         if (std::fseek(f->fp, offset, origin) != 0) {
-            char buf[128];
-            std::snprintf(buf, sizeof(buf), "cannot seek file: %s", std::strerror(errno));
-            throw_runtime_error(buf);
+            int en = errno;
+            return MultiValue({ LValue(), LValue(L->intern_string(std::strerror(en))), clx::integer(en) });
         }
         long pos = std::ftell(f->fp);
         return MultiValue(integer(static_cast<int64_t>(pos)));
@@ -546,7 +709,14 @@ static LValue make_file(LState *L, FILE *fp, bool close_on_gc, bool is_pipe = fa
     };
 
     auto meth_write = [](LState *L, const LValue *a, size_t c) -> MultiValue {
-        file_write_args(L, as_file(L, a[0]), a, c);
+        FileUd *f = as_file(L, a[0]);
+        file_write_args(L, f, a, c);
+        //------------------ writes are buffered above, so the handle must be flushed before stock's error
+        //------------------ return (nil, message, errno) can be reported for a bad descriptor
+        outbuf_flush_fp(f->fp);
+        MultiValue failed;
+        if (take_stream_error(L, f, failed))
+            return failed;
         return MultiValue(a[0]);
     };
 
@@ -570,7 +740,9 @@ static LValue make_file(LState *L, FILE *fp, bool close_on_gc, bool is_pipe = fa
 
     mt->bind_all(L,
         { { "close", meth_close }, { "flush", meth_flush }, { "lines", meth_lines }, { "read", meth_read },
-            { "seek", meth_seek }, { "setvbuf", meth_setvbuf }, { "write", meth_write }, { "__gc", meth_gc } });
+            { "seek", meth_seek }, { "setvbuf", meth_setvbuf }, { "write", meth_write }, { "__gc", meth_gc },
+            { "__close", meth_gc }, { "__tostring", file_tostring } });
+    mt->settable(LValue(L->intern_string("__name")), LValue::istr("FILE*", 5));
     mt->settable(LValue(L->intern_string("__index")), LValue(Table, mt));
     ud->metatable = mt;
     meta_ud_list_add(L, ud);
@@ -579,19 +751,47 @@ static LValue make_file(LState *L, FILE *fp, bool close_on_gc, bool is_pipe = fa
     return LValue(UserData, ud);
 }
 
+//------------------ the standard handles are process singletons: io.stdin must be the very userdata
+//------------------ the default-input slot holds, otherwise `io.input() == io.stdin` is false and the
+//------------------ collected extra copy reports itself as a closed file
+static LValue std_file_slots[3];
+
 static LValue get_std_file(LState *L, FILE *fp) {
+    LValue *slot = (fp == stdin) ? &std_file_slots[0] : (fp == stdout) ? &std_file_slots[1] : &std_file_slots[2];
+    if (slot->type == UserData)
+        return *slot;
     LUserdata *ud = static_cast<LUserdata *>(newuserdata(L, sizeof(FileUd)).as_pointer());
     FileUd *f = static_cast<FileUd *>(ud->data());
     f->fp = fp;
     f->close_on_gc = false;
     f->is_pipe = false;
+    f->is_std = true;
 
     LTable *mt = static_cast<LTable *>(L->create_table().as_pointer());
     LValue file_mt(Table, mt);
     L->root_value(LValue(UserData, ud));
     L->root_value(file_mt);
 
-    auto meth_close = [](LState *L, const LValue *a, size_t c) -> MultiValue { return MultiValue(boolean(true)); };
+    auto meth_close = [](LState *L, const LValue *a, size_t c) -> MultiValue {
+        if (c < 1)
+            throw_runtime_error(bad_arg_msg(L, 1, "close", "FILE* expected, got no value"));
+        (void)a;
+        return cannot_close_std(L);
+    };
+
+    //------------------ stock binds __close to f_gc, which is a no-op on an already-closed handle:
+    //------------------ closing a <close> variable twice (or after f:close()) must not raise
+    auto meth_close_guard = [](LState *L, const LValue *a, size_t c) -> MultiValue {
+        if (c < 1 || a[0].type != UserData)
+            return MultiValue();
+        LUserdata *u = static_cast<LUserdata *>(a[0].as_pointer());
+        if (u->size < sizeof(FileUd))
+            return MultiValue();
+        FileUd *f = static_cast<FileUd *>(u->data());
+        if (!f->fp && !f->is_pipe)
+            return MultiValue();
+        return cannot_close_std(L);
+    };
 
     auto meth_flush = [](LState *L, const LValue *a, size_t c) -> MultiValue {
         LUserdata *u = static_cast<LUserdata *>(a[0].as_pointer());
@@ -602,13 +802,14 @@ static LValue get_std_file(LState *L, FILE *fp) {
     };
 
     auto meth_lines = [](LState *L, const LValue *a, size_t c) -> MultiValue {
-        FileUd *f = static_cast<FileUd *>(static_cast<LUserdata *>(a[0].as_pointer())->data());
-        return make_lines_iter(L, f);
+        if (c > 251)
+            throw_runtime_error(bad_arg_msg(L, 252, "lines", "too many arguments"));
+        return make_lines_iter(L, a[0], c > 1 ? a + 1 : nullptr, c > 1 ? c - 1 : 0, false);
     };
 
     auto meth_read = [](LState *L, const LValue *a, size_t c) -> MultiValue {
         FileUd *f = static_cast<FileUd *>(static_cast<LUserdata *>(a[0].as_pointer())->data());
-        return file_read_args(L, f, a, c, true);
+        return file_read_args(L, f, a, c, false, "read", false);
     };
 
     auto meth_seek = [](LState *L, const LValue *a, size_t c) -> MultiValue {
@@ -627,7 +828,10 @@ static LValue get_std_file(LState *L, FILE *fp) {
         if (c >= 3 && a[2].type != Nil)
             offset = check_integer(L, a[2]);
         outbuf_flush_fp(f->fp);
-        std::fseek(f->fp, offset, origin);
+        if (std::fseek(f->fp, offset, origin) != 0) {
+            int en = errno;
+            return MultiValue({ LValue(), LValue(L->intern_string(std::strerror(en))), clx::integer(en) });
+        }
         return MultiValue(integer(static_cast<int64_t>(std::ftell(f->fp))));
     };
 
@@ -639,13 +843,16 @@ static LValue get_std_file(LState *L, FILE *fp) {
 
     mt->bind_all(L,
         { { "close", meth_close }, { "flush", meth_flush }, { "lines", meth_lines }, { "read", meth_read },
-            { "seek", meth_seek }, { "write", meth_write } });
+            { "seek", meth_seek }, { "write", meth_write }, { "__close", meth_close_guard },
+            { "__tostring", file_tostring } });
+    mt->settable(LValue(L->intern_string("__name")), LValue::istr("FILE*", 5));
     mt->settable(LValue(L->intern_string("__index")), LValue(Table, mt));
     ud->metatable = mt;
     meta_ud_list_add(L, ud);
-    L->unroot_value(LValue(UserData, ud));
-    L->unroot_value(file_mt);
-    return LValue(UserData, ud);
+    //------------------ the cached singleton keeps its own root: unrooting it would leave the slot
+    //------------------ above pointing at a collected userdata
+    *slot = LValue(UserData, ud);
+    return *slot;
 }
 
 static LValue default_input;
@@ -659,6 +866,20 @@ static void set_default(LState *L, LValue &slot, const LValue &v) {
     slot = v;
 }
 
+//------------------ open_mode_valid: stock's l_checkmode — [rwa], an optional '+', then only 'b'
+static bool open_mode_valid(const char *mode) {
+    if (*mode != 'r' && *mode != 'w' && *mode != 'a')
+        return false;
+    ++mode;
+    if (*mode == '+')
+        ++mode;
+    for (; *mode; ++mode) {
+        if (*mode != 'b')
+            return false;
+    }
+    return true;
+}
+
 static MultiValue io_open(LState *L, const LValue *args, size_t count) {
     if (count == 0)
         throw_runtime_error(bad_arg_msg(L, 1, "io.open", "string expected, got no value"));
@@ -666,6 +887,8 @@ static MultiValue io_open(LState *L, const LValue *args, size_t count) {
     const char *mode = "r";
     if (count >= 2 && args[1].type != Nil)
         mode = check_string(L, args[1]);
+    if (!open_mode_valid(mode))
+        throw_runtime_error(bad_arg_msg(L, 2, "io.open", "invalid mode"));
     FILE *fp = std::fopen(filename, mode);
     if (!fp)
         return fail_nil(L, filename);
@@ -677,6 +900,8 @@ static MultiValue io_close(LState *L, const LValue *args, size_t count) {
         if (default_output.type == UserData) {
             LValue a = default_output;
             FileUd *f = as_file(L, a);
+            if (f->is_std)
+                return cannot_close_std(L);
             if (f->fp) {
                 outbuf_drop_fp(f->fp);
                 fclose(f->fp);
@@ -686,6 +911,8 @@ static MultiValue io_close(LState *L, const LValue *args, size_t count) {
         return MultiValue(boolean(true));
     }
     FileUd *f = as_file(L, args[0]);
+    if (f->is_std)
+        return cannot_close_std(L);
     if (f->fp) {
         outbuf_drop_fp(f->fp);
         fclose(f->fp);
@@ -717,57 +944,31 @@ static MultiValue io_input(LState *L, const LValue *args, size_t count) {
         set_default(L, default_input, args[0]);
     } else if (args[0].type == String) {
         const char *filename = args[0].as_string();
-        FILE *fp = std::fopen(filename, "r");
-        if (!fp)
-            return fail_nil(L, filename);
+        FILE *fp = open_or_throw(filename, "r");
         set_default(L, default_input, make_file(L, fp, true));
     }
     return MultiValue(default_input);
 }
 
 static MultiValue io_lines(LState *L, const LValue *args, size_t count) {
-    if (count == 0) {
-        if (default_input.type != UserData)
-            set_default(L, default_input, get_std_file(L, stdin));
-        LValue file = default_input;
-        FileUd *f = as_file(L, file);
-        return MultiValue(make_lines_iter(L, f));
+    size_t nfmts = (count > 1) ? count - 1 : 0;
+    if (nfmts > 250)
+        throw_runtime_error(bad_arg_msg(L, 252, "lines", "too many arguments"));
+
+    if (count > 0 && args[0].type != Nil) {
+        const char *filename = check_string(L, args[0]);
+        //------------------ the filename form returns four values: the iterator, two placeholders and the
+        //------------------ file handle, which the generic for treats as the to-be-closed variable
+        FILE *fp = open_or_throw(filename, "r");
+        LValue file_val = make_file(L, fp, false);
+        RootRange rr(L, &file_val, 1);
+        LValue iter = make_lines_iter(L, file_val, nfmts ? args + 1 : nullptr, nfmts, true);
+        return MultiValue({ iter, nil(), nil(), file_val });
     }
 
-    const char *filename = check_string(L, args[0]);
-    FILE *fp = std::fopen(filename, "r");
-    if (!fp)
-        return fail_nil(L, filename);
-
-    LUserdata *u = static_cast<LUserdata *>(newuserdata(L, sizeof(LinesFileUd)).as_pointer());
-    LinesFileUd *ud = static_cast<LinesFileUd *>(u->data());
-    ud->fp = fp;
-    ud->first = true;
-
-    auto iter = [](LState *L, const LValue *a, size_t c) -> MultiValue {
-        if (c < 1)
-            return MultiValue();
-        LUserdata *u = static_cast<LUserdata *>(a[0].as_pointer());
-        LinesFileUd *ud = static_cast<LinesFileUd *>(u->data());
-        if (!ud->fp)
-            return MultiValue();
-        if (ud->first)
-            ud->first = false;
-        if (!std::fgets(ud->buf, sizeof(ud->buf), ud->fp)) {
-            fclose(ud->fp);
-            ud->fp = nullptr;
-            return MultiValue();
-        }
-        size_t n = std::strlen(ud->buf);
-        if (n > 0 && ud->buf[n - 1] == '\n')
-            n--;
-        return MultiValue(LValue(L->intern_string(ud->buf, n)));
-    };
-
-    L->root_value(LValue(UserData, u));
-    MultiValue ret({ L->create_closure(CFunctionType(iter)), LValue(u), nil() });
-    L->unroot_value(LValue(UserData, u));
-    return ret;
+    if (default_input.type != UserData)
+        set_default(L, default_input, get_std_file(L, stdin));
+    return MultiValue(make_lines_iter(L, default_input, nfmts ? args + 1 : nullptr, nfmts, false));
 }
 
 static MultiValue io_output(LState *L, const LValue *args, size_t count) {
@@ -780,12 +981,24 @@ static MultiValue io_output(LState *L, const LValue *args, size_t count) {
         set_default(L, default_output, args[0]);
     } else if (args[0].type == String) {
         const char *filename = args[0].as_string();
-        FILE *fp = std::fopen(filename, "w");
-        if (!fp)
-            return fail_nil(L, filename);
+        FILE *fp = open_or_throw(filename, "w");
         set_default(L, default_output, make_file(L, fp, true));
     }
     return MultiValue(default_output);
+}
+
+//------------------ default_file: the default input/output slot as a live FileUd. stock names the
+//------------------ slot rather than the handle when it has been closed ("default input file is closed")
+static FileUd *default_file(LState *L, const LValue &slot, const char *which) {
+    if (slot.type == UserData) {
+        LUserdata *ud = static_cast<LUserdata *>(slot.as_pointer());
+        if (ud->size >= sizeof(FileUd)) {
+            FileUd *f = static_cast<FileUd *>(ud->data());
+            if (f->fp || f->is_pipe)
+                return f;
+        }
+    }
+    throw_runtime_error(std::string("default ") + which + " file is closed");
 }
 
 static MultiValue io_read(LState *L, const LValue *args, size_t count) {
@@ -793,11 +1006,15 @@ static MultiValue io_read(LState *L, const LValue *args, size_t count) {
         set_default(L, default_input, get_std_file(L, stdin));
 
     LValue file = default_input;
-    FileUd *f = as_file(L, file);
+    FileUd *f = default_file(L, file, "input");
     outbuf_flush_fp(f->fp);
 
     if (count == 0) {
-        return MultiValue(read_line(L, f->fp));
+        MultiValue result(read_line(L, f->fp));
+        MultiValue failed;
+        if (take_stream_error(L, f, failed))
+            return failed;
+        return result;
     }
 
     std::vector<LValue> results;
@@ -806,7 +1023,12 @@ static MultiValue io_read(LState *L, const LValue *args, size_t count) {
         if (args[i].type == Int64 || args[i].type == Double) {
             int64_t n = check_integer(L, args[i]);
             if (n <= 0) {
-                results.push_back(LValue(L->intern_string("", 0)));
+                int probe = std::fgetc(f->fp);
+                if (probe != EOF)
+                    std::ungetc(probe, f->fp);
+                results.push_back(probe != EOF ? LValue(L->intern_string("", 0)) : LValue());
+                if (results.back().type == Nil)
+                    break;
                 continue;
             }
             size_t sz = static_cast<size_t>(n);
@@ -817,7 +1039,10 @@ static MultiValue io_read(LState *L, const LValue *args, size_t count) {
             mem[16 + r] = '\0';
             uint64_t h = r <= 8 ? swar_hash_8(mem + 16, r) : wyhash_str(mem + 16, r);
             clx_memcpy(mem, &h, 8);
-            results.push_back(LValue(L->string_pool.intern_preallocated(mem + 16, h, r)));
+            if (r == 0)
+                results.push_back(LValue());
+            else
+                results.push_back(LValue(L->string_pool.intern_preallocated(mem + 16, h, r)));
         } else if (args[i].type == String) {
             int64_t count_opt = 0;
             ReadFmt rf = match_read_fmt(args[i].as_string(), &count_opt);
@@ -853,23 +1078,30 @@ static MultiValue io_read(LState *L, const LValue *args, size_t count) {
                 mem[16 + r] = '\0';
                 uint64_t h = r <= 8 ? swar_hash_8(mem + 16, r) : wyhash_str(mem + 16, r);
                 clx_memcpy(mem, &h, 8);
-                results.push_back(LValue(L->string_pool.intern_preallocated(mem + 16, h, r)));
+                if (r == 0)
+                    results.push_back(LValue());
+                else
+                    results.push_back(LValue(L->string_pool.intern_preallocated(mem + 16, h, r)));
                 break;
             }
             case ReadFmt::Invalid:
             default:
-                break;
+                throw_runtime_error(bad_arg_msg(L, (int)(i + 1), "io.read", "invalid format"));
             }
         }
+        if (!results.empty() && results.back().type == Nil)
+            break;
     }
+    MultiValue failed;
+    if (take_stream_error(L, f, failed))
+        return failed;
     return MultiValue(results.data(), results.size(), L);
 }
 
 static MultiValue io_write(LState *L, const LValue *args, size_t count) {
     if (default_output.type != UserData)
         set_default(L, default_output, get_std_file(L, stdout));
-    LUserdata *u = static_cast<LUserdata *>(default_output.as_pointer());
-    FileUd *f = static_cast<FileUd *>(u->data());
+    FileUd *f = default_file(L, default_output, "output");
     for (size_t i = 0; i < count; ++i) {
         if (args[i].type == String) {
             outbuf_write(f->fp, args[i].as_string(), args[i].string_len());
@@ -884,7 +1116,7 @@ static MultiValue io_write(LState *L, const LValue *args, size_t count) {
                 outbuf_write(f->fp, buf, static_cast<size_t>(n));
         }
     }
-    return MultiValue(boolean(true));
+    return MultiValue(default_output);
 }
 
 //------------------ io_popen — open a process pipe for read or write
@@ -895,9 +1127,8 @@ static MultiValue io_popen(LState *L, const LValue *args, size_t count) {
     const char *mode = "r";
     if (count >= 2 && args[1].type != Nil)
         mode = check_string(L, args[1]);
-    if (std::strcmp(mode, "r") != 0 && std::strcmp(mode, "w") != 0) {
-        throw_runtime_error(bad_arg_msg(L, 2, "io.popen", "mode must be 'r' or 'w'"));
-    }
+    if (std::strcmp(mode, "r") != 0 && std::strcmp(mode, "w") != 0)
+        throw_runtime_error(bad_arg_msg(L, 2, "io.popen", "invalid mode"));
     FILE *fp = popen(command, mode);
     if (!fp) {
         char buf[256];
