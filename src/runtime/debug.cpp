@@ -207,13 +207,19 @@ static MultiValue debug_upvalueid(LState *L, const LValue *args, size_t count) {
     return MultiValue(LValue(L->intern_string(buf)));
 }
 
+//------------------ stub_error: raises a "not available in compiled code" message behind the call site's
+//------------------ file:line prefix, so an uncaught failure points at the statement that made the call
+[[noreturn]] static void stub_error(LState *L, const char *msg) {
+    error(L, (file_line_prefix(L) + msg).c_str());
+}
+
 //------------------ debug_upvaluejoin: refused for compiled code. A compiled closure reads its captures
 //------------------ through the C++ lambda it was emitted as, so replacing the recorded cell would change
 //------------------ what debug.getupvalue reports without changing what the function reads.
 static MultiValue debug_upvaluejoin(LState *L, const LValue *args, size_t count) {
     (void)args;
     (void)count;
-    error(L, "clx: debug.upvaluejoin is not available in compiled code");
+    stub_error(L, "debug.upvaluejoin is not available in compiled code");
     return MultiValue();
 }
 
@@ -249,7 +255,7 @@ static MultiValue debug_getinfo(LState *L, const LValue *args, size_t count) {
         if (clx_vm_debug_getinfo_hook(L, args[0], opts.c_str(), info))
             return MultiValue(info);
     }
-    error(L, "clx: debug.getinfo/getlocal/setlocal/sethook/gethook are not available in compiled code");
+    stub_error(L, "debug.getinfo/getlocal/setlocal/sethook/gethook are not available in compiled code");
     return MultiValue();
 }
 
@@ -257,7 +263,7 @@ static MultiValue debug_getinfo(LState *L, const LValue *args, size_t count) {
 static MultiValue unsupported(LState *L, const LValue *args, size_t count) {
     (void)args;
     (void)count;
-    error(L, "clx: debug.getinfo/getlocal/setlocal/sethook/gethook are not available in compiled code");
+    stub_error(L, "debug.getinfo/getlocal/setlocal/sethook/gethook are not available in compiled code");
     return MultiValue();
 }
 
