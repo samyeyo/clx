@@ -26,7 +26,9 @@ clx::MultiValue lua_error(clx::LState *L, const clx::LValue *args, size_t count)
         level = static_cast<int>(clx::to_number(args[1], 1.0));
     }
 
-    if (err_val.type == clx::String && level > 0) {
+    //------------------ stock adds a position only for level 1 (the frame that called 'error'); deeper
+    //------------------ levels point at C frames, which carry no line information
+    if (err_val.type == clx::String && level == 1) {
         std::string prefix = clx::file_line_prefix(L);
         std::string err_str(err_val.as_string(), err_val.string_len());
         std::string full_msg = prefix + err_str;
@@ -41,6 +43,47 @@ clx::MultiValue lua_pcall(clx::LState *L, const clx::LValue *args, size_t count)
         throw_runtime_error(bad_arg_msg(L, 1, "pcall", "value expected"));
 
     return clx::pcall_function(L, args[0], args + 1, count - 1);
+}
+
+//------------------ run_message_handler: stock feeds an error raised *by* the handler back into the same
+//------------------ handler, so a chain that keeps erroring ends at LUAI_MAXCCALLS with 'C stack overflow'
+static constexpr int kMaxMessageHandlerDepth = 200;
+
+static bool run_message_handler(
+    clx::LState *L, clx::LValue handler, clx::LValue err_obj, clx::MultiValue &out, int depth = 0) {
+    //------------------ stock re-enters the handler until its C-call limit, then reports LUA_ERRERR;
+    //------------------ whether the limit's message reads 'C stack overflow' or 'error in error handling'
+    //------------------ depends on where in stock's C stack the limit lands, so clx reports the
+    //------------------ documented LUA_ERRERR message
+    if (depth >= kMaxMessageHandlerDepth) {
+        out = clx::MultiValue(clx::string(L, "error in error handling"));
+        return false;
+    }
+    try {
+        out = clx::call_function_rooted(
+            L, handler, &err_obj, 1, L->current_site ? L->current_site : clx::default_call_site());
+        return true;
+    } catch (const clx::LRuntimeException &e) {
+        clx::LValue next = e.error_obj;
+        if (L->has_close_err) {
+            next = L->close_err;
+            L->has_close_err = false;
+        }
+        //------------------ stock re-enters the handler only while it can still call; a handler that fails
+        //------------------ with its own stack overflow is already at the C limit, so the nested error is
+        //------------------ reported as 'error in error handling' (LUA_ERRERR) instead of recursing again
+        if (next.type == clx::ValueType::String) {
+            std::string msg(next.as_string(), next.string_len());
+            if (msg.find("stack overflow") != std::string::npos) {
+                out = clx::MultiValue(clx::string(L, "error in error handling"));
+                return false;
+            }
+        }
+        return run_message_handler(L, handler, next, out, depth + 1);
+    } catch (...) {
+        out = clx::MultiValue(clx::string(L, "error in error handling"));
+        return false;
+    }
 }
 
 //------------------ clx_xpcall: protected call with error handler (global xpcall function)
@@ -58,32 +101,32 @@ clx::MultiValue lua_xpcall(clx::LState *L, const clx::LValue *args, size_t count
     const clx::LValue *func_args = (arg_count > 0) ? (args + 2) : nullptr;
 
     try {
-        clx::MultiValue ret
-            = clx::call_function_rooted(
-                L, func, func_args, arg_count, L->current_site ? L->current_site : clx::default_call_site());
+        clx::MultiValue ret = clx::call_function_rooted(
+            L, func, func_args, arg_count, L->current_site ? L->current_site : clx::default_call_site());
 
         if (ret.count == 0)
             return clx::MultiValue(true);
         if (ret.count == 1)
             return clx::MultiValue(true, ret[0]);
 
-        clx::MultiValue out;
-        out.alloc_L = L;
-        out.push_back(true);
+        //------------------ single allocation (see pcall_function): push_back is quadratic in the result count
+        std::vector<clx::LValue> vals;
+        vals.reserve(ret.count + 1);
+        vals.push_back(clx::LValue(true));
         for (size_t i = 0; i < ret.count; ++i)
-            out.push_back(ret[i]);
-        return out;
+            vals.push_back(ret[i]);
+        return clx::MultiValue(vals, L);
 
     } catch (const clx::LRuntimeException &e) {
         clx::LValue err_obj = e.error_obj;
+        if (L->has_close_err) {
+            err_obj = L->close_err;
+            L->has_close_err = false;
+        }
         clx::MultiValue msgh_ret;
 
-        try {
-            msgh_ret = clx::call_function_rooted(
-                L, msgh, &err_obj, 1, L->current_site ? L->current_site : clx::default_call_site());
-        } catch (...) {
-            return clx::MultiValue(false, clx::string(L, "error in error handling"));
-        }
+        if (!run_message_handler(L, msgh, err_obj, msgh_ret))
+            return clx::MultiValue(false, msgh_ret.count > 0 ? msgh_ret[0] : clx::LValue());
 
         return clx::MultiValue(false, msgh_ret.count > 0 ? msgh_ret[0] : clx::LValue());
 
@@ -91,12 +134,8 @@ clx::MultiValue lua_xpcall(clx::LState *L, const clx::LValue *args, size_t count
         clx::LValue err_obj = clx::string(L, e.what());
         clx::MultiValue msgh_ret;
 
-        try {
-            msgh_ret = clx::call_function_rooted(
-                L, msgh, &err_obj, 1, L->current_site ? L->current_site : clx::default_call_site());
-        } catch (...) {
-            return clx::MultiValue(false, clx::string(L, "error in error handling"));
-        }
+        if (!run_message_handler(L, msgh, err_obj, msgh_ret))
+            return clx::MultiValue(false, msgh_ret.count > 0 ? msgh_ret[0] : clx::LValue());
 
         return clx::MultiValue(false, msgh_ret.count > 0 ? msgh_ret[0] : clx::LValue());
     }
@@ -143,15 +182,25 @@ static MultiValue print(LState *L, const LValue *args, size_t count) {
 
 //------------------ clx_collectgarbage: controls the garbage collector
 MultiValue collectgarbage(LState *L, const LValue *args, size_t arg_count) {
-    if (arg_count == 0 || !clx::is_string(args[0]))
-        return MultiValue(clx::number(0.0));
-    std::string_view opt(args[0].as_string(), args[0].string_len());
+    //------------------ no option means "collect" (stock default), not a no-op
+    std::string_view opt = "collect";
+    if (arg_count > 0) {
+        if (!clx::is_string(args[0]))
+            clx::error(L,
+                bad_arg_msg(L, 1, "collectgarbage", std::string("string expected, got ") + stock_type_name(args[0]))
+                    .c_str());
+        opt = std::string_view(args[0].as_string(), args[0].string_len());
+    }
     if (opt == "collect") {
+        //------------------ stock answers nil for a re-entrant collection, which is what a __gc that calls
+        //------------------ collectgarbage() gets; it never runs a second collection from inside one
+        if (L->gc_minor_active || L->gc_draining)
+            return MultiValue(clx::LValue());
         bool had_recent = !L->gc_recent.empty();
         L->collect_garbage();
         if (had_recent)
             L->collect_garbage();
-        return MultiValue(clx::number(0.0));
+        return MultiValue(clx::integer(0));
     }
     if (opt == "count") {
         double mem_kb = static_cast<double>(L->get_memory_usage()) / 1024.0;
@@ -170,21 +219,13 @@ MultiValue collectgarbage(LState *L, const LValue *args, size_t arg_count) {
     }
     if (opt == "step") {
         int64_t step_size = (arg_count >= 2) ? clx::check_integer(L, args[1]) : 0;
-        if (step_size > 0) {
-            L->allocated_bytes += static_cast<size_t>(step_size);
-            if (L->allocated_bytes >= L->gc_bytes_threshold)
-                L->collect_garbage();
-        }
-        bool finished = L->gc_step();
+        bool finished = L->gc_step(step_size);
         return MultiValue(clx::boolean(finished));
     }
-    if (opt == "incremental") {
-        L->gc_mode = LState::GCMode::Incremental;
-        return MultiValue(clx::string(L, "incremental"));
-    }
-    if (opt == "generational") {
-        L->gc_mode = LState::GCMode::Generational;
-        return MultiValue(clx::string(L, "generational"));
+    if (opt == "incremental" || opt == "generational") {
+        const char *previous = (L->gc_mode == LState::GCMode::Generational) ? "generational" : "incremental";
+        L->gc_mode = (opt == "incremental") ? LState::GCMode::Incremental : LState::GCMode::Generational;
+        return MultiValue(clx::string(L, previous));
     }
     if (opt == "mode") {
         return MultiValue(clx::string(L, L->gc_mode == LState::GCMode::Generational ? "generational" : "incremental"));
@@ -249,10 +290,22 @@ static MultiValue type(LState *L, const LValue *args, size_t count) {
 
 //------------------ clx_assert: asserts a condition (global assert function)
 static MultiValue assert(LState *L, const LValue *args, size_t count) {
-    if (count == 0 || !clx::to_boolean(args[0])) {
-        if (count > 1)
-            throw LRuntimeException(args[1]);
-        clx::error(L, "assertion failed!");
+    //------------------ stock checks the argument itself first, so assert() with no argument is a bad argument
+    if (count == 0)
+        throw_runtime_error(bad_arg_msg(L, 1, "assert", "value expected"));
+
+    if (!clx::to_boolean(args[0])) {
+        //------------------ stock assert routes through error(), which prefixes a string message with
+        //------------------ the caller's position (a non-string message is raised untouched)
+        if (count > 1) {
+            const LValue &msg = args[1];
+            if (msg.type != ValueType::String)
+                throw LRuntimeException(msg);
+            std::string full = clx::file_line_prefix(L) + std::string(msg.as_string(), msg.string_len());
+            throw LRuntimeException(clx::string(L, full.data(), full.size()));
+        }
+        std::string full = clx::file_line_prefix(L) + "assertion failed!";
+        throw LRuntimeException(clx::string(L, full.data(), full.size()));
     }
     return MultiValue(args, count, L);
 }
@@ -289,27 +342,46 @@ static MultiValue tostring(LState *L, const LValue *args, size_t count) {
 //------------------ clx_tonumber: converts value to number (global tonumber function)
 static MultiValue tonumber(LState *L, const LValue *args, size_t count) {
     if (count == 0)
-        return MultiValue();
+        throw_runtime_error(bad_arg_msg(L, 1, "tonumber", "value expected"));
     const LValue &v = args[0];
     if (count >= 2 && args[1].type != Nil) {
         int64_t base = clx::check_integer(L, args[1]);
         if (base < 2 || base > 36)
             clx::error(L, bad_arg_msg(L, 2, "tonumber", "base out of range").c_str());
+        //------------------ stock b_str2int: walk the length-delimited numeral, rejecting any byte
+        //------------------ that is not a digit of the base (so embedded NULs never truncate)
         const char *s = clx::check_string(L, v);
-        char *end;
-        errno = 0;
-        long long n = std::strtoll(s, &end, static_cast<int>(base));
-        if (end == s || errno == ERANGE)
-            return MultiValue();
-        while (std::isspace(static_cast<unsigned char>(*end)))
-            end++;
-        if (*end != '\0')
-            return MultiValue();
-        return MultiValue(clx::integer(static_cast<int64_t>(n)));
+        const size_t len = v.string_len();
+        size_t i = 0;
+        while (i < len && std::isspace(static_cast<unsigned char>(s[i])))
+            i++;
+        bool neg = false;
+        if (i < len && (s[i] == '-' || s[i] == '+')) {
+            neg = (s[i] == '-');
+            i++;
+        }
+        if (i >= len || !std::isalnum(static_cast<unsigned char>(s[i])))
+            return MultiValue(LValue());
+        uint64_t n = 0;
+        for (; i < len && std::isalnum(static_cast<unsigned char>(s[i])); i++) {
+            const unsigned char c = static_cast<unsigned char>(s[i]);
+            const int digit = std::isdigit(c) ? (c - '0') : (std::tolower(c) - 'a' + 10);
+            if (digit < 0 || digit >= static_cast<int>(base))
+                return MultiValue(LValue());
+            n = n * static_cast<uint64_t>(base) + static_cast<uint64_t>(digit);
+        }
+        while (i < len && std::isspace(static_cast<unsigned char>(s[i])))
+            i++;
+        if (i != len)
+            return MultiValue(LValue());
+        return MultiValue(clx::integer(static_cast<int64_t>(neg ? 0ull - n : n)));
     }
     if (v.type == Double || v.type == Int64)
         return MultiValue(v);
     if (clx::is_string(v)) {
+        //------------------ stock rejects numerals carrying an embedded zero (luaO_str2num sees a prefix)
+        if (std::strlen(v.as_string()) != v.string_len())
+            return MultiValue(LValue());
         int64_t iv;
         if (clx::to_integer_coerced(v, iv))
             return MultiValue(clx::integer(iv));
@@ -317,7 +389,7 @@ static MultiValue tonumber(LState *L, const LValue *args, size_t count) {
         if (v.to_number(d))
             return MultiValue(clx::number(d));
     }
-    return MultiValue();
+    return MultiValue(LValue());
 }
 
 //------------------ clx_rawequal: compares two values without metamethods
@@ -478,15 +550,16 @@ static MultiValue ipairs_iter(LState *L, const LValue *args, size_t count) {
 
     LTable *t = static_cast<LTable *>(args[0].as_pointer());
     int64_t idx = args[1].type == Int64 ? args[1].as_integer() : static_cast<int64_t>(args[1].as_number());
-    idx++;
+    //------------------ stock wraps the index on overflow (i.e. maxinteger -> mininteger)
+    idx = static_cast<int64_t>(static_cast<uint64_t>(idx) + 1u);
 
+    //------------------ stock uses lua_geti, so an __index metamethod supplies missing keys:
+    //------------------ the raw LTable::gettable would stop the traversal at the first hole
     LValue val;
-    if (idx >= 1 && static_cast<size_t>(idx) <= t->array_size) {
+    if (idx >= 1 && static_cast<size_t>(idx) <= t->array_size && t->array_types[idx - 1] != clx::ValueType::Nil) {
         val = LValue(t->array[idx - 1], t->array_types[idx - 1]);
     } else {
-        LValue hash_val = t->gettable(LValue(static_cast<double>(idx)));
-        if (hash_val.type != Nil)
-            val = hash_val;
+        val = clx::table_get(L, LValue(clx::ValueType::Table, t), LValue(idx));
     }
 
     if (val.type == Nil)
@@ -539,9 +612,9 @@ void luastd_base(LState *L) {
 //------------------ Per-function registrars for filtered std startup (see luastd_base_filtered expose
 //------------------ via the driver-emitted open sequence). Each references exactly one base function, so
 //------------------ the linker strips every registrar — and its function — the program never uses.
-#define CLX_BASE_REG(name, fn)                                   \
-    void luastd_base_##name(LState *L) {                         \
-        clx::set_function(L, LValue(Table, L->_G), #name, fn);   \
+#define CLX_BASE_REG(name, fn)                                                                                         \
+    void luastd_base_##name(LState *L) {                                                                               \
+        clx::set_function(L, LValue(Table, L->_G), #name, fn);                                                         \
     }
 CLX_BASE_REG(print, print)
 CLX_BASE_REG(require, require)
