@@ -117,7 +117,7 @@ definition (every declared name resolves in the bridge). The list below is by ar
 | Strings and buffers: `luaL_buffinit`, `luaL_prepbuffsize`, `luaL_buffinitsize`, `luaL_addstring`, `luaL_addlstring`, `luaL_addvalue`, `luaL_addgsub`, `luaL_pushresult`, `luaL_pushresultsize`, `luaL_gsub`, `lua_numbertocstring`, `lua_stringtonumber`, `lua_pushvfstring` | ✅ |
 | GC: `lua_gc` with `LUA_GCSTOP`, `LUA_GCRESTART`, `LUA_GCCOLLECT`, `LUA_GCCOUNT{,B}`, `LUA_GCSTEP`, `LUA_GCISRUNNING`, `LUA_GCGEN`, `LUA_GCINC`, `LUA_GCPARAM` | ✅ |
 | Warnings: `lua_setwarnf`, `lua_warning` | ✅ (only reachable from C code — see [Differences](#what-differs-from-stock-lua)) |
-| Standard library openers: `luaopen_base`, `luaopen_package`, `luaopen_coroutine`, `luaopen_debug`, `luaopen_io`, `luaopen_math`, `luaopen_os`, `luaopen_string`, `luaopen_table`, `luaopen_utf8` | ✅ — they push the table clx already loaded (or an empty new one when clx never loaded that lib, e.g. `debug`) |
+| Standard library openers: `luaopen_base`, `luaopen_package`, `luaopen_coroutine`, `luaopen_debug`, `luaopen_io`, `luaopen_math`, `luaopen_os`, `luaopen_string`, `luaopen_table`, `luaopen_utf8` | ✅ — they push the table clx already loaded (or an empty new one when clx never loaded that lib) |
 | Upvalues: `lua_upvalueindex`, `lua_getupvalue`, `lua_setupvalue`, `lua_upvalueid`, `lua_upvaluejoin` | ✅ |
 
 ## Not implemented
@@ -165,9 +165,12 @@ If you need to run Lua source at runtime, build with `--dynamic` and use
 | `lua_getstack` | returns `1` **only** for `level == 0` on a running thread, and zeroes `lua_Debug`; every other level returns `0`. Since `lua_getinfo` then returns `0`, there is no usable frame inspection |
 | `luaL_traceback` | pushes only `msg` (if given), a newline and the literal `stack traceback:` — no frames |
 
-This matches the compiled-code side of clx: the `debug` library is not exposed
-as a compiled-code global either (see
-[Lua 5.5 compatibility](./compatibility.md)).
+These hooks stay unavailable because a compiled closure has no frame or line
+tables. This matches the compiled-code side of clx: `debug.getinfo`,
+`debug.getlocal`/`setlocal` and `debug.sethook`/`gethook` raise there too, while
+the `debug` library's metatable, uservalue, `traceback` and upvalue entries do
+work (upvalue names are empty and `upvaluejoin` raises; `getregistry` is empty —
+see [Lua 5.5 compatibility](./compatibility.md#the-debug-library)).
 
 ### To-be-closed variables
 
@@ -180,7 +183,7 @@ as a compiled-code global either (see
 
 | Function | Behaviour |
 |---|---|
-| `lua_checkstack` | always returns `1`; there is no fixed stack limit, so runaway recursion can exhaust memory instead of raising `"stack overflow"` |
+| `lua_checkstack` | always returns `1`; depth is bounded by the C stack rather than a slot budget, and clx raises stock's `"stack overflow"` before the C stack is exhausted |
 | `luaL_openselectedlibs` | no-op, which makes the `luaL_openlibs(L)` macro a no-op. Libraries are opened by the runtime at startup; `--minimal` opens only base + package, and the C API cannot bring the rest back |
 | `luaL_register` | not present — removed from Lua in 5.2 |
 

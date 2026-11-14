@@ -136,7 +136,7 @@ clx main.lua --minimal --modules string,io,math -o main
 ```
 
 Names matching a std module (`base`, `package`, `string`, `table`, `math`,
-`io`, `os`, `utf8`, `coroutine`) always resolve to the runtime's archives next
+`io`, `os`, `utf8`, `coroutine`, `debug`) always resolve to the runtime's archives next
 to `libclx.a`, never to a same-named user file. Using a std global without its
 module (e.g. `string.format` in a bare `--minimal` build) fails at runtime
 with an index-on-nil error — add the module and rebuild.
@@ -273,7 +273,7 @@ local proc = require("native_processor")  -- native C++ module
 
 | Option | What it does |
 |--------|--------------|
-| `--modules <list>` | Link std modules (string, table, math, io, os, utf8, coroutine) or prebuilt C++/C modules (comma-separated) |
+| `--modules <list>` | Link std modules (string, table, math, io, os, utf8, coroutine, debug) or prebuilt C++/C modules (comma-separated) |
 | `--fast` | Link `libclx.a` (optimize for speed); adds `libclx_capi.a` only if a C module is linked |
 | `--size` | Link `libclx_size.a` (default); adds `libclx_capi_size.a` only if a C module is linked |
 | `--minimal` | Link base + package only; add std modules back with `--modules` |

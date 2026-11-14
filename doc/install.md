@@ -12,7 +12,7 @@ cd clx
 ./build.sh install
 ```
 
-This installs the `clx` compiler to `/usr/local/bin`, the core runtime libraries (`libclx.a`, `libclx_size.a`, `libclx_capi.a`, `libclx_capi_size.a`, `libclx_lua.a`) to `/usr/local/lib`, the per-module std archives (`libclx_<module>.a` / `libclx_<module>_size.a` for base, package, string, table, math, io, os, utf8, coroutine) to `/usr/local/lib/clx/`, and the headers (`clx.h`, `clx_runtime.h`, `clx_simd.h`, plus the Lua 5.5 C API headers `lua.h`, `lauxlib.h`, `lualib.h`) to `/usr/local/include`. Run `./build.sh uninstall` to remove it.
+This installs the `clx` compiler to `/usr/local/bin`, the core runtime libraries (`libclx.a`, `libclx_size.a`, `libclx_capi.a`, `libclx_capi_size.a`, `libclx_lua.a`) to `/usr/local/lib`, the per-module std archives (`libclx_<module>.a` / `libclx_<module>_size.a` for base, package, string, table, math, io, os, utf8, coroutine, debug) to `/usr/local/lib/clx/`, and the headers (`clx.h`, `clx_runtime.h`, `clx_simd.h`, plus the Lua 5.5 C API headers `lua.h`, `lauxlib.h`, `lualib.h`) to `/usr/local/include`. Run `./build.sh uninstall` to remove it.
 
 ### Windows
 

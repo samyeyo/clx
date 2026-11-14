@@ -36,9 +36,9 @@ compiler underneath (see [Pass-through options](#pass-through-options)).
 | `--size` | Optimize for a small binary (default) |
 | `--fast` | Optimize for speed instead of size |
 | `--cpp` | Write out the generated C++ files without compiling (for debugging) |
-| `--minimal` | Link base + package only; add std modules with `--modules string,io,...` (drops string, table, math, io, os, utf8, coroutine) |
+| `--minimal` | Link base + package only; add std modules with `--modules string,io,...` (drops string, table, math, io, os, utf8, coroutine, debug) |
 | `--dynamic` | Enable `load`, `loadfile`, and `dofile` so code can run at runtime (requires the separate `libclx_lua.a` bridge archive, linked automatically) |
-| `--modules <list>` | Link std modules (string, table, math, io, os, utf8, coroutine) or prebuilt native modules (comma-separated). Archives are searched in the current directory, then clx's `lib/clx` install locations, then any `-L<dir>` flags you pass |
+| `--modules <list>` | Link std modules (string, table, math, io, os, utf8, coroutine, debug) or prebuilt native modules (comma-separated). Archives are searched in the current directory, then clx's `lib/clx` install locations, then any `-L<dir>` flags you pass |
 
 ### Help
 
