@@ -6,6 +6,7 @@
 // └─────────────────────────────────────────────┘
 
 #include "clx.h"
+#include <exception>
 
 namespace clx {
 
@@ -18,13 +19,16 @@ clx::MultiValue coroutine_create(clx::LState *L, const clx::LValue *args, size_t
 
 //------------------ coroutine_resume: resumes a suspended coroutine
 clx::MultiValue coroutine_resume(clx::LState *L, const clx::LValue *args, size_t count) {
-    if (count == 0 || !clx::is_thread(args[0])) {
-        clx::LValue r[2] = { clx::boolean(false), clx::string(L, "bad argument #1 to 'resume' (thread expected)") };
-        return clx::MultiValue(r, 2, L);
-    }
+    //------------------ stock raises on a non-thread argument (luaL_argexpected), it does not return a failure
+    if (count == 0 || !clx::is_thread(args[0]))
+        clx::error(L, bad_arg_msg(L, 1, "coroutine.resume", "thread expected").c_str());
     LThread *t = static_cast<LThread *>(args[0].as_pointer());
     if (t->status == THREAD_DEAD) {
         clx::LValue r[2] = { clx::boolean(false), clx::string(L, "cannot resume dead coroutine") };
+        return clx::MultiValue(r, 2, L);
+    }
+    if (t == L->running_thread || t->status == THREAD_RUNNING || t->status == THREAD_NORMAL) {
+        clx::LValue r[2] = { clx::boolean(false), clx::string(L, "cannot resume non-suspended coroutine") };
         return clx::MultiValue(r, 2, L);
     }
 
@@ -40,9 +44,8 @@ clx::MultiValue coroutine_yield(clx::LState *L, const clx::LValue *args, size_t 
 
 //------------------ coroutine_status: returns the status of a coroutine
 clx::MultiValue coroutine_status(clx::LState *L, const clx::LValue *args, size_t count) {
-    if (count == 0 || !clx::is_thread(args[0])) {
-        return clx::MultiValue(clx::string(L, ""));
-    }
+    if (count == 0 || !clx::is_thread(args[0]))
+        clx::error(L, bad_arg_msg(L, 1, "coroutine.status", "thread expected").c_str());
     LThread *t = static_cast<LThread *>(args[0].as_pointer());
     if (t->status == THREAD_SUSPENDED)
         return clx::MultiValue(clx::string(L, "suspended"));
@@ -58,7 +61,9 @@ static clx::MultiValue coroutine_isyieldable(LState *L, const LValue *args, size
         LThread *t = static_cast<LThread *>(args[0].as_pointer());
         return MultiValue(boolean(!t->is_main));
     }
-    return MultiValue(boolean(!L->running_thread->is_main));
+    //------------------ stock's isyieldable is false across a C call with no continuation (a sort
+    //------------------ comparator, a gsub replacement), not just outside a coroutine
+    return MultiValue(boolean(!L->running_thread->is_main && L->c_yield_blocked == 0));
 }
 
 //------------------ coroutine_wrap: wraps a coroutine in a callable table
@@ -77,6 +82,10 @@ static clx::MultiValue coroutine_wrap(clx::LState *L, const clx::LValue *args, s
             LThread *t = static_cast<LThread *>(thread.as_pointer());
             if (t->status == THREAD_DEAD)
                 clx::error(L2, "cannot resume dead coroutine");
+            //------------------ stock refuses to resume a coroutine that is running (possibly itself) or that
+            //------------------ resumed another one: the caller must not switch onto a live stack
+            if (t == L2->running_thread || t->status == THREAD_RUNNING || t->status == THREAD_NORMAL)
+                clx::error(L2, "cannot resume non-suspended coroutine");
             clx::MultiValue result = clx::resume(L2, thread, call_args, call_arg_count);
             if (result.count == 0)
                 clx::error(L2, "cannot resume dead coroutine");
@@ -85,11 +94,12 @@ static clx::MultiValue coroutine_wrap(clx::LState *L, const clx::LValue *args, s
             }
             if (result.count <= 1)
                 return MultiValue();
-            MultiValue out;
-            out.alloc_L = L2;
+            //------------------ single allocation: push_back grows the shared overflow heap quadratically
+            std::vector<LValue> vals;
+            vals.reserve(result.count - 1);
             for (size_t i = 1; i < result.count; ++i)
-                out.push_back(result[i]);
-            return out;
+                vals.push_back(result[i]);
+            return MultiValue(vals, L2);
         }, nullptr, std::vector<clx::LUpValue>{ cell }));
 }
 
@@ -100,11 +110,23 @@ clx::MultiValue coroutine_running(clx::LState *L, const clx::LValue *args, size_
     return clx::MultiValue(r, 2, L);
 }
 
-//------------------ coroutine_close: closes a coroutine
+//------------------ coroutine_close: closes a coroutine; with no argument it closes the running one
 clx::MultiValue coroutine_close(clx::LState *L, const clx::LValue *args, size_t count) {
-    if (count == 0 || !clx::is_thread(args[0])) {
-        clx::LValue r[2] = { clx::boolean(false), clx::string(L, "bad argument #1 to 'close' (thread expected)") };
-        return clx::MultiValue(r, 2, L);
+    clx::LThread *t = L->running_thread;
+    if (count > 0) {
+        if (!clx::is_thread(args[0]))
+            clx::error(L, bad_arg_msg(L, 1, "coroutine.close", "thread expected").c_str());
+        t = static_cast<clx::LThread *>(args[0].as_pointer());
+    }
+    if (t == L->running_thread) {
+        if (t->is_main)
+            clx::error(L, "cannot close main thread");
+        //------------------ closing the running coroutine never returns; while another error is already unwinding a throw would terminate, so the flag alone supersedes it
+        t->self_close = true;
+        t->closing = true;
+        if (std::uncaught_exceptions() == 0)
+            throw clx::CoroutineClose();
+        return clx::MultiValue();
     }
     return clx::close_thread(L, args[0]);
 }
