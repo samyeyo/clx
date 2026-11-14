@@ -107,6 +107,7 @@ clx/
 │       ├── io.cpp                # I/O module
 │       ├── os.cpp                # OS module
 │       ├── utf8.cpp              # UTF-8 module
+│       ├── debug.cpp             # Debug module (metatables, uservalues, partial traceback)
 │       ├── package.cpp           # AOT package/module system
 │       ├── fulllibs.cpp          # openlibs() — opens the std modules
 │       ├── openlibs.cpp          # AOT standard modules loader helpers
@@ -215,20 +216,21 @@ The runtime library implements Lua semantics:
  - `io.cpp` - I/O library
  - `os.cpp` - OS library (clock, time, date, difftime, execute, tmpname, getenv)
  - `utf8.cpp` - UTF-8 library
+ - `debug.cpp` - Debug library (metatables for every type, uservalues and a frame-less `traceback`; the frame-level entries raise on compiled closures and are answered by the VM hooks for loaded chunks, while the upvalue entries walk internal capture cells and `getregistry` returns an empty table)
  - `package.cpp` - AOT package/module system
  - `luaapi.cpp` - Lua C API compatibility shim (built as `libclx_capi*.a`)
 
 The optional dynamic path is kept separate from these AOT modules:
 
 - `runtime/vm/lua/` - Vendored Lua VM sources and its standard libraries
-- `runtime/vm/dynamic_vm.cpp` - Creates and owns one embedded VM per clx `LState`, including its VM environment and proxy roots
-- `runtime/vm/load_builtin.cpp` - Registers `load`, `loadfile`, and `dofile` when the generated program was linked with `--dynamic`
+- `runtime/vm/dynamic_vm.cpp` - Creates and owns one embedded VM per clx `LState`, including its VM environment and proxy roots. The default environment is the VM's own globals table (`_ENV`/`_G` are itself) with a metatable whose `__index` falls through to clx's globals and whose `__newindex` mirrors writes, so both sides see one set of names
+- `runtime/vm/load_builtin.cpp` - Registers `load`, `loadfile`, and `dofile` when the generated program was linked with `--dynamic`, and installs the `clx_vm_debug_getinfo_hook` / `clx_vm_debug_upvalue_hook` bridges used by the `debug` module
 - `runtime/vm/vm_convert.cpp` - Converts primitive values and creates proxies for supported clx tables and userdata
 - `runtime/vm/vm_function_object.cpp` - Represents a VM function as a callable clx value
 - `runtime/vm/vm_native_bridge.cpp` - Exposes clx callables to the VM and dispatches calls back into the AOT runtime
 - `runtime/vm/vm_table_proxy.cpp` - Implements VM-side access to proxied clx tables
 
-`--dynamic` does not replace clx's AOT `string`, `math`, `table`, `io`, `os`, `coroutine`, or `package` modules. Dynamically loaded chunks use the embedded VM's own libraries and `require` implementation. The two package systems and coroutine systems remain runtime-local.
+`--dynamic` does not replace clx's AOT `string`, `math`, `table`, `io`, `os`, `coroutine`, or `package` modules. Dynamically loaded chunks use the embedded VM's own libraries. `require` is the one shared seam: a chunk's `require` shim (`clx_vm_require` in `vm_convert.cpp`) answers from the VM's own `package.loaded` when it can — so `require "debug"` reaches the VM's complete library — and otherwise calls clx's `require` against the shared `package.path` / `package.loaded`. Coroutine systems remain runtime-local.
 
 ## Data Flow
 
