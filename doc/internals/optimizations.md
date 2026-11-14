@@ -67,6 +67,23 @@ end
 
 The optimizer records `int_returning_funcs`, `int_typed_locals`, and `native_integers` in the analysis state (`analysis_state.h`), and `is_purely_integer_expr()` proves integer-ness for whole expressions so arithmetic stays in the integer domain end-to-end.
 
+### Only lower a local when every assignment yields a number
+
+A numeric fast path is only as sound as the coldest assignment to the variable. A
+local that is numeric at one site but can later receive `nil`, a string, or a table
+must stay boxed, otherwise the emitted `double` would have to fake a value:
+
+- a later assignment of `nil`, a string, or an arbitrary expression keeps the local
+  boxed (`l_x` as an `LValue`), so `x = nil` still reads back as `nil`;
+- a parameter whose type the program inspects with `math.type`, or that is handed to a
+  metamethod-capable operation, is not lowered to `double`;
+- a local table that a call can reach keeps its boxed representation;
+- vararg tables and `math.maxinteger` constants are tracked explicitly so a
+  `double` slot never rounds them.
+
+The analysis lives in `analysis_state.h` and the passes in `numbers.cpp` /
+`functions.cpp`; when the proof fails, codegen simply emits the general `clx::` path.
+
 ### Int64 arithmetic: wrap-on-overflow
 
 Integer arithmetic (`add`, `sub`, `mul`) with two `Int64` operands uses native C++ integer
@@ -474,6 +491,21 @@ numeric results and the codegen uses it at every call shape:
 - static lowering is write-guarded (`builtin_field_ok`): any assignment to the module
   field anywhere in the file disables it for that key.
 
+### Exact integer/float comparisons
+
+Comparisons whose integer operand may not be representable as a `double` do not go
+through a `double` conversion. `==`, `~=`, `<`, `<=`, `>` and `>=` follow stock's
+`LTintfloat`/`LEintfloat`/`luaV_equalobj` rules (`values.cpp`), so
+`math.maxinteger < math.maxinteger - 1` and `2^63 > math.maxinteger` answer like the
+reference implementation instead of comparing two rounded values.
+
+### Growable call arguments (`DynArgs`)
+
+A call whose argument list is only known at run time (a vararg expansion, or a
+multi-value expression in a non-final position) builds its argument vector in
+`clx::DynArgs` — a small inline buffer that grows on the heap when needed — instead
+of the fixed 16-slot buffer that used to cap such calls.
+
 ### In-place integer-indexed array fast paths
 
 Comparisons and stores on integer-indexed reads of hoisted tables stay on the existing
@@ -492,10 +524,42 @@ semantics do not change.
   (`zero_index_tables`) fuse the `t[k] = t[k] <op> const` sequence, skipping `__index`
   dispatch on a known miss.
 
+### Throw-free fast bodies (deferred stack overflow)
+
+A fast function is emitted as a Y-combinator lambda whose self-recursion is a direct
+`self(self, …)` call, so it bypasses the call wrappers' depth check and needs a guard
+of its own. A guard that *throws* makes the lambda unwind-capable, which blocks
+shrink-wrapping and forces a frame on every leaf call: measured 41–43 ms on `fib(34)`
+against 22.4 ms with no guard at all (1.9×).
+
+The body therefore contains no call that can throw. On overflow it records the site
+once and returns:
+
+```cpp
+if (clx::stack_probe() < _fr.owner->stack_low) [[unlikely]]
+{
+    if (!_fr.owner->stack_overflow_site)
+        _fr.owner->stack_overflow_site = _fr.owner->current_site;
+    return 0.0;
+}
+```
+
+The enclosing `_fast_<name>` wrapper — entered once per Lua-level fast call and never
+on self-recursion — clears any stale site, then calls `clx::raise_stack_overflow`,
+which restores `current_site` to the recorded frame and throws. That costs 1.05×
+(23.6 ms) and still reports stock's `stack overflow` at the offending line.
+
+The store must stay **inline** in the body's cold block: routing it through a
+`cold`/`noinline` helper, a `thread_local`, or a helper taking the `LState*`
+re-measured the same 1.9× penalty. Frames above the limit complete with `0.0` values,
+so their `<close>` handlers all run before the error is raised.
+
 ### Branch prediction hints
 
-Fast paths are annotated with `[[likely]]` attributes and hot runtime helpers are marked
-`CLX_INLINE_HOT` (`always_inline`/`__forceinline`):
+Fast paths are annotated with `[[likely]]` attributes and cold paths with
+`[[unlikely]]` (the stack guard above, the deferred-overflow check in the wrapper),
+while hot runtime helpers are marked `CLX_INLINE_HOT`
+(`always_inline`/`__forceinline`):
 
 ```cpp
 if (a.type == ValueType::Int64 && b.type == ValueType::Int64) [[likely]]
