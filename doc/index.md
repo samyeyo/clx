@@ -28,7 +28,8 @@ Want to know how clx works under the hood? See **[Internals](./internals/index.m
 
 Contributions are welcome! Before submitting a pull request, please ensure:
 
-1. Tests pass (`./tests/run.sh` or `tests\run.bat` on Windows)
+1. Tests pass (`./tests/run.sh` or `tests\run.bat` on Windows), and the official
+   Lua 5.5.1 suite passes too (`./tests/lua55/run.sh` or `tests\lua55\run.bat`)
 2. Code follows the existing style and uses C++20
 3. Documentation in `./doc` (Markdown) is updated for any new features
 
