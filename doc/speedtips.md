@@ -74,6 +74,9 @@ To keep that status:
   passing it as a callback makes the optimizer give up on all its parameters.
   Call it directly.
 - Don't reassign the function name.
+- **Don't inspect a parameter with `math.type`.** Asking for the subtype forces
+  that parameter to stay boxed for the whole body — check the values at the call
+  site instead.
 - Returning 2–4 numbers consistently (`return a, b`) gets a native tuple call
   instead of a multi-value box.
 
@@ -185,7 +188,8 @@ call. `string.format` for templating.
 - Prefer numeric `for` over `while` with a manual counter — the bounds are
   visible to the optimizer.
 - Keep call sites fixed-arity. Vararg calls (`f(t, ...)`) go through a dynamic
-  argument buffer.
+  argument buffer (`clx::DynArgs`) that grows on the heap as needed, so a call
+  with an unpredictable argument count stays correct — it just isn't unboxed.
 - **Hoist globals out of loops.** A global read is an environment-table lookup
   on every access:
 
