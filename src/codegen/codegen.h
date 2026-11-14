@@ -70,6 +70,10 @@ private:
     std::vector<LocalVar> locals;
     AnalysisState &state;
 
+    //------------------ env_cpp: C++ expression naming the environment of the current scope; a local
+    //------------------ `_ENV` shadows the implicit per-function one and global access must go through it
+    std::string env_cpp();
+
     //------------------ is_local: checks if name is a local and sets out_is_boxed
     bool is_local(std::string_view name, bool &out_is_boxed);
 
@@ -89,14 +93,19 @@ private:
     std::string call_site_table();
     bool is_local(std::string_view name, bool &out_is_boxed, std::string_view &out_cpp_name);
 
+    //------------------ name_shadows: true when name already resolves to an enclosing local or upvalue,
+    //------------------ so a new declaration of it needs a temporary for its initializer
+    bool name_shadows(std::string_view name) const;
+
     //------------------ note_global_ref: records a global read for filtered std registration.
     //------------------ _G/_ENV reads set the dynamic-env fallback (full registration) instead.
     void note_global_ref(std::string_view name);
 
     //------------------ int_flag_expr: C++ bool expression for the runtime integer subtype of an expression
     std::string int_flag_expr(uint32_t expr_idx, int depth);
-    //------------------ int_value_expr: C++ int64 expression for an expression proven integral by int_flag_expr
-    std::string int_value_expr(uint32_t expr_idx, int depth);
+    //------------------ int_value_expr: C++ int64 expression for an expression proven integral by int_flag_expr;
+    //------------------ ok reports whether an exact int64 value could be produced at all
+    std::string int_value_expr(uint32_t expr_idx, int depth, bool *ok = nullptr);
     //------------------ fast_call_box_flag: C++ bool expression restoring the return subtype of a fast call
     std::string fast_call_box_flag(std::string_view fname, uint32_t first_arg, uint32_t arg_count);
 
@@ -105,6 +114,9 @@ private:
 
     //------------------ var_reassigned_non_int: checks if a variable receives any new non-integer value
     bool var_reassigned_non_int(std::string_view name, uint32_t block_idx, uint32_t exclude_value_node = 0xFFFFFFFF);
+
+    //------------------ var_reassigned_non_number: checks if a variable receives a value that may be nil
+    bool var_reassigned_non_number(std::string_view name, uint32_t block_idx, uint32_t exclude_value_node = 0xFFFFFFFF);
 
     //------------------ emit_call_site: emits one static CallSite descriptor and returns its address expression
     std::string emit_call_site(int line, bool is_method, bool name_short);

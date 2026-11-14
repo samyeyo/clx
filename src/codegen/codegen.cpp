@@ -25,8 +25,30 @@
 
 namespace clx {
 
-//------------------ var_reassigned_non_int: checks if a variable receives any non-integer value
-bool CodeEmitter::var_reassigned_non_int(std::string_view name, uint32_t block_idx, uint32_t exclude_value_node) {
+//------------------ numeric_result_expr: a value whose top-level operator can only yield a number
+static bool numeric_result_expr(const ASTContext &ctx, uint32_t idx) {
+    if (idx == 0xFFFFFFFF || idx >= ctx.nodes.size())
+        return false;
+    const auto &n = ctx.nodes[idx];
+    if (n.type == NodeType::Number || n.type == NodeType::Integer)
+        return true;
+    if (n.type == NodeType::ParenExpression)
+        return numeric_result_expr(ctx, n.as.paren_expr.expr);
+    if (n.type == NodeType::UnaryOp) {
+        int op = n.as.unary_op.op;
+        return op == static_cast<int>(UnaryOp::Minus) || op == static_cast<int>(UnaryOp::Len);
+    }
+    if (n.type == NodeType::BinaryOp) {
+        int op = n.as.bin_op.op;
+        return (op >= static_cast<int>(BinaryOp::Add) && op <= static_cast<int>(BinaryOp::Div))
+            || (op >= static_cast<int>(BinaryOp::Mod) && op <= static_cast<int>(BinaryOp::Shr));
+    }
+    return false;
+}
+
+//------------------ block_reassign_matches: first assignment to name inside a block whose value is flagged
+static bool block_reassign_matches(const ASTContext &ctx, std::string_view name, uint32_t block_idx,
+    uint32_t exclude_value_node, const std::function<bool(uint32_t)> &is_bad) {
     auto walk_block = [&](auto &self, uint32_t bi) -> bool {
         if (bi == 0xFFFFFFFF || bi >= ctx.nodes.size())
             return false;
@@ -44,11 +66,9 @@ bool CodeEmitter::var_reassigned_non_int(std::string_view name, uint32_t block_i
                 std::string_view tn(ctx.nodes[target_idx].as.ident.name, ctx.nodes[target_idx].as.ident.length);
                 if (tn != name)
                     return false;
-                if (value_idx >= ctx.nodes.size())
-                    return false;
                 if (value_idx == exclude_value_node)
                     return false;
-                return !clx::is_purely_integer_expr(ctx, state, value_idx);
+                return is_bad(value_idx);
             };
             if (sn.type == NodeType::Assignment) {
                 for (uint32_t ti = 0; ti < sn.as.assign.target_count; ++ti) {
@@ -110,6 +130,21 @@ bool CodeEmitter::var_reassigned_non_int(std::string_view name, uint32_t block_i
     return walk_block(walk_block, block_idx);
 }
 
+//------------------ var_reassigned_non_int: checks if a variable receives any non-integer value
+bool CodeEmitter::var_reassigned_non_int(std::string_view name, uint32_t block_idx, uint32_t exclude_value_node) {
+    return block_reassign_matches(ctx, name, block_idx, exclude_value_node,
+        [&](uint32_t value_idx) { return !clx::is_purely_integer_expr(ctx, state, value_idx); });
+}
+
+//------------------ var_reassigned_non_number: checks if a variable receives a value that may be nil
+bool CodeEmitter::var_reassigned_non_number(std::string_view name, uint32_t block_idx, uint32_t exclude_value_node) {
+    return block_reassign_matches(ctx, name, block_idx, exclude_value_node, [&](uint32_t value_idx) {
+        if (numeric_result_expr(ctx, value_idx))
+            return false;
+        return !yields_number(ctx, state, value_idx, nullptr, "");
+    });
+}
+
 //------------------ CodeEmitter: constructor initializes output stream and binds analysis results
 CodeEmitter::CodeEmitter(const ASTContext &context, const char *path, AnalysisState &analysis)
     : ctx(context)
@@ -131,6 +166,15 @@ bool CodeEmitter::is_local(std::string_view name, bool &out_is_boxed, std::strin
             out_cpp_name = it->cpp_name.empty() ? it->name : std::string_view(it->cpp_name);
             return true;
         }
+    }
+    return false;
+}
+
+//------------------ name_shadows: sees an enclosing binding with the same name
+bool CodeEmitter::name_shadows(std::string_view name) const {
+    for (auto it = locals.rbegin(); it != locals.rend(); ++it) {
+        if (it->name == name)
+            return true;
     }
     return false;
 }
@@ -167,6 +211,13 @@ std::string CodeEmitter::int_flag_expr(uint32_t expr_idx, int depth) {
     }
     if (n.type == NodeType::BinaryOp) {
         int bop = n.as.bin_op.op;
+        //------------------ a bitwise result is always an integer, but its exact int64 form is only
+        //------------------ available when both operands have one: keeping the flag tied to the
+        //------------------ operands keeps int_flag_expr and int_value_expr in agreement, so a float
+        //------------------ operand (e.g. 2^52 | 0) never gets a fabricated zero shadow
+        if (bop >= static_cast<int>(BinaryOp::BitAnd) && bop <= static_cast<int>(BinaryOp::Shr))
+            return "(" + int_flag_expr(n.as.bin_op.left, depth + 1) + " && "
+                + int_flag_expr(n.as.bin_op.right, depth + 1) + ")";
         bool int_op = (bop >= static_cast<int>(BinaryOp::Add) && bop <= static_cast<int>(BinaryOp::Mul))
             || bop == static_cast<int>(BinaryOp::FloorDiv) || bop == static_cast<int>(BinaryOp::Mod);
         if (!int_op)
@@ -182,9 +233,8 @@ std::string CodeEmitter::int_flag_expr(uint32_t expr_idx, int depth) {
     if (n.type == NodeType::TableAccess) {
         uint32_t tbl_idx = n.as.table_access.table;
         uint32_t key_idx = n.as.table_access.key;
-        if (tbl_idx < ctx.nodes.size() && key_idx < ctx.nodes.size()
-            && ctx.nodes[tbl_idx].type == NodeType::Identifier && ctx.nodes[tbl_idx].as.ident.is_global
-            && ctx.nodes[key_idx].type == NodeType::String) {
+        if (tbl_idx < ctx.nodes.size() && key_idx < ctx.nodes.size() && ctx.nodes[tbl_idx].type == NodeType::Identifier
+            && ctx.nodes[tbl_idx].as.ident.is_global && ctx.nodes[key_idx].type == NodeType::String) {
             std::string_view tn(ctx.nodes[tbl_idx].as.ident.name, ctx.nodes[tbl_idx].as.ident.length);
             std::string_view mk(ctx.nodes[key_idx].as.string.text, ctx.nodes[key_idx].as.string.length);
             if (tn == "math" && (mk == "maxinteger" || mk == "mininteger"))
@@ -221,14 +271,19 @@ std::string CodeEmitter::fast_call_box_flag(std::string_view fname, uint32_t fir
 
 //------------------ int_value_expr: C++ int64 expression for the exact integer value of an expression
 
-std::string CodeEmitter::int_value_expr(uint32_t expr_idx, int depth) {
+std::string CodeEmitter::int_value_expr(uint32_t expr_idx, int depth, bool *ok) {
+    if (ok)
+        *ok = false;
     if (depth > 24 || expr_idx == 0xFFFFFFFF || expr_idx >= ctx.nodes.size())
         return "0";
     const auto &n = ctx.nodes[expr_idx];
-    if (n.type == NodeType::Integer)
+    if (n.type == NodeType::Integer) {
+        if (ok)
+            *ok = true;
         return "static_cast<int64_t>(" + std::to_string(n.as.integer.val) + ")";
+    }
     if (n.type == NodeType::ParenExpression)
-        return int_value_expr(n.as.paren_expr.expr, depth + 1);
+        return int_value_expr(n.as.paren_expr.expr, depth + 1, ok);
     if (n.type == NodeType::Identifier && !n.as.ident.is_global) {
         std::string_view nm(n.as.ident.name, n.as.ident.length);
         bool boxed = false;
@@ -238,19 +293,27 @@ std::string CodeEmitter::int_value_expr(uint32_t expr_idx, int depth) {
                 if (it->name == nm) {
                     std::string cn = it->cpp_name.empty() ? std::string(nm) : it->cpp_name;
                     if (it->is_int_counter || state.native_integers.count(std::string(nm))) {
+                        if (ok)
+                            *ok = true;
                         if (boxed)
                             return "(*l_" + cn + ").as_integer()";
                         return "static_cast<int64_t>(l_" + cn + ")";
                     }
-                    if (it->has_intf)
+                    if (it->has_intf) {
+                        if (ok)
+                            *ok = true;
                         return "_ii_l_" + cn;
+                    }
                     return "0";
                 }
             }
             return "0";
         }
-        if (state.for_counter_names.count(nm))
+        if (state.for_counter_names.count(nm)) {
+            if (ok)
+                *ok = true;
             return "static_cast<int64_t>(l_" + std::string(nm) + ")";
+        }
         return "0";
     }
     if (n.type == NodeType::BinaryOp) {
@@ -260,28 +323,52 @@ std::string CodeEmitter::int_value_expr(uint32_t expr_idx, int depth) {
             : bop == static_cast<int>(BinaryOp::Mul)            ? "clx::int_mul"
             : bop == static_cast<int>(BinaryOp::FloorDiv)       ? "clx::int_floor_div"
             : bop == static_cast<int>(BinaryOp::Mod)            ? "clx::int_floor_mod"
+            : bop == static_cast<int>(BinaryOp::BitAnd)         ? "clx::int_band"
+            : bop == static_cast<int>(BinaryOp::BitOr)          ? "clx::int_bor"
+            : bop == static_cast<int>(BinaryOp::BitXor)         ? "clx::int_bxor"
+            : bop == static_cast<int>(BinaryOp::Shl)            ? "clx::shiftl_int"
+            : bop == static_cast<int>(BinaryOp::Shr)            ? "clx::shr_int"
                                                                 : nullptr;
         if (!fn)
             return "0";
+        bool lok = false;
+        bool rok = false;
+        std::string lv = int_value_expr(n.as.bin_op.left, depth + 1, &lok);
+        std::string rv = int_value_expr(n.as.bin_op.right, depth + 1, &rok);
+        if (!lok || !rok)
+            return "0";
+        if (ok)
+            *ok = true;
         bool takes_l = bop == static_cast<int>(BinaryOp::FloorDiv) || bop == static_cast<int>(BinaryOp::Mod);
-        return std::string(fn) + (takes_l ? "(L, " : "(") + int_value_expr(n.as.bin_op.left, depth + 1) + ", "
-            + int_value_expr(n.as.bin_op.right, depth + 1) + ")";
+        return std::string(fn) + (takes_l ? "(L, " : "(") + lv + ", " + rv + ")";
     }
-    if (n.type == NodeType::UnaryOp && n.as.unary_op.op == static_cast<int>(UnaryOp::Minus))
-        return "clx::int_neg(" + int_value_expr(n.as.unary_op.expr, depth + 1) + ")";
+    if (n.type == NodeType::UnaryOp && n.as.unary_op.op == static_cast<int>(UnaryOp::Minus)) {
+        bool kok = false;
+        std::string kv = int_value_expr(n.as.unary_op.expr, depth + 1, &kok);
+        if (!kok)
+            return "0";
+        if (ok)
+            *ok = true;
+        return "clx::int_neg(" + kv + ")";
+    }
     //------------------ math.maxinteger/mininteger shadows (mirrors the int_flag_expr case above).
     if (n.type == NodeType::TableAccess) {
         uint32_t tbl_idx = n.as.table_access.table;
         uint32_t key_idx = n.as.table_access.key;
-        if (tbl_idx < ctx.nodes.size() && key_idx < ctx.nodes.size()
-            && ctx.nodes[tbl_idx].type == NodeType::Identifier && ctx.nodes[tbl_idx].as.ident.is_global
-            && ctx.nodes[key_idx].type == NodeType::String) {
+        if (tbl_idx < ctx.nodes.size() && key_idx < ctx.nodes.size() && ctx.nodes[tbl_idx].type == NodeType::Identifier
+            && ctx.nodes[tbl_idx].as.ident.is_global && ctx.nodes[key_idx].type == NodeType::String) {
             std::string_view tn(ctx.nodes[tbl_idx].as.ident.name, ctx.nodes[tbl_idx].as.ident.length);
             std::string_view mk(ctx.nodes[key_idx].as.string.text, ctx.nodes[key_idx].as.string.length);
-            if (tn == "math" && mk == "maxinteger")
+            if (tn == "math" && mk == "maxinteger") {
+                if (ok)
+                    *ok = true;
                 return "INT64_MAX";
-            if (tn == "math" && mk == "mininteger")
+            }
+            if (tn == "math" && mk == "mininteger") {
+                if (ok)
+                    *ok = true;
                 return "INT64_MIN";
+            }
         }
     }
     if (n.type == NodeType::CallExpression) {
@@ -303,7 +390,10 @@ std::string CodeEmitter::int_value_expr(uint32_t expr_idx, int depth) {
             if (p < n.as.call_expr.arg_count) {
                 uint32_t a_idx = ctx.block_statements[n.as.call_expr.first_arg + p];
                 if (ctx.nodes[a_idx].type == NodeType::Identifier && !ctx.nodes[a_idx].as.ident.is_global) {
-                    std::string f = int_value_expr(a_idx, 1);
+                    bool aok = false;
+                    std::string f = int_value_expr(a_idx, 1, &aok);
+                    if (!aok)
+                        return "0";
                     r += (any ? " && " : "") + f;
                     any = true;
                     continue;
@@ -311,7 +401,11 @@ std::string CodeEmitter::int_value_expr(uint32_t expr_idx, int depth) {
             }
             return "0";
         }
-        return any ? r + ")" : "0";
+        if (!any)
+            return "0";
+        if (ok)
+            *ok = true;
+        return r + ")";
     }
     return "0";
 }
@@ -653,8 +747,7 @@ void CodeEmitter::emit(uint32_t root_node, std::string_view module_name) {
     out << "CLX_API clx::LValue luaopen_" << module_name << "(clx::LState* L) {\n";
     out << "    clx::Frame<16> _fr(L);\n";
     out << "    clx::LValue _ENV(clx::ValueType::Table, L->_G);\n";
-    out << "    static constexpr clx::CallSite _module_site = { \"" << ctx.filename
-        << "\", 0, false, false };\n";
+    out << "    static constexpr clx::CallSite _module_site = { \"" << ctx.filename << "\", 0, false, false };\n";
     out << "    L->current_site = &_module_site;\n";
 
     for (const auto &sb_name : state.global_string_builders) {

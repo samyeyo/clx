@@ -673,6 +673,19 @@ std::string cpp_escape(std::string_view s) {
 }
 
 //------------------ note_global_ref: records a global read for filtered std registration (see
+//------------------ CodeEmitter::env_cpp - the C++ variable holding the environment in scope; the local
+//------------------ slot follows the same l_/cell naming the other local reads use
+std::string CodeEmitter::env_cpp()
+{
+    bool boxed = false;
+    std::string_view cpp_name;
+    if (is_local("_ENV", boxed, cpp_name)) {
+        std::string emit_name = cpp_name.empty() ? std::string("_ENV") : std::string(cpp_name);
+        return boxed ? ("(*l_" + emit_name + ")") : ("l_" + emit_name);
+    }
+    return std::string("_ENV");
+}
+
 //------------------ AnalysisState::referenced_globals). _G/_ENV reads set the dynamic-env fallback instead.
 void CodeEmitter::note_global_ref(std::string_view name) {
     if (name == "_G" || name == "_ENV") {

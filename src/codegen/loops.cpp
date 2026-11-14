@@ -87,7 +87,20 @@ void CodeEmitter::emitForStatement(const ASTNode &node, uint32_t node_idx) {
         }
     }
 
-    bool start_is_int_literal = ctx.nodes[node.as.for_stmt.start_expr].type == NodeType::Integer;
+    //------------------ a negated integer literal (-6) is an integer start too: without this the loop
+    //------------------ counter became a double and math.type(i) reported "float"
+    uint32_t start_lit_idx = node.as.for_stmt.start_expr;
+    while (ctx.nodes[start_lit_idx].type == NodeType::ParenExpression)
+        start_lit_idx = ctx.nodes[start_lit_idx].as.paren_expr.expr;
+    if (ctx.nodes[start_lit_idx].type == NodeType::UnaryOp
+        && ctx.nodes[start_lit_idx].as.unary_op.op == static_cast<int>(UnaryOp::Minus)) {
+        uint32_t inner = ctx.nodes[start_lit_idx].as.unary_op.expr;
+        while (ctx.nodes[inner].type == NodeType::ParenExpression)
+            inner = ctx.nodes[inner].as.paren_expr.expr;
+        if (ctx.nodes[inner].type == NodeType::Integer)
+            start_lit_idx = inner;
+    }
+    bool start_is_int_literal = ctx.nodes[start_lit_idx].type == NodeType::Integer;
     if (!start_is_int_literal && ctx.nodes[node.as.for_stmt.start_expr].type == NodeType::BinaryOp) {
         auto &bin = ctx.nodes[node.as.for_stmt.start_expr].as.bin_op;
         if (bin.op == static_cast<int>(BinaryOp::Add) || bin.op == static_cast<int>(BinaryOp::Sub)) {
@@ -97,7 +110,28 @@ void CodeEmitter::emitForStatement(const ASTNode &node, uint32_t node_idx) {
                     && yields_number(ctx, state, bin.left, nullptr, state.current_fast_func));
         }
     }
-    bool step_is_int_lit = !step_is_default && ctx.nodes[node.as.for_stmt.step_expr].type == NodeType::Integer;
+    uint32_t step_lit_idx = node.as.for_stmt.step_expr;
+    if (!step_is_default) {
+        while (ctx.nodes[step_lit_idx].type == NodeType::ParenExpression)
+            step_lit_idx = ctx.nodes[step_lit_idx].as.paren_expr.expr;
+        if (ctx.nodes[step_lit_idx].type == NodeType::UnaryOp
+            && ctx.nodes[step_lit_idx].as.unary_op.op == static_cast<int>(UnaryOp::Minus)) {
+            uint32_t inner = ctx.nodes[step_lit_idx].as.unary_op.expr;
+            while (ctx.nodes[inner].type == NodeType::ParenExpression)
+                inner = ctx.nodes[inner].as.paren_expr.expr;
+            if (ctx.nodes[inner].type == NodeType::Integer)
+                step_lit_idx = inner;
+        }
+    }
+    //------------------ a negated integer literal step (-1) is still an integer step: without this the
+    //------------------ counter stayed a double and math.type(i) reported "float"
+    bool step_is_int_lit = !step_is_default && ctx.nodes[step_lit_idx].type == NodeType::Integer;
+    if (step_is_int_lit && ctx.nodes[node.as.for_stmt.step_expr].type == NodeType::UnaryOp) {
+        //------------------ the sign of a negated literal decides how the float limit is rounded
+        //------------------ (ceil for a descending loop, floor for an ascending one)
+        step_known_negative = ctx.nodes[step_lit_idx].as.integer.val > 0;
+        step_known_positive = !step_known_negative;
+    }
     bool step_is_zero_lit = !step_is_default
         && ((ctx.nodes[node.as.for_stmt.step_expr].type == NodeType::Integer
                 && ctx.nodes[node.as.for_stmt.step_expr].as.integer.val == 0)
@@ -243,9 +277,15 @@ void CodeEmitter::emitForStatement(const ASTNode &node, uint32_t node_idx) {
         if (bn.type == NodeType::TableAccess) {
             uint32_t tbl = bn.as.table_access.table;
             uint32_t key = bn.as.table_access.key;
+            //------------------ only a known builtin function field is hoisted: any other global field
+            //------------------ can be reassigned by the body or by a callee (and across coroutine
+            //------------------ resumes), so its value must be re-read on every iteration
             if (tbl < ctx.nodes.size() && key < ctx.nodes.size() && ctx.nodes[tbl].type == NodeType::Identifier
                 && ctx.nodes[tbl].as.ident.is_global && ctx.nodes[key].type == NodeType::String) {
-                _invariant_lookups.push_back(bn_idx);
+                std::string_view _m(ctx.nodes[tbl].as.ident.name, ctx.nodes[tbl].as.ident.length);
+                std::string_view _f(ctx.nodes[key].as.string.text, ctx.nodes[key].as.string.length);
+                if (builtin_field_ok(state, _m, _f) && lookup_builtin(_m, _f))
+                    _invariant_lookups.push_back(bn_idx);
             }
             self(self, tbl);
         } else if (bn.type == NodeType::Block) {
@@ -463,16 +503,16 @@ void CodeEmitter::emitForStatement(const ASTNode &node, uint32_t node_idx) {
     } else {
         out << "if (!_skip_" << node_idx << ") {\n";
         out << "if (_isint_" << node_idx << ") {\n";
-        out << "if (ist_" << node_idx << " > 0) {\n";
-        out << "for (int64_t i_val = is_" << node_idx << "; i_val <= il_" << node_idx << "; i_val += ist_" << node_idx
-            << ") {\n";
+        //------------------ stock counts the remaining iterations instead of comparing the counter with
+        //------------------ the limit: near the int64 edges a wrapped counter still satisfies the
+        //------------------ comparison, which ran the body past the last iteration
+        out << "uint64_t icnt_" << node_idx << " = clx::forcount(is_" << node_idx << ", il_" << node_idx << ", ist_"
+            << node_idx << ");\n";
+        out << "for (int64_t i_val = is_" << node_idx << ";; i_val = static_cast<int64_t>(static_cast<uint64_t>(i_val) + "
+            << "static_cast<uint64_t>(ist_" << node_idx << "))) {\n";
         emit_for_body(true);
-        out << "}\n";
-        out << "} else {\n";
-        out << "for (int64_t i_val = is_" << node_idx << "; i_val >= il_" << node_idx << "; i_val += ist_" << node_idx
-            << ") {\n";
-        emit_for_body(true);
-        out << "}\n";
+        out << "if (icnt_" << node_idx << " == 0) break;\n";
+        out << "--icnt_" << node_idx << ";\n";
         out << "}\n";
         out << "} else {\n";
         out << "if (fst_" << node_idx << " > 0) {\n";
@@ -635,10 +675,18 @@ void CodeEmitter::emitGenericForStatement(const ASTNode &node, uint32_t node_idx
         }
         out << "        _fr.restore(_ssave_iter);\n    }\n";
     } else if (loop.iter_count > 0) {
-        uint32_t iter_node = ctx.block_statements[loop.first_iter];
-        out << "    _triplet_" << node_idx << " = clx::MultiValue(";
-        emit_node(iter_node);
-        out << ");\n";
+        //------------------ the explist adjusts to three values: every item contributes one (a trailing
+        //------------------ call or vararg would supply the rest, but the triplet needs at most three)
+        out << "    {\n        size_t _ssave_it = _fr.mark();\n";
+        for (uint32_t k = 0; k < loop.iter_count; ++k) {
+            out << "        clx::LValue _itv_" << node_idx << "_" << k << " = ";
+            emit_node(ctx.block_statements[loop.first_iter + k]);
+            out << ";\n        _fr.push(_itv_" << node_idx << "_" << k << ");\n";
+        }
+        out << "        _triplet_" << node_idx << " = clx::MultiValue({";
+        for (uint32_t k = 0; k < loop.iter_count; ++k)
+            out << " _itv_" << node_idx << "_" << k << ",";
+        out << " }, L);\n        _fr.restore(_ssave_it);\n    }\n";
     } else {
         out << "    _triplet_" << node_idx << " = clx::MultiValue();\n";
     }
@@ -655,6 +703,13 @@ void CodeEmitter::emitGenericForStatement(const ASTNode &node, uint32_t node_idx
     out << "    _fr.push(_f_" << node_idx << ");\n";
     out << "    _fr.push(_s_" << node_idx << ");\n";
     out << "    _fr.push(_var_" << node_idx << ");\n";
+
+    //------------------ the fourth value of the iterator explist is a to-be-closed variable: it is
+    //------------------ closed when the loop ends (pairs with a __pairs metamethod returns one)
+    out << "    clx::LValue _tbc_" << node_idx << " = (_triplet_" << node_idx << ".count > 3) ? _triplet_" << node_idx
+        << "[3] : clx::LValue();\n";
+    out << "    _fr.push(_tbc_" << node_idx << ");\n";
+    out << "    clx::CloseGuard _cg_" << node_idx << "(L, _tbc_" << node_idx << ", \"(for state)\");\n";
 
     std::vector<std::string_view> _added_ht;
     emit_loop_table_hoists(loop.body_block, _added_ht);

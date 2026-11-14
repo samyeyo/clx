@@ -375,6 +375,26 @@ void CodeEmitter::emitBlock(const ASTNode &node, uint32_t node_idx, DeferredBloc
         }
     }
     if (has_goto) {
+        std::unordered_set<uint32_t> jump_crossed;
+        for (uint32_t i = 0; i < node.as.block.count; ++i) {
+            uint32_t g_idx = ctx.block_statements[node.as.block.first_statement + i];
+            if (ctx.nodes[g_idx].type != NodeType::GotoStatement)
+                continue;
+            auto gt = state.goto_targets.find(g_idx);
+            if (gt == state.goto_targets.end())
+                continue;
+            for (uint32_t j = i + 1; j < node.as.block.count; ++j) {
+                uint32_t t_idx = ctx.block_statements[node.as.block.first_statement + j];
+                if (ctx.nodes[t_idx].type == NodeType::LabelStatement && t_idx == gt->second) {
+                    for (uint32_t k = i + 1; k < j; ++k) {
+                        uint32_t c_idx = ctx.block_statements[node.as.block.first_statement + k];
+                        if (ctx.nodes[c_idx].type == NodeType::LocalDecl)
+                            jump_crossed.insert(c_idx);
+                    }
+                    break;
+                }
+            }
+        }
         bool after_goto = false;
         for (uint32_t i = 0; i < node.as.block.count; ++i) {
             uint32_t stmt_idx = ctx.block_statements[node.as.block.first_statement + i];
@@ -383,7 +403,7 @@ void CodeEmitter::emitBlock(const ASTNode &node, uint32_t node_idx, DeferredBloc
                 after_goto = true;
             if (st.type == NodeType::LabelStatement)
                 after_goto = false;
-            if (after_goto && st.type == NodeType::LocalDecl) {
+            if ((after_goto || jump_crossed.count(stmt_idx)) && st.type == NodeType::LocalDecl) {
                 bool hoist_last_is_call = false;
                 if (st.as.local_decl.value_count > 0) {
                     uint32_t last_v
@@ -464,7 +484,30 @@ void CodeEmitter::emitBlock(const ASTNode &node, uint32_t node_idx, DeferredBloc
     int redecl_scopes = 0;
     std::set<std::string_view> current_block_vars;
 
+    //------------------ a block with labels keeps its statements in an inner scope: a goto must not
+    //------------------ bypass the initializers a statement emits (`size_t _rg_base_N = _fr.mark()`,
+    //------------------ `auto _ad_N = adopt_call_result(...)`, `CloseGuard`), and trailing labels —
+    //------------------ the ones Lua allows as a jump target across a local's scope — stay outside it
+    uint32_t body_end = node.as.block.count;
+    bool has_label = false;
     for (uint32_t i = 0; i < node.as.block.count; ++i) {
+        uint32_t stmt_idx = ctx.block_statements[node.as.block.first_statement + i];
+        if (ctx.nodes[stmt_idx].type == NodeType::LabelStatement) {
+            has_label = true;
+            break;
+        }
+    }
+    if (has_label)
+        while (body_end > 0) {
+            uint32_t stmt_idx = ctx.block_statements[node.as.block.first_statement + body_end - 1];
+            if (ctx.nodes[stmt_idx].type != NodeType::LabelStatement)
+                break;
+            --body_end;
+        }
+    if (has_label)
+        out << "{\n";
+
+    for (uint32_t i = 0; i < body_end; ++i) {
         uint32_t stmt_idx = ctx.block_statements[node.as.block.first_statement + i];
         if (state.dead_stmts.count(stmt_idx))
             continue;
@@ -518,6 +561,16 @@ void CodeEmitter::emitBlock(const ASTNode &node, uint32_t node_idx, DeferredBloc
         }
     }
 
+    if (has_label) {
+        out << "}\n";
+        for (uint32_t i = body_end; i < node.as.block.count; ++i) {
+            uint32_t stmt_idx = ctx.block_statements[node.as.block.first_statement + i];
+            if (state.dead_stmts.count(stmt_idx))
+                continue;
+            emit_node(stmt_idx);
+        }
+    }
+
     if (def) {
         def->prev_locals = prev_locals;
         def->prev_native_count = prev_native_count;
@@ -552,7 +605,10 @@ void CodeEmitter::emit_fast_variant(std::string_view name, uint32_t v_idx) {
     state.emit_fast_lambda = true;
     state.in_fast_function = true;
     state.current_fast_func = name;
+    uint32_t saved_arena_fast = state.current_arena_func;
+    state.current_arena_func = 0xFFFFFFFF;
     emit_node(v_idx);
+    state.current_arena_func = saved_arena_fast;
     state.emit_fast_lambda = saved_emit_fast;
     state.in_fast_function = saved_in_fast;
     state.current_fast_func = saved_fast_func;
@@ -561,10 +617,20 @@ void CodeEmitter::emit_fast_variant(std::string_view name, uint32_t v_idx) {
     out << "auto _fast_" << name << " = [=](clx::FrameBase& _fr";
     for (uint32_t a = 0; a < state.func_param_counts[name]; ++a)
         out << ", double p" << a;
-    out << ") -> double { return _fast_" << name << "_impl(_fast_" << name << "_impl, _fr";
+    //------------------ every fast call except self-recursion enters through this wrapper, so the deferred
+    //------------------ stack overflow is raised here, where a throw costs nothing. Clearing the pending site
+    //------------------ on entry drops one left by a body that raised another error while unwinding as 0.0.
+    out << ") -> double {\n";
+    out << "    clx::LState *_L = _fr.owner;\n";
+    out << "    _L->stack_overflow_site = nullptr;\n";
+    out << "    double _ret = _fast_" << name << "_impl(_fast_" << name << "_impl, _fr";
     for (uint32_t a = 0; a < state.func_param_counts[name]; ++a)
         out << ", p" << a;
-    out << "); };\n";
+    out << ");\n";
+    out << "    if (_L->stack_overflow_site != nullptr) [[unlikely]]\n";
+    out << "        clx::raise_stack_overflow(_L);\n";
+    out << "    return _ret;\n";
+    out << "};\n";
 }
 
 //------------------ emit_native_impl_def: Y-combinator native overload for a
@@ -697,6 +763,14 @@ void CodeEmitter::emitFunctionDef(const ASTNode &node, uint32_t node_idx) {
     //------------------ is_dbl: triple-bound overload body — same native shape, params bound from
     //------------------ (double, int-flag, int-shadow) triples instead of LValues (see emit_dbl_impl_def).
     bool is_dbl = state.emit_dbl_impl;
+    //------------------ A nested closure returns MultiValue even inside a fast function, so the fast
+    //------------------ return path must not leak past the function that owns the double signature.
+    bool saved_in_fast_function = state.in_fast_function;
+    std::string_view saved_fast_func_name = state.current_fast_func;
+    if (!is_fast) {
+        state.in_fast_function = false;
+        state.current_fast_func = "";
+    }
     state.emit_raw_lambda = false;
     state.emit_fast_lambda = false;
     state.emit_native_impl = false;
@@ -704,6 +778,8 @@ void CodeEmitter::emitFunctionDef(const ASTNode &node, uint32_t node_idx) {
     state.emit_dbl_impl = false;
     bool prev_in_func = state.in_function_def;
     state.in_function_def = true;
+    std::string prev_vararg_table = state.current_vararg_table;
+    state.current_vararg_table.clear();
 
     auto saved_direct_callables = state.direct_callables;
     auto saved_fast_callables = state.fast_callables;
@@ -739,6 +815,16 @@ void CodeEmitter::emitFunctionDef(const ASTNode &node, uint32_t node_idx) {
             out << ", double l_" << fast_param_cpp[i];
         }
         out << ") -> double {\n";
+        //------------------ a fast self-call enters this lambda directly, bypassing the call wrappers' depth check;
+        //------------------ the guard returns instead of throwing so this lambda stays unwind-free (a throw here
+        //------------------ makes the whole body unwind-capable, which measured 1.9x on fib). The store must stay
+        //------------------ inline: writing the state through a cold helper re-measured the same 1.9x.
+        out << "if (clx::stack_probe() < _fr.owner->stack_low) [[unlikely]]\n";
+        out << "{\n";
+        out << "    if (!_fr.owner->stack_overflow_site)\n";
+        out << "        _fr.owner->stack_overflow_site = _fr.owner->current_site;\n";
+        out << "    return 0.0;\n";
+        out << "}\n";
 
         size_t prev_locals = locals.size();
         size_t prev_native_count = state.native_numbers.size();
@@ -765,12 +851,20 @@ void CodeEmitter::emitFunctionDef(const ASTNode &node, uint32_t node_idx) {
         state.in_native_impl = saved_in_native;
         state.current_native_func = saved_native_func;
         state.current_func_body = saved_func_body;
+        state.in_fast_function = saved_in_fast_function;
+        state.current_fast_func = saved_fast_func_name;
         out << "return 0.0;\n}";
         return;
     }
 
     if (is_native) {
 
+        //------------------ native impls are entered lambda-to-lambda (self(self, ...)), bypassing the call wrappers' depth check
+        out << "clx::stack_check(L);\n";
+        //------------------ the impl is a lambda, not a closure with an env, so globals need the function's
+        //------------------ own _ENV: capturing the defining scope's would freeze the load-time environment
+        out << "clx::LValue _ENV = (L->current_func && L->current_func->env) ? clx::LValue(clx::ValueType::Table, "
+               "L->current_func->env) : clx::LValue(clx::ValueType::Table, L->_G);\n";
         out << "clx::Frame<16> _fr(L);\n";
         uint32_t prev_func_idx_n = state.current_func_idx;
         state.current_func_idx = node_idx;
@@ -857,6 +951,8 @@ void CodeEmitter::emitFunctionDef(const ASTNode &node, uint32_t node_idx) {
         state.native_dbl_emitted = std::move(saved_native_dbl_emitted);
         state.hoisted_tables = std::move(saved_hoisted);
         state.current_func_body = saved_func_body;
+        state.in_fast_function = saved_in_fast_function;
+        state.current_fast_func = saved_fast_func_name;
         if (state.arena_table_sizes.count(node_idx))
             out << "clx::arena_reset(&_arena);\n";
         if (is_multi) {
@@ -974,11 +1070,14 @@ void CodeEmitter::emitFunctionDef(const ASTNode &node, uint32_t node_idx) {
                 out << "_fr.push(*l_" << cpp_name << ");\n";
             }
         } else if (is_native) {
-            out << "double l_" << cpp_name << " = (" << i << " < arg_count) ? args[" << i << "].as_number() : 0.0;\n";
+            //------------------ coerce_number keeps stock's arithmetic coercion (a numeric string is
+            //------------------ parsed, a non-number raises) where as_number() silently yields 0
+            out << "double l_" << cpp_name << " = (" << i << " < arg_count) ? clx::coerce_number(L, args[" << i
+                << "]) : 0.0;\n";
             out << "bool _intf_l_" << cpp_name << " = (" << i << " < arg_count) && args[" << i
                 << "].type == clx::ValueType::Int64;\n";
-            out << "int64_t _ii_l_" << cpp_name << " = (" << i << " < arg_count) ? args[" << i
-                << "].as_integer() : 0;\n";
+            out << "int64_t _ii_l_" << cpp_name << " = _intf_l_" << cpp_name << " ? args[" << i
+                << "].val.payload.i64 : 0;\n";
             if (std::find(state.native_numbers.begin(), state.native_numbers.end(), pname)
                 == state.native_numbers.end())
                 state.native_numbers.push_back(pname);
@@ -1000,11 +1099,12 @@ void CodeEmitter::emitFunctionDef(const ASTNode &node, uint32_t node_idx) {
         out << "clx::LTable* _t_" << vararg_cpp_name << " = static_cast<clx::LTable*>(l_" << vararg_cpp_name
             << ".as_pointer());\n";
         out << "_t_" << vararg_cpp_name
-            << "->settable(clx::LValue(L->intern_string(\"n\")), clx::LValue(static_cast<double>(_va_count)));\n";
+            << "->settable(clx::LValue(L->intern_string(\"n\")), clx::integer(static_cast<int64_t>(_va_count)));\n";
         out << "for (size_t i = 0; i < _va_count; ++i) {\n";
-        out << "    _t_" << vararg_cpp_name << "->settable(clx::LValue(static_cast<double>(i + 1)), _va_args[i]);\n";
+        out << "    _t_" << vararg_cpp_name << "->settable(clx::integer(static_cast<int64_t>(i + 1)), _va_args[i]);\n";
         out << "}\n";
         out << "_fr.push(l_" << vararg_cpp_name << ");\n";
+        state.current_vararg_table = vararg_cpp_name;
     }
 
     size_t prev_locals = locals.size();
@@ -1037,6 +1137,7 @@ void CodeEmitter::emitFunctionDef(const ASTNode &node, uint32_t node_idx) {
 
     locals.resize(prev_locals);
     state.native_numbers.resize(prev_native_count_for_params);
+    state.current_vararg_table = prev_vararg_table;
     state.in_function_def = prev_in_func;
     state.in_native_impl = saved_in_native;
     state.current_native_func = saved_native_func;
@@ -1047,13 +1148,15 @@ void CodeEmitter::emitFunctionDef(const ASTNode &node, uint32_t node_idx) {
     state.current_func_idx = prev_func_idx;
     state.direct_callables = std::move(saved_direct_callables);
     state.fast_callables = std::move(saved_fast_callables);
+    state.in_fast_function = saved_in_fast_function;
+    state.current_fast_func = saved_fast_func_name;
     if (state.arena_table_sizes.count(node_idx))
         out << "clx::arena_reset(&_arena);\n";
     state.current_arena_func = saved_arena_func;
     out << "return clx::MultiValue();\n";
     out << "}";
     if (!is_raw) {
-        out << ", static_cast<clx::LTable*>(_ENV.as_pointer())";
+        out << ", static_cast<clx::LTable*>(" << env_cpp() << ".as_pointer())";
         std::string cells = gc_cells_arg(std::string(state.raw_lambda_cell));
         if (!cells.empty())
             out << ", " << cells;
@@ -1256,31 +1359,31 @@ void CodeEmitter::emitReturnStatement(const ASTNode &node, uint32_t node_idx) {
 
         if (last_expands) {
             out << "    size_t _ssave_dyn = _fr.mark();\n";
-            out << "    clx::LValue _dyn_buf[16];\n    size_t _dyn_count = 0;\n";
+            out << "    clx::DynArgs _dyn_buf;\n";
             for (uint32_t a = 0; a < call_node.as.call_expr.arg_count - 1; ++a) {
                 if (a > 0)
                     out << "    _fr.push(_dyn_buf[" << (a - 1) << "]);\n";
-                out << "    _dyn_buf[_dyn_count++] = ";
+                out << "    _dyn_buf.push_back(";
                 emit_node(ctx.block_statements[call_node.as.call_expr.first_arg + a]);
-                out << ";\n";
+                out << ");\n";
             }
             state.expect_multivalue = true;
             out << "    clx::MultiValue _mret = ";
             emit_node(last_arg);
             out << ";\n";
             state.expect_multivalue = false;
-            out << "    for (size_t _mi = 0; _mi < _mret.count; ++_mi) _dyn_buf[_dyn_count++] = _mret[_mi];\n";
+            out << "    for (size_t _mi = 0; _mi < _mret.count; ++_mi) _dyn_buf.push_back(_mret[_mi]);\n";
             if (is_direct) {
                 if (state.in_function_def) {
                     if (state.current_arena_func != 0xFFFFFFFF)
                         out << "    clx::arena_reset(&_arena);\n";
-                    out << "    for (size_t i = 0; i < _dyn_count; ++i) _fr.push(_dyn_buf[i]);\n";
+                    out << "    for (size_t i = 0; i < _dyn_buf.size(); ++i) _fr.push(_dyn_buf[i]);\n";
                     out << "    clx::MultiValue _res = clx::call_cfunc_direct(L, " << impl_call(fname)
-                        << ", _dyn_buf, _dyn_count);\n";
+                        << ", _dyn_buf.data(), _dyn_buf.size());\n";
                     out << "    return _res;\n";
                 } else {
                     out << "    clx::MultiValue _res = clx::call_cfunc_direct(L, " << impl_call(fname)
-                        << ", _dyn_buf, _dyn_count);\n";
+                        << ", _dyn_buf.data(), _dyn_buf.size());\n";
                     out << "    _fr.restore(_ssave_dyn);\n";
                     out << "    return (_res.count > 0) ? _res[0] : clx::LValue();\n";
                 }
@@ -1289,11 +1392,11 @@ void CodeEmitter::emitReturnStatement(const ASTNode &node, uint32_t node_idx) {
                 const std::string &_bi_cf = state.builtin_aliases.at(std::string(fname));
                 if (state.in_function_def) {
                     out << "    clx::MultiValue _res = clx::call_cfunc_rooted(L, clx::" << _bi_cf
-                        << ", _dyn_buf, _dyn_count);\n";
+                        << ", _dyn_buf.data(), _dyn_buf.size());\n";
                     out << "    return _res;\n";
                 } else {
                     out << "    clx::MultiValue _res = clx::call_cfunc_rooted(L, clx::" << _bi_cf
-                        << ", _dyn_buf, _dyn_count);\n";
+                        << ", _dyn_buf.data(), _dyn_buf.size());\n";
                     out << "    _fr.restore(_ssave_dyn);\n";
                     out << "    return (_res.count > 0) ? _res[0] : clx::LValue();\n";
                 }
@@ -1302,12 +1405,12 @@ void CodeEmitter::emitReturnStatement(const ASTNode &node, uint32_t node_idx) {
                     out << "    clx::arena_reset(&_arena);\n";
                 out << "    clx::MultiValue _res = clx::call_function_rooted(L, ";
                 emit_node(tgt);
-                out << ", _dyn_buf, _dyn_count, " << _cs << ");\n";
+                out << ", _dyn_buf.data(), _dyn_buf.size(), " << _cs << ");\n";
                 out << "    return _res;\n";
             } else {
                 out << "    clx::MultiValue _res = clx::call_function_rooted(L, ";
                 emit_node(tgt);
-                out << ", _dyn_buf, _dyn_count, " << _cs << ");\n";
+                out << ", _dyn_buf.data(), _dyn_buf.size(), " << _cs << ");\n";
                 out << "    _fr.restore(_ssave_dyn);\n";
                 out << "    return (_res.count > 0) ? _res[0] : clx::LValue();\n";
             }
