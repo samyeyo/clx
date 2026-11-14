@@ -28,12 +28,20 @@ const char *intern_error_message(const char *msg, size_t len) {
     return pool.intern(msg, len, h);
 }
 
+//------------------ clx_unwinding_error: error object of the exception being unwound right now
+thread_local const clx::LValue *clx_unwinding_error = nullptr;
+
 //------------------ LRuntimeException::LRuntimeException — error exception constructor
 LRuntimeException::LRuntimeException(clx::LValue err)
-    : error_obj(err) { }
+    : error_obj(err)
+    , prev_unwinding(clx_unwinding_error) {
+    clx_unwinding_error = &error_obj;
+}
 
 //------------------ LRuntimeException::~LRuntimeException — exception destructor
-LRuntimeException::~LRuntimeException() noexcept { }
+LRuntimeException::~LRuntimeException() noexcept {
+    clx_unwinding_error = prev_unwinding;
+}
 
 //------------------ LRuntimeException::what — get error message
 const char *LRuntimeException::what() const noexcept {
@@ -59,9 +67,12 @@ std::string LValue::to_string(LState *L) const {
                 static constexpr CallSite meta_site = { __FILE__, __LINE__, false, false };
                 MultiValue ret = call_function_rooted(L, meta_func, args, 1, &meta_site);
 
-                if (ret.count > 0 && ret[0].type == String) {
-                    return std::string(ret[0].as_string(), ret[0].string_len());
-                }
+                //------------------ stock's luaL_tolstring refuses a __tostring result that is not a
+                //------------------ string instead of falling back to the default representation
+                if (ret.count < 1 || ret[0].type != String)
+                    throw LRuntimeException(LValue(L->intern_string(
+                        file_line_prefix(L) + "'__tostring' must return a string")));
+                return std::string(ret[0].as_string(), ret[0].string_len());
             }
         }
     }
@@ -97,6 +108,11 @@ std::string LValue::to_string(LState *L) const {
     case Function: {
         char buf[32];
         std::snprintf(buf, sizeof(buf), "function: %p", as_pointer());
+        return std::string(buf);
+    }
+    case Thread: {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "thread: %p", as_pointer());
         return std::string(buf);
     }
     default:
@@ -157,22 +173,30 @@ LCFunction::LCFunction(CFunctionType f)
     next = nullptr;
 }
 
+//------------------ metatable_of — the metatable of a value for every type, like luaT_gettmbyobj
+LTable *metatable_of(LState *L, const LValue &v) {
+    switch (v.type) {
+    case Table:
+        return tbl_metatable(static_cast<LTable *>(v.as_pointer()));
+    case UserData:
+        return static_cast<LUserdata *>(v.as_pointer())->metatable;
+    case String:
+        return L->string_metatable;
+    default:
+        return L->type_metatables[type_meta_index(v.type)];
+    }
+}
+
 //------------------ find_bin_metamethod — returns the binary-op metamethod from either operand's metatable, or Nil
 LValue find_bin_metamethod(LState *L, const LValue &a, const LValue &b, const LValue &key) {
-    LTable *mt = nullptr;
-    if (a.type == Table)
-        mt = tbl_metatable(static_cast<LTable *>(a.as_pointer()));
-    else if (a.type == UserData)
-        mt = static_cast<LUserdata *>(a.as_pointer())->metatable;
-    if (!mt && b.type == Table)
-        mt = tbl_metatable(static_cast<LTable *>(b.as_pointer()));
-    else if (!mt && b.type == UserData)
-        mt = static_cast<LUserdata *>(b.as_pointer())->metatable;
-
-    if (mt) {
-        LValue method = mt->gettable(key);
-        if (method.type != Nil && method.type == Function)
-            return method;
+    const LValue *operands[2] = { &a, &b };
+    for (const LValue *op : operands) {
+        LTable *mt = metatable_of(L, *op);
+        if (mt) {
+            LValue method = mt->gettable(key);
+            if (method.type != Nil && method.type == Function)
+                return method;
+        }
     }
     return LValue();
 }

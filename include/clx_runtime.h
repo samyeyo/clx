@@ -177,6 +177,12 @@ constexpr auto Thread = ValueType::Thread;
 static constexpr const char *VALUE_TYPE_NAMES[]
     = { "nil", "boolean", "integer", "number", "string", "table", "function", "userdata", "thread" };
 
+//------------------ type_meta_index: slot in LState::type_metatables for a value's type; stock has a
+//------------------ single metatable for all numbers, so integers and floats share one slot
+CLX_INLINE size_t type_meta_index(ValueType t) {
+    return static_cast<size_t>(t == ValueType::Double ? ValueType::Int64 : t);
+}
+
 //------------------ clx_format_double: Lua-compatible number-to-string
 CLX_INLINE_HOT int clx_format_double(char *buf, size_t cap, double v) {
     int n = std::snprintf(buf, cap, "%.15g", v);
@@ -454,9 +460,8 @@ struct MultiValue {
     alignas(clx::LValue) unsigned char inline_buf[INLINE_CAP * sizeof(clx::LValue)];
 
     CLX_INLINE_HOT clx::LValue *inline_ptr() { return reinterpret_cast<clx::LValue *>(inline_buf); }
-    CLX_INLINE_HOT const clx::LValue *inline_ptr() const {
-        return reinterpret_cast<const clx::LValue *>(inline_buf);
-    }
+
+    CLX_INLINE_HOT const clx::LValue *inline_ptr() const { return reinterpret_cast<const clx::LValue *>(inline_buf); }
 
     MultiValue() = default;
 
@@ -637,6 +642,60 @@ struct MultiValue {
     void overflow_init(const clx::LValue *arr, size_t c);
 };
 
+//------------------ DynArgs: argument list for a call whose size is only known at run time, because its
+//------------------ last argument expands to every value it returns. Sixteen slots are inline; a longer
+//------------------ expansion (table.unpack of a big array, a vararg pass-through) grows into the heap
+//------------------ instead of writing past a fixed stack buffer.
+class DynArgs {
+public:
+    static constexpr size_t INLINE_CAP = 16;
+
+    DynArgs()
+        : buf_(reinterpret_cast<clx::LValue *>(inline_buf_)) { }
+
+    DynArgs(const DynArgs &) = delete;
+    DynArgs &operator=(const DynArgs &) = delete;
+
+    ~DynArgs() {
+        if (buf_ != reinterpret_cast<clx::LValue *>(inline_buf_))
+            ::operator delete[](static_cast<void *>(buf_));
+    }
+
+    CLX_INLINE_HOT void push_back(const clx::LValue &v) {
+        if (n_ == cap_)
+            grow();
+        new (buf_ + n_) clx::LValue(v);
+        ++n_;
+    }
+
+    CLX_INLINE_HOT clx::LValue &operator[](size_t i) { return buf_[i]; }
+
+    CLX_INLINE_HOT const clx::LValue &operator[](size_t i) const { return buf_[i]; }
+
+    CLX_INLINE_HOT size_t size() const { return n_; }
+
+    CLX_INLINE_HOT clx::LValue *data() { return buf_; }
+
+    CLX_INLINE_HOT const clx::LValue *data() const { return buf_; }
+
+private:
+    CLX_INLINE_COLD void grow() {
+        size_t new_cap = cap_ * 2;
+        clx::LValue *nb = static_cast<clx::LValue *>(::operator new[](new_cap * sizeof(clx::LValue)));
+        for (size_t i = 0; i < n_; ++i)
+            new (nb + i) clx::LValue(buf_[i]);
+        if (buf_ != reinterpret_cast<clx::LValue *>(inline_buf_))
+            ::operator delete[](static_cast<void *>(buf_));
+        buf_ = nb;
+        cap_ = new_cap;
+    }
+
+    alignas(clx::LValue) unsigned char inline_buf_[INLINE_CAP * sizeof(clx::LValue)];
+    clx::LValue *buf_;
+    size_t n_ = 0;
+    size_t cap_ = INLINE_CAP;
+};
+
 struct LState;
 struct LTable;
 struct RootRange;
@@ -659,6 +718,16 @@ CLX_INLINE_HOT LUpValue make_upvalue(const LValue &val) {
     return std::make_shared<LValue>(val);
 }
 
+//------------------ as_cell: accepts a shared upvalue as-is and boxes a plain value; used by closure
+//------------------ create_closure keep-alive lists, whose entries may resolve to either declaration
+CLX_INLINE_HOT LUpValue as_cell(const LUpValue &cell) {
+    return cell;
+}
+
+CLX_INLINE_HOT LUpValue as_cell(const LValue &val) {
+    return make_upvalue(val);
+}
+
 //------------------ C function type: single-indirection type erasure over a
 //------------------ shared box. Replaces std::function (which costs ~5 libstdc++
 //------------------ erasure frames per call and per frame unwound per throw) with one
@@ -678,31 +747,33 @@ struct CFunctionType {
     CFunctionType(CFunctionType &&) = default;
     CFunctionType &operator=(const CFunctionType &) = default;
     CFunctionType &operator=(CFunctionType &&) = default;
+
     CFunctionType &operator=(std::nullptr_t) {
         box.reset();
         invoke = nullptr;
         type = nullptr;
         return *this;
     }
-    template<typename F,
-        typename = std::enable_if_t<!std::is_same_v<std::decay_t<F>, CFunctionType>>>
+
+    template<typename F, typename = std::enable_if_t<!std::is_same_v<std::decay_t<F>, CFunctionType>>>
     CFunctionType(F &&f) {
         assign(std::forward<F>(f));
     }
-    template<typename F,
-        typename = std::enable_if_t<!std::is_same_v<std::decay_t<F>, CFunctionType>>>
+
+    template<typename F, typename = std::enable_if_t<!std::is_same_v<std::decay_t<F>, CFunctionType>>>
     CFunctionType &operator=(F &&f) {
         assign(std::forward<F>(f));
         return *this;
     }
+
     CLX_INLINE_HOT MultiValue operator()(LState *L, const LValue *args, size_t count) const {
         if (!invoke)
             throw std::bad_function_call();
         return invoke(box.get(), L, args, count);
     }
-    explicit operator bool() const {
-        return invoke != nullptr;
-    }
+
+    explicit operator bool() const { return invoke != nullptr; }
+
     template<typename T> const T *target() const {
         if (type && *type == typeid(T))
             return static_cast<const T *>(box.get());
@@ -746,6 +817,9 @@ struct LUserdata : public LHeader {
     LTable *metatable;
     size_t size;
     LUserdata *meta_next = nullptr;
+    //------------------ debug library uservalues (one slot, stock's default nuvalue); marked by the
+    //------------------ collector alongside the metatable and released with the block
+    LValue uservalue;
 
     void *data() { return reinterpret_cast<char *>(this) + sizeof(LUserdata); }
 };
@@ -803,6 +877,11 @@ struct LTableExt {
     LTableInlineCache *ic = nullptr;
     LTable *metatable = nullptr;
     LTable *meta_next = nullptr;
+    //------------------ __mode cache: 1 = weak keys, 2 = weak values, valid while the metatable and its
+    //------------------ hash version are unchanged (re-read by the collector otherwise)
+    uint8_t weak_mode = 0;
+    uint32_t weak_stamp = 0;
+    LTable *weak_meta = nullptr;
 };
 
 struct LTable : public LHeader {
@@ -866,6 +945,7 @@ CLX_INLINE_HOT size_t table_array_prefix_len(LTable *t) {
     t->array_lim = h;
     return h;
 }
+
 //------------------ Layout note (#4): hot array fields (array, array_types, array_size, array_cap, array_lim)
 //------------------ directly follow the 16-byte LHeader, so header + hot fields occupy the first 64-byte cache
 //------------------ line on the t[i] fast path. (No offsetof assert: LTable is non-standard-layout via LHeader.)
@@ -1334,6 +1414,12 @@ struct LThread : public LHeader {
     bool is_main;
     bool has_error;
     bool close_requested;
+    //---------- self_close: coroutine.close() was called on this running thread; its pending error is discarded
+    bool self_close = false;
+    //---------- closing: the thread is unwinding because it is being closed
+    bool closing = false;
+    //---------- close_error: a __close raised while closing; yield_args holds that error
+    bool close_error = false;
     size_t stack_bytes = 0;
     bool fiber_started = false;
     bool pre_unwind = false;
@@ -1379,6 +1465,9 @@ inline const CallSite *default_call_site() {
 
 struct LState {
     LTable *_G;
+    //------------------ the package table created by the package library: stock's require() reads it
+    //------------------ through a closure upvalue, so rebinding the global `package` does not affect it
+    LTable *package_table = nullptr;
     LCFunction *current_func = nullptr;
     LHeader *allocated_objects;
     //------------------ Old-generation chain: minors promote here and never walk it (see gc_minor sweep),
@@ -1392,6 +1481,10 @@ struct LState {
     LTable *free_tables_big = nullptr;
     LCFunction *free_functions;
     LThread *free_threads = nullptr;
+    //------------------ Close-error slot: a __close raised while an error unwinds replaces the pending
+    //------------------ error for the remaining closers and for the catch site that finally reports it
+    LValue close_err;
+    bool has_close_err = false;
     size_t free_fiber_threads = 0;
     LTable *metatabled_tables = nullptr;
     //------------------ Metatabled-userdata list: files register here so the protect passes can shield
@@ -1428,6 +1521,17 @@ struct LState {
     void (*luaapi_thread_reset)(LState *, void *) = nullptr;
 
     size_t object_count;
+    //------------------ lowest safe address of the C stack currently executing: a call found below it
+    //------------------ raises "stack overflow"; null disables the check (unknown stack, e.g. a Windows fiber)
+    char *stack_low = nullptr;
+    //------------------ deferred "stack overflow": a fast body returns a sentinel instead of throwing, so
+    //------------------ the recursive lambda stays free of unwind machinery; the site is raised at the
+    //------------------ enclosing _fast_<name> wrapper, the first point where the result re-enters Lua
+    const CallSite *stack_overflow_site = nullptr;
+    //------------------ live nesting of coroutine resumes (each one is a real C stack frame)
+    size_t resume_depth = 0;
+    //------------------ non-zero while a runtime C function calls back into Lua without a continuation
+    size_t c_yield_blocked = 0;
     size_t gc_bytes_threshold;
     size_t allocated_bytes = 0;
 
@@ -1446,6 +1550,7 @@ struct LState {
     LValue str_index;
     LValue str_newindex;
     LValue str_gc;
+    LValue str_mode;
     LValue str_call;
     LValue str_close;
     LValue str_pairs;
@@ -1473,6 +1578,11 @@ struct LState {
     LValue str_name;
     LValue str_ipairs;
     LTable *string_metatable;
+    //------------------ Type metatables set through debug.setmetatable (indexed by ValueType; the string
+    //------------------ slot is unused, strings keep string_metatable). Marked as roots by the collector.
+    LTable *type_metatables[9] = { nullptr };
+    //------------------ debug.getregistry table: a plain table, rooted by the collector
+    LTable *registry = nullptr;
 
     StringPool string_pool;
 
@@ -1486,7 +1596,16 @@ struct LState {
 
     CLX_INLINE const char *intern_string(const char *str, size_t len) {
         uint64_t h = len <= 8 ? swar_hash_8(str, len) : wyhash_str(str, len);
-        return string_pool.intern(str, len, h);
+        size_t before = string_pool.count;
+        const char *res = string_pool.intern(str, len, h);
+        //------------------ interned strings live in a permanent arena, so a new one really is new heap:
+        //------------------ account it (collectgarbage("count") stays truthful) and let it pace the
+        //------------------ collector like stock, whose strings are ordinary garbage
+        if (string_pool.count != before) {
+            allocated_bytes += len + 32;
+            gc_maybe_collect();
+        }
+        return res;
     }
 
     CLX_INLINE const char *intern_string(const std::string &s) { return intern_string(s.data(), s.size()); }
@@ -1547,6 +1666,10 @@ struct LState {
             }
         }
     }
+
+    //------------------ call_chain_depth: nested __call dispatches being resolved for one call, so a
+    //------------------ chain or a cycle past stock's limit raises instead of recursing away the stack
+    int call_chain_depth = 0;
 
     enum class GCPhase : uint8_t { Idle, Sweeping };
     enum class GCMode : uint8_t { Incremental, Generational };
@@ -1658,21 +1781,32 @@ struct LState {
     void gc_minor();
     void collect_garbage();
     void collect_garbage_full();
-    bool gc_step();
+    void gc_collect_mark();
+    bool gc_step(int64_t size = -1);
     void invoke_gc_finalizer(LUserdata *ud, const char *tag);
     bool is_allocated_userdata(const LHeader *h) const;
 
+    //------------------ MultiValue overflow slots. Blocks are never moved or shrunk: a live MultiValue's
+    //------------------ overflow pointer must stay valid while a *later* MultiValue allocates from the same
+    //------------------ state (a realloc here used to invalidate every outstanding overflow pointer, so a
+    //------------------ pcall collecting a million unpacked values corrupted them). Each block carries the
+    //------------------ previous block pointer in its header; all blocks are released with the state.
     LValue *overflow_heap = nullptr;
+    void *overflow_blocks = nullptr;
     size_t overflow_heap_cap = 0;
     size_t overflow_heap_used = 0;
 
     CLX_INLINE_HOT LValue *alloc_overflow(size_t n) {
         if (overflow_heap_used + n > overflow_heap_cap) {
             size_t new_cap = overflow_heap_cap ? overflow_heap_cap * 2 : 64;
-            while (new_cap < overflow_heap_used + n)
+            while (new_cap < n)
                 new_cap *= 2;
-            overflow_heap = static_cast<LValue *>(std::realloc(overflow_heap, new_cap * sizeof(LValue)));
+            char *raw = static_cast<char *>(std::malloc(sizeof(void *) + new_cap * sizeof(LValue)));
+            *reinterpret_cast<void **>(raw) = overflow_blocks;
+            overflow_blocks = raw;
+            overflow_heap = reinterpret_cast<LValue *>(raw + sizeof(void *));
             overflow_heap_cap = new_cap;
+            overflow_heap_used = 0;
         }
         LValue *result = overflow_heap + overflow_heap_used;
         overflow_heap_used += n;
@@ -1685,7 +1819,7 @@ struct LState {
     //------------------ Shrinking the struct shifts every later heap allocation; that changed table
     //------------------ inline-cache cache-set aliasing and slowed nbody ~1.7x. The reserve keeps the
     //------------------ established allocation layout. Re-validate hot table benchmarks before resizing.
-    char _layout_reserve[256] = {};
+    char _layout_reserve[256] = { };
 };
 
 //------------------ RootRange — one GC-root frame. The constructor links it into the owning thread's chain, the
@@ -1842,11 +1976,52 @@ struct FrameGuard {
 //------------------ gc_walk_roots — mark every root in one thread's frame chain
 template<typename F> static void gc_walk_roots(RootRange *head, F &&mark) {
     for (RootRange *r = head; r; r = r->prev) {
-        for (size_t i = 0; i < r->n; ++i)
-            mark(r->base[i]);
-        for (size_t i = 0; i < r->ind_n; ++i)
-            mark(*r->ind[i]);
+        //------------------ a frame whose destructor was skipped (the VM unwinds with longjmp) or whose
+        //------------------ storage was dropped by an abandoned coroutine is garbage: never dereference it
+        if (r->n > (size_t(1) << 24) || r->ind_n > (size_t(1) << 24))
+            continue;
+        //------------------ a frame whose storage was dropped by an abandoned coroutine can keep a null
+        //------------------ base/alias: skipping it is right, there is no slot to mark
+        if (r->base)
+            for (size_t i = 0; i < r->n; ++i)
+                mark(r->base[i]);
+        if (r->ind)
+            for (size_t i = 0; i < r->ind_n; ++i)
+                if (r->ind[i])
+                    mark(*r->ind[i]);
     }
+}
+
+//------------------ throw_stack_overflow: raises stock's "stack overflow" error
+[[noreturn]] void throw_stack_overflow(LState *L);
+
+//------------------ raise_stack_overflow: raises the error a fast body deferred when it reached stack_low
+[[noreturn]] void raise_stack_overflow(LState *L);
+
+//------------------ stack_probe: current stack pointer, read without an addressable local so the guard
+//------------------ never forces a frame (and a saved frame pointer) into every generated function
+CLX_INLINE_HOT char *stack_probe() {
+#if defined(__x86_64__) || defined(__i386__)
+    char *probe;
+    __asm__ volatile("mov %%rsp, %0" : "=r"(probe));
+    return probe;
+#elif defined(__aarch64__)
+    char *probe;
+    __asm__ volatile("mov %0, sp" : "=r"(probe));
+    return probe;
+#else
+    char probe_local;
+    return &probe_local;
+#endif
+}
+
+//------------------ stack_check: raises "stack overflow" before the C stack is exhausted. Lua recursion
+//------------------ is native recursion here, so the deepest call frame must be refused while every frame
+//------------------ still has room to unwind. Called only from the call wrappers and native-direct bodies,
+//------------------ which call throwing runtime helpers anyway; fast bodies record a deferred overflow instead.
+CLX_INLINE_HOT void stack_check(LState *L) {
+    if (L->stack_low && stack_probe() < L->stack_low)
+        throw_stack_overflow(L);
 }
 
 //------------------ Rooted call wrappers: alias func + args into a RootRange around a call; RAII unlinks it
@@ -1855,11 +2030,13 @@ template<typename F> static void gc_walk_roots(RootRange *head, F &&mark) {
 //------------------ range would double-root the same values on every call.
 CLX_INLINE_HOT MultiValue call_function_rooted(
     LState *L, const LValue &func, const LValue *args, size_t count, const CallSite *cs) {
+    stack_check(L);
     return call_function(L, func, args, count, cs);
 }
 
 CLX_INLINE_HOT MultiValue call_direct_rooted(
     LState *L, const LValue &func, const LValue *args, size_t count, const CallSite *cs) {
+    stack_check(L);
     return call_direct(L, func, args, count, cs);
 }
 
@@ -1869,6 +2046,7 @@ CLX_INLINE_HOT MultiValue call_direct_rooted(
 template<typename CFunc>
 CLX_INLINE_HOT MultiValue call_cfunc_rooted_impl(
     LState *L, CFunc f, const LValue *args, size_t count, const CallSite *cs) {
+    stack_check(L);
     RootRange rr(L, const_cast<LValue *>(args), args ? count : 0);
     if (cs && cs->line > 0)
         L->current_site = cs;
@@ -1889,6 +2067,7 @@ CLX_INLINE_HOT MultiValue call_cfunc_rooted(
 //------------------ Roots args[] across the direct-call fast path; else collections inside the callee miss survivor-aged args.
 CLX_INLINE_HOT MultiValue call_cfunc_direct(
     LState *L, const CFunctionType &f, const LValue *args, size_t count, const CallSite *cs = default_call_site()) {
+    stack_check(L);
     RootRange rr(L, const_cast<LValue *>(args), args ? count : 0);
     if (cs && cs->line > 0)
         L->current_site = cs;
@@ -1903,6 +2082,7 @@ CLX_INLINE_HOT MultiValue call_cfunc_direct(
 template<typename F>
 CLX_INLINE_HOT MultiValue call_cfunc_direct(
     LState *L, const F &f, const LValue *args, size_t count, const CallSite *cs = default_call_site()) {
+    stack_check(L);
     RootRange rr(L, const_cast<LValue *>(args), args ? count : 0);
     if (cs && cs->line > 0)
         L->current_site = cs;
@@ -2313,16 +2493,24 @@ public:
     }
 };
 
+//------------------ Unwinding error: error object of the exception in flight, so a <close> guard
+//------------------ destroyed by unwinding hands it to __close the way stock does
+extern thread_local const clx::LValue *clx_unwinding_error;
+
 //------------------ Runtime error exception
 class LRuntimeException : public std::exception {
 public:
     clx::LValue error_obj;
     mutable std::string cached_msg;
+    const clx::LValue *prev_unwinding;
 
     LRuntimeException(clx::LValue err);
     virtual ~LRuntimeException() noexcept;
     virtual const char *what() const noexcept override;
 };
+
+//------------------ CoroutineClose: unwinds a self-closing coroutine; not an LRuntimeException, so pcall cannot catch it
+struct CoroutineClose { };
 
 //------------------ Interns an error message raised without an LState
 const char *intern_error_message(const char *msg, size_t len);
@@ -2339,8 +2527,7 @@ const char *intern_error_message(const char *msg, size_t len);
 //------------------ Raises "attempt to index a nil value" (or the actual type name) like Lua does.
 //------------------ Carries file:line like stock (missing-module indexing under --minimal hits this).
 [[noreturn]] CLX_INLINE_COLD void throw_index_error(LState *L, const LValue &obj) {
-    std::string msg = file_line_prefix(L) + std::string("attempt to index a ")
-        + VALUE_TYPE_NAMES[static_cast<size_t>(obj.type)] + " value";
+    std::string msg = file_line_prefix(L) + "attempt to index a " + stock_type_name(obj) + " value";
     throw LRuntimeException(LValue(intern_error_message(msg.data(), msg.size())));
 }
 
@@ -2484,16 +2671,44 @@ CLX_INLINE_HOT LValue arena_create_table(LState *L, FuncArena *a, size_t asize, 
     return LValue(Table, t);
 }
 
+//------------------ close_metamethod: the __close metamethod a value carries (through its own or its
+//------------------ type's metatable), or nil when it has none
+CLX_INLINE_HOT LValue close_metamethod(LState *L, const LValue &v) {
+    LTable *mt = nullptr;
+    if (v.type == Table)
+        mt = tbl_metatable(static_cast<LTable *>(v.as_pointer()));
+    else if (v.type == UserData)
+        mt = static_cast<LUserdata *>(v.as_pointer())->metatable;
+    else if (v.type == String)
+        mt = L->string_metatable;
+    else
+        mt = L->type_metatables[type_meta_index(v.type)];
+    return mt ? mt->gettable(L->str_close) : LValue();
+}
+
 //------------------ Close guard (for <close> vars)
 struct CloseGuard {
     LState *L;
     LValue val;
 
-    CLX_INLINE_HOT CloseGuard(LState *state, const LValue &v)
+    //------------------ stock rejects a non-closable value at the declaration itself (nil and false are
+    //------------------ accepted and simply never closed), so the check belongs before the variable is used
+    CLX_INLINE_HOT CloseGuard(LState *state, const LValue &v, const char *name)
         : L(state)
-        , val(v) { }
+        , val(v) {
+        if (v.type == Nil || (v.type == Boolean && !v.as_bool()))
+            return;
+        if (close_metamethod(state, v).type != Nil)
+            return;
+        std::string msg = file_line_prefix(state);
+        msg += "variable '";
+        msg += name;
+        msg += "' got a non-closable value";
+        throw_runtime_error(msg);
+    }
 
-    ~CloseGuard();
+    //---------- noexcept(false): a __close that closes its own coroutine must let CoroutineClose escape
+    ~CloseGuard() noexcept(false);
 };
 
 //------------------ Reads a variable from environment table (direct LValue)
@@ -2513,15 +2728,38 @@ CLX_INLINE_HOT void set_env_var(LState *L, const LValue &env, const char *name, 
 //------------------ Keyed environment access: same raw gettable/settable as get/set_env_var but with a
 //------------------ pre-interned (codegen-pooled cstr_) key, so hot global reads/writes skip per-execution interning.
 CLX_INLINE_HOT LValue get_env_var_key(LState *L, const LValue &env, const LValue &key) {
+    //------------------ a local `_ENV` may hold a non-table (a chunk can bind `local _ENV = 11`), which
+    //------------------ must report the stock indexing error instead of dereferencing the payload
+    if (env.type != ValueType::Table) [[unlikely]]
+        throw_index_error(L, env);
     LTable *t = static_cast<LTable *>(env.val.payload.ptr);
-    (void)L;
+    //------------------ a metatabled _ENV (setmetatable({}, {__index = _G})) resolves through the
+    //------------------ metamethod like any other table access; the plain path skips that check's cost
+    if (t->ext && t->ext->metatable)
+        return t->get_value(L, key);
     return t->gettable(key);
 }
 
 CLX_INLINE_HOT void set_env_var_key(LState *L, const LValue &env, const LValue &key, const LValue &val) {
+    if (env.type != ValueType::Table) [[unlikely]]
+        throw_index_error(L, env);
     LTable *t = static_cast<LTable *>(env.val.payload.ptr);
-    (void)L;
+    if (t->ext && t->ext->metatable) {
+        t->set_value(L, key, val);
+        return;
+    }
     t->settable(key, val);
+}
+
+//------------------ set_env_value: `_ENV = v` — the emitted fast/native lambdas capture the enclosing
+//------------------ _ENV by copy, which makes it const inside a non-mutable operator(), so the write goes
+//------------------ through a const_cast (the closure object itself is never const).
+CLX_INLINE void set_env_value(LState *L, const LValue &env, const LValue &val) {
+    const_cast<LValue &>(env) = val;
+    //------------------ a table _ENV also becomes the running chunk's environment, which is what keeps
+    //------------------ it alive (the C++ local is invisible to the GC) and what nested chunks inherit
+    if (val.type == ValueType::Table && L->current_func)
+        L->current_func->env = static_cast<LTable *>(val.as_pointer());
 }
 
 //------------------ Int64 fast-path arithmetic. These mirror clx::add/sub/mul/mod using Lua 5.5 semantics.
@@ -2535,6 +2773,19 @@ CLX_INLINE_HOT int64_t int_sub(int64_t a, int64_t b) {
 
 CLX_INLINE_HOT int64_t int_mul(int64_t a, int64_t b) {
     return static_cast<int64_t>(static_cast<uint64_t>(a) * static_cast<uint64_t>(b));
+}
+
+//------------------ Bitwise operators over exact int64 (stock luaV_band/bor/bxor; result is always integer)
+CLX_INLINE_HOT int64_t int_band(int64_t a, int64_t b) {
+    return a & b;
+}
+
+CLX_INLINE_HOT int64_t int_bor(int64_t a, int64_t b) {
+    return a | b;
+}
+
+CLX_INLINE_HOT int64_t int_bxor(int64_t a, int64_t b) {
+    return static_cast<int64_t>(static_cast<uint64_t>(a) ^ static_cast<uint64_t>(b));
 }
 
 //------------------ int_neg: unary minus over exact int64 (wraps, like Lua: -mininteger == mininteger).
@@ -2585,8 +2836,13 @@ CLX_INLINE_HOT int64_t shr_int(int64_t x, int64_t y) {
 }
 
 //------------------ Lua floor modulo for the floating fast path (%): result takes the sign of the divisor.
+//------------------ fmod first (stock luai_nummod): a - floor(a/b)*b loses every bit of the remainder
+//------------------ once a/b exceeds 2^53, so 2^56 % 3 came out 4 instead of 1.
 CLX_INLINE_HOT double fmod_floor(double a, double b) {
-    return a - std::floor(a / b) * b;
+    double m = std::fmod(a, b);
+    if ((m > 0) ? (b < 0) : (m < 0 && b > 0))
+        m += b;
+    return m;
 }
 
 //------------------ LValue-returning int arithmetic: Lua integer semantics — wrap on overflow, stay Int64
@@ -2777,14 +3033,81 @@ CLX_INLINE_HOT double coerce_number(LState *L, const LValue &v) {
         file_line_prefix(L) + "attempt to perform arithmetic on a " + VALUE_TYPE_NAMES[idx] + " value")));
 }
 
+//------------------ Float to integer conversion (integral + in int64 range)
+CLX_INLINE bool flt_to_integer(double d, int64_t &out) {
+    if (std::floor(d) == d && d >= -9.223372036854775808e18 && d < 9.223372036854775808e18) {
+        out = static_cast<int64_t>(d);
+        return true;
+    }
+    return false;
+}
+
+//------------------ Equality of an int64 and a double: exact, like luaV_equalobj (no float rounding)
+CLX_INLINE bool int_eq_float(int64_t i, double f) {
+    if (i >= -9007199254740992LL && i <= 9007199254740992LL && f >= -9007199254740992.0 && f <= 9007199254740992.0)
+        [[likely]]
+        return static_cast<double>(i) == f;
+    int64_t fi;
+    return flt_to_integer(f, fi) && fi == i;
+}
+
+//------------------ Exact int/float ordering (stock LTintfloat/LEintfloat/... family)
+CLX_INLINE bool int_fits_float(int64_t i) {
+    return i >= -9007199254740992LL && i <= 9007199254740992LL;
+}
+
+CLX_INLINE bool int_lt_float(int64_t i, double f) {
+    if (int_fits_float(i)) [[likely]]
+        return static_cast<double>(i) < f;
+    if (std::isnan(f))
+        return false;
+    double c = std::ceil(f);
+    if (c >= -9.223372036854775808e18 && c < 9.223372036854775808e18)
+        return i < static_cast<int64_t>(c);
+    return f > 0;
+}
+
+CLX_INLINE bool int_le_float(int64_t i, double f) {
+    if (int_fits_float(i)) [[likely]]
+        return static_cast<double>(i) <= f;
+    if (std::isnan(f))
+        return false;
+    double fl = std::floor(f);
+    if (fl >= -9.223372036854775808e18 && fl < 9.223372036854775808e18)
+        return i <= static_cast<int64_t>(fl);
+    return f > 0;
+}
+
+CLX_INLINE bool float_lt_int(double f, int64_t i) {
+    if (int_fits_float(i)) [[likely]]
+        return f < static_cast<double>(i);
+    if (std::isnan(f))
+        return false;
+    double fl = std::floor(f);
+    if (fl >= -9.223372036854775808e18 && fl < 9.223372036854775808e18)
+        return static_cast<int64_t>(fl) < i;
+    return f < 0;
+}
+
+CLX_INLINE bool float_le_int(double f, int64_t i) {
+    if (int_fits_float(i)) [[likely]]
+        return f <= static_cast<double>(i);
+    if (std::isnan(f))
+        return false;
+    double c = std::ceil(f);
+    if (c >= -9.223372036854775808e18 && c < 9.223372036854775808e18)
+        return static_cast<int64_t>(c) <= i;
+    return f < 0;
+}
+
 //------------------ Equality with metamethod fallback
 CLX_INLINE_HOT LValue eq(LState *L, const LValue &a, const LValue &b) {
     if (a.type != ValueType::Double && a.type == b.type && a.val.payload.u64 == b.val.payload.u64)
         return LValue(true);
     if (a.type == ValueType::Int64 && b.type == ValueType::Double)
-        return LValue(static_cast<double>(a.val.payload.i64) == b.val.payload.f64);
+        return LValue(int_eq_float(a.val.payload.i64, b.val.payload.f64));
     if (a.type == ValueType::Double && b.type == ValueType::Int64)
-        return LValue(a.val.payload.f64 == static_cast<double>(b.val.payload.i64));
+        return LValue(int_eq_float(b.val.payload.i64, a.val.payload.f64));
     if (a.type == b.type) {
         if (a.type == ValueType::Int64)
             return LValue(a.val.payload.i64 == b.val.payload.i64);
@@ -2803,11 +3126,15 @@ CLX_INLINE_HOT LValue eq(LState *L, const LValue &a, const LValue &b) {
                                                       : static_cast<LUserdata *>(a.as_pointer())->metatable;
             LTable *mt_b = (b.type == ValueType::Table) ? tbl_metatable(static_cast<LTable *>(b.as_pointer()))
                                                         : static_cast<LUserdata *>(b.as_pointer())->metatable;
-            if (mt && mt == mt_b) {
-                LValue mm = mt->gettable(L->str_eq);
-                if (mm.type != ValueType::Nil)
-                    return LValue(call_bin_metamethod(L, a, b, L->str_eq, "__eq").as_bool());
-            }
+            //------------------ stock tries the first operand's __eq and falls back to the second's,
+            //------------------ regardless of whether the two metatables are the same object
+            LValue mm;
+            if (mt)
+                mm = mt->gettable(L->str_eq);
+            if (mm.type == ValueType::Nil && mt_b)
+                mm = mt_b->gettable(L->str_eq);
+            if (mm.type != ValueType::Nil)
+                return LValue(call_bin_metamethod(L, a, b, L->str_eq, "__eq").as_bool());
         }
         return LValue(a.val.payload.ptr == b.val.payload.ptr);
     }
@@ -2831,15 +3158,6 @@ CLX_INLINE_HOT LValue eq(LState *L, const Integer &a, const Integer &b) {
     return LValue(a.v == b.v);
 }
 
-//------------------ Float to integer conversion (integral + in int64 range)
-CLX_INLINE bool flt_to_integer(double d, int64_t &out) {
-    if (std::floor(d) == d && d >= -9.223372036854775808e18 && d < 9.223372036854775808e18) {
-        out = static_cast<int64_t>(d);
-        return true;
-    }
-    return false;
-}
-
 //------------------ Full-parse a numeric string (Lua tonumber/toint semantics: l_str2d).
 CLX_INLINE bool parse_num_string(const char *s, double &out) {
     const char *pmode = std::strpbrk(s, ".xXnN");
@@ -2855,14 +3173,29 @@ CLX_INLINE bool parse_num_string(const char *s, double &out) {
         if (!(p[0] == '0' && (p[1] == 'x' || p[1] == 'X')))
             return false;
     }
+    auto ok_tail = [](const char *e) {
+        while (std::isspace(static_cast<unsigned char>(*e)))
+            e++;
+        return *e == '\0';
+    };
     char *end;
     errno = 0;
     double d = std::strtod(s, &end);
-    if (end == s)
+    if (end != s && ok_tail(end)) {
+        out = d;
+        return true;
+    }
+
+    //------------------ stock l_str2d retries with the locale decimal point when the numeral uses '.'
+    const char *pdot = std::strchr(s, '.');
+    const char *decpt = std::localeconv()->decimal_point;
+    if (!pdot || !decpt || decpt[0] == '.' || decpt[0] == '\0')
         return false;
-    while (std::isspace(static_cast<unsigned char>(*end)))
-        end++;
-    if (*end != '\0')
+    std::string retry(s);
+    retry[static_cast<size_t>(pdot - s)] = decpt[0];
+    errno = 0;
+    d = std::strtod(retry.c_str(), &end);
+    if (end == retry.c_str() || !ok_tail(end))
         return false;
     out = d;
     return true;
@@ -2891,8 +3224,8 @@ CLX_INLINE bool to_integer(const LValue &v, int64_t &out) {
 
 //------------------ forerror: stock luaG_forerror message shape
 CLX_INLINE_COLD void forerror(LState *L, const LValue &v, const char *what) {
-    throw_runtime_error(file_line_prefix(L) + "bad 'for' " + what + " (number expected, got "
-        + stock_type_name(v) + ")");
+    throw_runtime_error(
+        file_line_prefix(L) + "bad 'for' " + what + " (number expected, got " + stock_type_name(v) + ")");
 }
 
 //------------------ forlimit_tointeger: stock luaV_tointeger with F2Ifloor/F2Iceil for 'for' limits
@@ -2939,6 +3272,20 @@ CLX_INLINE bool forlimit(LState *L, int64_t init, const LValue &lim, int64_t ste
         p = INT64_MIN;
     }
     return (step > 0 ? init > p : init < p);
+}
+
+//------------------ forcount: stock's integer-loop iteration count — computed in unsigned arithmetic so
+//------------------ a wrapping step can never re-enter the loop after the last iteration
+CLX_INLINE uint64_t forcount(int64_t init, int64_t limit, int64_t step) {
+    if (step > 0) {
+        uint64_t count = static_cast<uint64_t>(limit) - static_cast<uint64_t>(init);
+        if (step != 1)
+            count /= static_cast<uint64_t>(step);
+        return count;
+    }
+    uint64_t count = static_cast<uint64_t>(init) - static_cast<uint64_t>(limit);
+    count /= static_cast<uint64_t>(-(step + 1)) + 1u;
+    return count;
 }
 
 //------------------ to_integer_bitwise: stock trygetinteger — Int64 and exact doubles only (F2Ieq).
@@ -3003,13 +3350,16 @@ CLX_INLINE LValue bnot(LState *L, const LValue &a) {
 }
 
 CLX_INLINE LValue lt(LState *L, const LValue &a, const LValue &b) {
-    if (a.type == ValueType::Int64 && b.type == ValueType::Int64) [[likely]]
-        return LValue(a.val.payload.i64 < b.val.payload.i64);
-    if ((a.type == ValueType::Double || a.type == ValueType::Int64)
-        && (b.type == ValueType::Double || b.type == ValueType::Int64)) [[likely]] {
-        double l = (a.type == ValueType::Int64) ? static_cast<double>(a.val.payload.i64) : a.val.payload.f64;
-        double r = (b.type == ValueType::Int64) ? static_cast<double>(b.val.payload.i64) : b.val.payload.f64;
-        return LValue(l < r);
+    if (a.type == ValueType::Int64) [[likely]] {
+        if (b.type == ValueType::Int64)
+            return LValue(a.val.payload.i64 < b.val.payload.i64);
+        if (b.type == ValueType::Double)
+            return LValue(int_lt_float(a.val.payload.i64, b.val.payload.f64));
+    } else if (a.type == ValueType::Double) [[likely]] {
+        if (b.type == ValueType::Double)
+            return LValue(a.val.payload.f64 < b.val.payload.f64);
+        if (b.type == ValueType::Int64)
+            return LValue(float_lt_int(a.val.payload.f64, b.val.payload.i64));
     }
     if (a.type == ValueType::String && b.type == ValueType::String)
         return a < b;
@@ -3017,13 +3367,16 @@ CLX_INLINE LValue lt(LState *L, const LValue &a, const LValue &b) {
 }
 
 CLX_INLINE LValue le(LState *L, const LValue &a, const LValue &b) {
-    if (a.type == ValueType::Int64 && b.type == ValueType::Int64) [[likely]]
-        return LValue(a.val.payload.i64 <= b.val.payload.i64);
-    if ((a.type == ValueType::Double || a.type == ValueType::Int64)
-        && (b.type == ValueType::Double || b.type == ValueType::Int64)) [[likely]] {
-        double l = (a.type == ValueType::Int64) ? static_cast<double>(a.val.payload.i64) : a.val.payload.f64;
-        double r = (b.type == ValueType::Int64) ? static_cast<double>(b.val.payload.i64) : b.val.payload.f64;
-        return LValue(l <= r);
+    if (a.type == ValueType::Int64) [[likely]] {
+        if (b.type == ValueType::Int64)
+            return LValue(a.val.payload.i64 <= b.val.payload.i64);
+        if (b.type == ValueType::Double)
+            return LValue(int_le_float(a.val.payload.i64, b.val.payload.f64));
+    } else if (a.type == ValueType::Double) [[likely]] {
+        if (b.type == ValueType::Double)
+            return LValue(a.val.payload.f64 <= b.val.payload.f64);
+        if (b.type == ValueType::Int64)
+            return LValue(float_le_int(a.val.payload.f64, b.val.payload.i64));
     }
     if (a.type == ValueType::String && b.type == ValueType::String)
         return a <= b;
@@ -3123,14 +3476,14 @@ CLX_INLINE LValue mod(LState *L, const LValue &a, const LValue &b) {
         && (b.type == ValueType::Double || b.type == ValueType::Int64)) {
         double l = (a.type == ValueType::Int64) ? static_cast<double>(a.val.payload.i64) : a.val.payload.f64;
         double r = (b.type == ValueType::Int64) ? static_cast<double>(b.val.payload.i64) : b.val.payload.f64;
-        return LValue(l - std::floor(l / r) * r);
+        return LValue(fmod_floor(l, r));
     }
     int64_t li, ri;
     if (to_integer_coerced(a, li) && to_integer_coerced(b, ri))
         return LValue(int_floor_mod(L, li, ri));
     double l, r;
     if (a.to_number(l) && b.to_number(r))
-        return LValue(l - std::floor(l / r) * r);
+        return LValue(fmod_floor(l, r));
     return call_bin_metamethod(L, a, b, L->str_mod, "__mod");
 }
 
@@ -3197,18 +3550,49 @@ CLX_INLINE LValue logical_not(const LValue &a) {
 //------------------ make_string_pooled: forward declaration for concat_multi below
 CLX_INLINE LValue make_string_pooled(LState *L, const char *s, size_t len);
 
+//------------------ concat_plain: a value the concat operator converts itself (no metamethod)
+CLX_INLINE bool concat_plain(const LValue &v) {
+    return v.type == ValueType::String || v.type == ValueType::Int64 || v.type == ValueType::Double;
+}
+
+//------------------ concat_plain_text: the text stock's concat contributes for a plain value
+CLX_INLINE std::string concat_plain_text(const LValue &v) {
+    if (v.type == ValueType::String)
+        return std::string(v.as_string(), v.string_len());
+    if (v.type == ValueType::Int64)
+        return std::to_string(v.val.payload.i64);
+    char buf[64];
+    int n = clx_format_double(buf, sizeof(buf), v.val.payload.f64);
+    return std::string(buf, static_cast<size_t>(n));
+}
+
 //------------------ Multi-value concat (string builder fast path)
 CLX_INLINE_COLD LValue concat_multi(LState *L, const LValue *args, size_t count) {
+    //------------------ stock folds a chain containing a non-plain value right to left: each pair
+    //------------------ either concatenates text or goes through __concat, and the result replaces
+    //------------------ the pair, so the leftmost operand still meets the folded tail
+    for (size_t i = 0; i < count; ++i) {
+        if (concat_plain(args[i]))
+            continue;
+        LValue acc = args[count - 1];
+        RootRange acc_root(L, &acc, 1);
+        for (size_t k = count - 1; k-- > 0;) {
+            if (concat_plain(args[k]) && concat_plain(acc)) {
+                std::string s = concat_plain_text(args[k]) + concat_plain_text(acc);
+                acc = make_string_pooled(L, s.data(), s.size());
+            } else {
+                acc = call_bin_metamethod(L, args[k], acc, L->str_concat, "__concat");
+            }
+        }
+        return acc;
+    }
+
     if (count <= 8) [[likely]] {
         const char *ptrs[8];
         size_t lens[8];
         char nbuf[8][32];
         size_t total_len = 0;
         for (size_t i = 0; i < count; ++i) {
-            if (args[i].type != ValueType::String && args[i].type != ValueType::Int64
-                && args[i].type != ValueType::Double) {
-                return call_bin_metamethod(L, args[i], args[i == count - 1 ? i - 1 : i + 1], L->str_concat, "__concat");
-            }
             if (args[i].type == ValueType::String) {
                 ptrs[i] = args[i].as_string();
                 lens[i] = args[i].string_len();
@@ -3255,10 +3639,6 @@ CLX_INLINE_COLD LValue concat_multi(LState *L, const LValue *args, size_t count)
     std::vector<std::string> parts;
     parts.reserve(count);
     for (size_t i = 0; i < count; ++i) {
-        if (args[i].type != ValueType::String && args[i].type != ValueType::Int64
-            && args[i].type != ValueType::Double) {
-            return call_bin_metamethod(L, args[i], args[i == count - 1 ? i - 1 : i + 1], "__concat");
-        }
         parts.push_back(args[i].to_string(L));
         total_len += parts.back().length();
     }
@@ -3380,6 +3760,8 @@ CLX_INLINE_HOT void upval_store(const LUpValue &cell, const LValue &v) {
     gc_barrier_cell(cell, v);
 }
 
+CLX_INLINE_HOT bool table_has_newindex(LState *L, const LTable *t);
+
 //------------------ Table write with __newindex fallback
 CLX_INLINE void table_set(LState *L, const LValue &obj, const LValue &key, const LValue &val) {
     LTable *mt = nullptr;
@@ -3388,7 +3770,10 @@ CLX_INLINE void table_set(LState *L, const LValue &obj, const LValue &key, const
         LTable *t = static_cast<LTable *>(obj.as_pointer());
         if (key.type == ValueType::Int64) {
             int64_t k = key.val.payload.i64;
-            if (static_cast<uint64_t>(k - 1) < t->array_cap) {
+            //------------------ stock stores raw only for a key the table already holds: an absent (nil)
+            //------------------ slot must reach __newindex through set_value, which decides by presence
+            if (static_cast<uint64_t>(k - 1) < t->array_cap
+                && (t->array_types[k - 1] != Nil || !table_has_newindex(L, t))) {
                 gc_barrier_table(L, t, val);
                 if (static_cast<uint64_t>(k - 1) > t->array_size)
                     table_fill_gap(t, t->array_size, static_cast<size_t>(k) - 1);
@@ -3402,7 +3787,8 @@ CLX_INLINE void table_set(LState *L, const LValue &obj, const LValue &key, const
         } else if (key.type == ValueType::Double) {
             double d = key.val.payload.f64;
             int64_t idx = static_cast<int64_t>(d);
-            if (d == static_cast<double>(idx) && static_cast<uint64_t>(idx - 1) < t->array_cap) {
+            if (d == static_cast<double>(idx) && static_cast<uint64_t>(idx - 1) < t->array_cap
+                && (t->array_types[idx - 1] != Nil || !table_has_newindex(L, t))) {
                 gc_barrier_table(L, t, val);
                 if (static_cast<uint64_t>(idx - 1) > t->array_size)
                     table_fill_gap(t, t->array_size, static_cast<size_t>(idx) - 1);
@@ -3457,7 +3843,10 @@ CLX_INLINE LValue table_get_int(LState *L, const LValue &obj, size_t idx) {
         LUserdata *ud = static_cast<LUserdata *>(obj.as_pointer());
         mt = ud->metatable;
     } else {
-        throw_index_error(L, obj);
+        //------------------ primitive types index through their type metatable when one is set
+        mt = L->type_metatables[type_meta_index(obj.type)];
+        if (!mt)
+            throw_index_error(L, obj);
     }
 
     if (!mt)
@@ -3476,12 +3865,28 @@ CLX_INLINE LValue table_get_int(LState *L, const LValue &obj, size_t idx) {
     return LValue();
 }
 
+//------------------ table_has_newindex: the table has a metatable that defines __newindex, so an
+//------------------ absent key must not be stored into the array part directly
+CLX_INLINE_HOT bool table_has_newindex(LState *L, const LTable *t) {
+    return t->ext && t->ext->metatable && t->ext->metatable->gettable(L->str_newindex).type != ValueType::Nil;
+}
+
 //------------------ Integer-key table write (fast path)
 CLX_INLINE void table_set_int(LState *L, const LValue &obj, size_t idx, const LValue &val) {
     LValue key_val = LValue(static_cast<int64_t>(idx));
 
     if (obj.type == ValueType::Table) {
         LTable *t = static_cast<LTable *>(obj.as_pointer());
+        //------------------ stock fires __newindex for a key the table does not hold, so a table that
+        //------------------ has the metamethod cannot take the raw array-slot store: the slot may be
+        //------------------ an as-yet absent key. Present keys still write directly in set_value.
+        if (t->ext && t->ext->metatable) [[unlikely]] {
+            LValue newindex = t->ext->metatable->gettable(L->str_newindex);
+            if (newindex.type != ValueType::Nil) {
+                t->set_value(L, key_val, val);
+                return;
+            }
+        }
         if (idx - 1 < t->array_cap) {
             gc_barrier_table(L, t, val);
             if (idx - 1 > t->array_size)
@@ -3610,9 +4015,42 @@ MultiValue str_pack(LState *, const LValue *, size_t);
 MultiValue str_packsize(LState *, const LValue *, size_t);
 MultiValue str_unpack(LState *, const LValue *, size_t);
 
+//------------------ array_key: the array slot a numeric key addresses, or 0 when the key is not a
+//------------------ positive integer (non-integral, non-positive, or too large for a slot index)
+CLX_INLINE_HOT size_t array_key(double n) {
+    if (!(n >= 1.0) || n >= 9007199254740992.0)
+        return 0;
+    size_t k = static_cast<size_t>(n);
+    return (static_cast<double>(k) == n) ? k : 0;
+}
+
+//------------------ key_of: the table key a numeric value stands for — an integral value becomes the
+//------------------ integer key, anything else stays the float key
+CLX_INLINE_HOT LValue key_of(double n) {
+    int64_t i = 0;
+    if (flt_to_integer(n, i))
+        return LValue(i);
+    return LValue(n);
+}
+
+//------------------ sync_int_view: the double view of an int-flagged local must stay the exact value of
+//------------------ its int64 shadow — dividing the rounded view drifts past 2^53, and a later float
+//------------------ operand (x + 0.0) would then see a number that is off by one
+CLX_INLINE_HOT double sync_int_view(double d, int64_t exact, bool flag) {
+    return flag ? static_cast<double>(exact) : d;
+}
+
+//------------------ presize_hint: element-count hint from a loop bound; a descending loop's limit is not
+//------------------ an element count, so it presizes to zero, and an absurd bound is capped (hint only)
+CLX_INLINE size_t presize_hint(double n) {
+    if (!(n > 0.0))
+        return 0;
+    return (n > 1048576.0) ? static_cast<size_t>(1048576) : static_cast<size_t>(n);
+}
+
 //------------------ package module (package.cpp); package_searchpath resolves module names against path templates
 std::string package_searchpath(LState *L, const char *name, size_t name_len, const char *path, size_t path_len,
-    char sep, char rep, std::string *tried);
+    const char *sep, size_t sep_len, const char *rep, size_t rep_len, std::string *tried);
 
 MultiValue table_concat(LState *, const LValue *, size_t);
 MultiValue table_insert(LState *, const LValue *, size_t);
@@ -3620,6 +4058,8 @@ MultiValue table_remove(LState *, const LValue *, size_t);
 MultiValue table_sort(LState *, const LValue *, size_t);
 MultiValue table_pack(LState *, const LValue *, size_t);
 MultiValue table_unpack(LState *, const LValue *, size_t);
+//------------------ vararg_expand: `...` of a named vararg table ("function f(...t)")
+MultiValue vararg_expand(LState *, const LValue &);
 MultiValue table_move(LState *, const LValue *, size_t);
 MultiValue table_create(LState *, const LValue *, size_t);
 
@@ -3695,6 +4135,7 @@ void luastd_table(LState *L);
 void luastd_os(LState *L);
 void luastd_utf8(LState *L);
 void luastd_io(LState *L);
+void luastd_debug(LState *L);
 
 //------------------ Gets a global variable
 LValue get_global(LState *L, const char *name);
