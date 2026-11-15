@@ -969,6 +969,27 @@
             color: transparent;
         }
 
+        .landing-hero-badge {
+            margin-top: 18px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 13px;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            background: var(--accent-soft);
+            font-size: 0.8125rem;
+            color: var(--text-muted);
+            width: fit-content;
+        }
+        .landing-hero-badge::before {
+            content: "";
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--accent);
+        }
+
         .landing-hero-sub {
             margin-top: 20px;
             max-width: 480px;
@@ -1083,6 +1104,7 @@
         @media (max-width: 900px) {
             .landing-hero { grid-template-columns: 1fr; gap: 44px; text-align: center; }
             .landing-hero-sub { margin-left: auto; margin-right: auto; }
+            .landing-hero-badge { margin-left: auto; margin-right: auto; }
             .landing-hero-actions { justify-content: center; }
         }
         @media (max-width: 480px) {
@@ -1144,6 +1166,7 @@
         <div class="landing-hero">
             <div class="landing-hero-text">
                 <h1 class="landing-heading">Compile Lua into <span class="landing-heading-accent">fast, standalone</span> native executables.</h1>
+                <p class="landing-hero-badge">Passes the official Lua 5.5.1 test suite</p>
                 <p class="landing-hero-sub">No interpreter. No virtual machine. No dependencies.<br>Just a native binary, faster than standard Lua.</p>
                 <div class="landing-hero-actions">
                     <button id="landing-cta" class="landing-cta" type="button">
@@ -1231,7 +1254,7 @@
                     <span class="bright">clx</span> is an ahead-of-time (AOT) Lua compiler and runtime for Linux, macOS, and Windows. It turns your Lua 5.5 scripts into fast, self-contained native binaries — no interpreter, no virtual machine, and no runtime dependencies to ship. Build once, and your program runs instantly, anywhere.
                 </p>
                 <p style="margin-bottom: 1.5rem;">
-                    Everything you already know about Lua just works: the full language, standard libraries, and coroutines. When you need to load code at runtime, clx's optional dynamic mode will run a Lua virtual machine alongside your compiled code, giving you the best of both worlds: speed and flexibility.
+                    Everything you already know about Lua just works: the full language, standard libraries, and coroutines — validated against the official Lua 5.5.1 test suite, where compiled binaries pass all 29 test files. When you need to load code at runtime, clx's optional dynamic mode will run a Lua virtual machine alongside your compiled code, giving you the best of both worlds: speed and flexibility.
                     <br><br>Your existing Lua C modules work as they are — no code changes needed - or build faster ones with the stackless clx API.
                 </p>
                 <div class="about-grid">
