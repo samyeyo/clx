@@ -112,9 +112,7 @@ LState::LState()
 //------------------ the deepest frame's own locals and for unwinding
 char *main_stack_low() {
 #if defined(_WIN32)
-    ULONG_PTR low = 0, high = 0;
-    GetCurrentThreadStackLimits(&low, &high);
-    return low ? reinterpret_cast<char *>(low + (64 * 1024)) : nullptr;
+    return windows_stack_low();
 #elif defined(__APPLE__)
     size_t size = pthread_get_stacksize_np(pthread_self());
     char *high = static_cast<char *>(pthread_get_stackaddr_np(pthread_self()));
@@ -617,6 +615,7 @@ LState *open_bare(int argc, char *argv[]) {
     main_th->status = THREAD_RUNNING;
 #if defined(_WIN32)
     main_th->fiber = ConvertThreadToFiber(nullptr);
+    main_th->stack_low = L->stack_low;
 #elif (defined(__APPLE__) || defined(__linux__)) && (defined(__aarch64__) || defined(__x86_64__))
     clx_coro_save(&main_th->ctx);
 #else

@@ -35,6 +35,7 @@ LThread::LThread()
     next = nullptr;
 #if defined(_WIN32)
     fiber = nullptr;
+    stack_low = nullptr;
 #else
     stack_memory = nullptr;
 #endif
@@ -71,7 +72,9 @@ static inline void coro_switch_to(LThread *from, LThread *to) {
     //------------------ own "stack overflow" threshold, and the caller's is restored on the way back
     LState *Ls = to->state;
     char *saved_low = Ls->stack_low;
-#if !defined(_WIN32)
+#if defined(_WIN32)
+    Ls->stack_low = to->stack_low;
+#else
     Ls->stack_low = to->stack_memory ? to->stack_memory + (64 * 1024) : nullptr;
 #endif
 #if defined(_WIN32)
@@ -160,6 +163,8 @@ static void fiber_entry_impl(LThread *t) {
 static void WINAPI fiber_trampoline(LPVOID param) {
     LThread *t = static_cast<LThread *>(param);
     t->fiber_started = true;
+    t->stack_low = clx::windows_stack_low();
+    t->state->stack_low = t->stack_low;
     for (;;) {
         fiber_entry_impl(t);
     }
@@ -216,6 +221,12 @@ LValue create_thread(LState *L, const LValue &func, double stack_size) {
         if (t->fiber) {
             L->free_fiber_threads--;
             t->pre_unwind = pooled_suspended;
+            //------------------ a suspended fiber resumes its old body where it yielded, and that body may
+            //------------------ yield again or run arbitrary code; requesting a close makes its next yield
+            //------------------ unwind it, so the new function starts from a known point instead of the old
+            //------------------ body's values leaking out as this coroutine's yield
+            if (pooled_suspended)
+                t->close_requested = true;
         } else {
             t->fiber = CreateFiber(static_cast<SIZE_T>(stack_size), fiber_trampoline, t);
         }

@@ -439,6 +439,19 @@ private:
 
 static_assert(sizeof(LValue) == 16, "LValue must be 16 bytes");
 
+//------------------ collate_is_c: true while string ordering may compare bytes instead of strcoll
+bool collate_is_c();
+
+//------------------ ctype_is_c: true while character classes and case folding may assume ASCII
+bool ctype_is_c();
+
+//------------------ refresh_locale_flags: re-reads LC_COLLATE/LC_CTYPE, called after os.setlocale succeeds
+void refresh_locale_flags();
+
+//------------------ locale_generation: bumped whenever the locale changed, so cached locale-dependent tables
+//------------------ ('%a'-style character classes) know when to rebuild
+uint64_t locale_generation();
+
 //------------------ Integer: bare integer operand for hot comparison fast paths (no boxing)
 struct Integer {
     int64_t v;
@@ -1433,6 +1446,9 @@ struct LThread : public LHeader {
     RootRange *top_root = nullptr;
 #if defined(_WIN32)
     LPVOID fiber;
+    //---------- stack_low: this fiber's own stack-overflow threshold, cached because the fiber's limits can
+    //---------- only be read from inside it; a switch installs it in LState for the stack being entered
+    char *stack_low = nullptr;
 #elif (defined(__APPLE__) || defined(__linux__)) && (defined(__aarch64__) || defined(__x86_64__))
     CoroutineContext ctx;
     char *stack_memory;
@@ -1522,7 +1538,8 @@ struct LState {
 
     size_t object_count;
     //------------------ lowest safe address of the C stack currently executing: a call found below it
-    //------------------ raises "stack overflow"; null disables the check (unknown stack, e.g. a Windows fiber)
+    //------------------ raises "stack overflow"; null disables the check (unknown stack, e.g. a fiber that
+    //------------------ has not started yet)
     char *stack_low = nullptr;
     //------------------ deferred "stack overflow": a fast body returns a sentinel instead of throwing, so
     //------------------ the recursive lambda stays free of unwind machinery; the site is raised at the
@@ -2001,7 +2018,9 @@ template<typename F> static void gc_walk_roots(RootRange *head, F &&mark) {
 //------------------ stack_probe: current stack pointer, read without an addressable local so the guard
 //------------------ never forces a frame (and a saved frame pointer) into every generated function
 CLX_INLINE_HOT char *stack_probe() {
-#if defined(__x86_64__) || defined(__i386__)
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+    return reinterpret_cast<char *>(_AddressOfReturnAddress());
+#elif defined(__x86_64__) || defined(__i386__)
     char *probe;
     __asm__ volatile("mov %%rsp, %0" : "=r"(probe));
     return probe;
@@ -2014,6 +2033,17 @@ CLX_INLINE_HOT char *stack_probe() {
     return &probe_local;
 #endif
 }
+
+//------------------ windows_stack_low: lowest safe address of the current C stack. The bottom of the region
+//------------------ the running stack belongs to plus a reserve for the deepest frame and unwinding.
+#if defined(_WIN32)
+CLX_INLINE_HOT char *windows_stack_low(size_t reserve = 64 * 1024) {
+    MEMORY_BASIC_INFORMATION mbi;
+    if (VirtualQuery(stack_probe(), &mbi, sizeof(mbi)) == 0 || !mbi.AllocationBase)
+        return nullptr;
+    return static_cast<char *>(mbi.AllocationBase) + reserve;
+}
+#endif
 
 //------------------ stack_check: raises "stack overflow" before the C stack is exhausted. Lua recursion
 //------------------ is native recursion here, so the deepest call frame must be refused while every frame
@@ -2844,6 +2874,11 @@ CLX_INLINE_HOT double fmod_floor(double a, double b) {
         m += b;
     return m;
 }
+
+//------------------ Lua floor division for the floating fast path (//). The emitted code calls this instead of
+//------------------ writing floor(a / b) inline: MSVC rejects a constant division by zero (C2124) even when the
+//------------------ literals come from out-of-range Lua expressions such as 1 // 0.0, which must yield inf
+CLX_INLINE_HOT double floor_div(double a, double b) { return std::floor(a / b); }
 
 //------------------ LValue-returning int arithmetic: Lua integer semantics — wrap on overflow, stay Int64
 CLX_INLINE_HOT LValue int_add_lv(int64_t a, int64_t b) {
@@ -4031,6 +4066,15 @@ CLX_INLINE_HOT LValue key_of(double n) {
     if (flt_to_integer(n, i))
         return LValue(i);
     return LValue(n);
+}
+
+//------------------ key_of_native: the table key a numeric value stands for when its integer
+//------------------ subtype is tracked at runtime - an Int64 flag keeps the exact int64 even past
+//------------------ 2^53 where the double view has already rounded
+CLX_INLINE_HOT LValue key_of_native(double n, bool is_int, int64_t i) {
+    if (is_int)
+        return LValue(i);
+    return key_of(n);
 }
 
 //------------------ sync_int_view: the double view of an int-flagged local must stay the exact value of

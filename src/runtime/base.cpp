@@ -49,6 +49,29 @@ clx::MultiValue lua_pcall(clx::LState *L, const clx::LValue *args, size_t count)
 //------------------ handler, so a chain that keeps erroring ends at LUAI_MAXCCALLS with 'C stack overflow'
 static constexpr int kMaxMessageHandlerDepth = 200;
 
+//------------------ stack allowance for the handler: stock resets its C-call counter before running a
+//------------------ message handler, so the handler always has room. The pointer guard can be met with the
+//------------------ stack pointer already at its lowest frame (MSVC's unwinder leaves it at the throw
+//------------------ depth), which would refuse the handler's very first call. The top-level handler call
+//------------------ runs with the guard shifted down by a fixed allowance; a handler that overflows inside
+//------------------ that allowance reports LUA_ERRERR the same way stock's exhausted C stack does.
+static constexpr size_t kHandlerStackAllowance = 24 * 1024;
+
+//------------------ HandlerStackAllowance: shifts the guard down for the duration of one handler call
+struct HandlerStackAllowance {
+    clx::LState *L;
+    char *saved_low;
+
+    HandlerStackAllowance(clx::LState *state, int depth)
+        : L(state)
+        , saved_low(state->stack_low) {
+        if (depth == 0 && saved_low && clx::stack_probe() < saved_low)
+            L->stack_low = clx::stack_probe() - kHandlerStackAllowance;
+    }
+
+    ~HandlerStackAllowance() { L->stack_low = saved_low; }
+};
+
 static bool run_message_handler(
     clx::LState *L, clx::LValue handler, clx::LValue err_obj, clx::MultiValue &out, int depth = 0) {
     //------------------ stock re-enters the handler until its C-call limit, then reports LUA_ERRERR;
@@ -59,6 +82,7 @@ static bool run_message_handler(
         out = clx::MultiValue(clx::string(L, "error in error handling"));
         return false;
     }
+    HandlerStackAllowance allowance(L, depth);
     try {
         out = clx::call_function_rooted(
             L, handler, &err_obj, 1, L->current_site ? L->current_site : clx::default_call_site());
