@@ -23,6 +23,13 @@ namespace clx {
 
 void (*clx_mark_vm_proxies_ptr)(LState *clx_L, LState::GCStack &wl) = nullptr;
 void (*clx_free_vm_proxy_ptr)(LState *clx_L, LHeader *proxy) = nullptr;
+void (*clx_table_release_ptr)(LState *L, LTable *t) = nullptr;
+
+//------------------ release_table -- drop a converted table's VM-side reference before it is recycled
+static void release_table(LState *L, LTable *t) {
+    if (clx_table_release_ptr && t->ext && t->ext->vm_origin >= 0)
+        clx_table_release_ptr(L, t);
+}
 
 static void clx_trigger_gc(LState *L, LTable *t) {
     LTable *mt = tbl_metatable(t);
@@ -68,6 +75,7 @@ static void gc_dispose_swept(LState *L, LHeader *curr) {
             clx_free_vm_proxy_ptr(L, curr);
     } else if (curr->type == static_cast<uint8_t>(Table)) {
         LTable *t = static_cast<LTable *>(curr);
+        release_table(L, t);
         if (tbl_metatable(t)) {
             t->flags |= LFLAG_FINALIZABLE;
             t->next = L->gc_finalizable;
@@ -101,6 +109,14 @@ static void gc_dispose_swept(LState *L, LHeader *curr) {
         f->gc_cells.clear();
         f->next = L->free_functions;
         L->free_functions = f;
+        //------------------ the object keeps its bytes on free_functions, so the charge taken at creation
+        //------------------ has to come off here: leaving it on drifted allocated_bytes up by a closure's
+        //------------------ size per dead closure, which inflated the collection threshold until the
+        //------------------ collector effectively stopped running in closure-heavy code
+        if (sizeof(LCFunction) > L->allocated_bytes)
+            L->allocated_bytes = 0;
+        else
+            L->allocated_bytes -= sizeof(LCFunction);
     } else if (curr->type == static_cast<uint8_t>(Thread)) {
         LThread *th = static_cast<LThread *>(curr);
         size_t th_bytes = sizeof(LThread) + th->stack_bytes;
@@ -162,6 +178,7 @@ static void gc_drain_finalizables(LState *L) {
             L->allocated_bytes = 0;
         else
             L->allocated_bytes -= t_bytes;
+        release_table(L, t);
         table_free_array(t->array, t->array_types, t->small_array);
         if (t->ext) {
             table_free_hash(t->ext->entries, t->ext->hash_bitmap);
