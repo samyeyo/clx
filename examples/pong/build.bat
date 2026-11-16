@@ -20,13 +20,10 @@ if not "%DIALECT%"=="MSVC" if not "%DIALECT%"=="ClangCL" (
     set "GUIFLAGS=-mwindows -luser32 -lgdi32 -lopengl32"
 )
 
-:: Build sokol module if needed
-if not exist "..\sokol\%MODULE%" (
-    echo Building sokol_clx module...
-    pushd ..\sokol
-    call build.bat
-    popd
-)
+:: Build sokol module when missing or stale (the script decides; it is a no-op when fresh)
+pushd ..\sokol
+call build.bat
+popd
 if not exist "..\sokol\%MODULE%" (
     echo Error: ..\sokol\%MODULE% was not built
     exit /b 1

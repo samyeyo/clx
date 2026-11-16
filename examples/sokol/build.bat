@@ -24,6 +24,16 @@ set ISMSVC=0
 if "%DIALECT%"=="MSVC" set ISMSVC=1
 if "%DIALECT%"=="ClangCL" set ISMSVC=1
 
+:: A module built against older clx headers does not link (or corrupts memory), so the
+:: sources, the sokol headers and clx's headers all have to be older than the module
+set MODOUT=sokol_clx.a
+if "!ISMSVC!"=="1" set MODOUT=sokol_clx.lib
+call :stale
+if "!STALE!"=="0" (
+    echo %MODOUT% is up to date
+    exit /b 0
+)
+
 echo Compiling sokol_clx module with %DIALECT%...
 
 if "!ISMSVC!"=="1" (
@@ -58,4 +68,13 @@ if "!ISMSVC!"=="1" (
     del sokol_clx.obj
     echo Created sokol_clx.a
 )
+exit /b 0
+
+:stale
+:: STALE=1 when the module has to be rebuilt: missing, or older than any input
+set STALE=1
+if not exist "%MODOUT%" exit /b 0
+powershell -NoProfile -Command "$m=(Get-Item '%MODOUT%').LastWriteTime; $src=@('sokol_clx.cpp','..\..\include\clx.h','..\..\include\clx_runtime.h') | ForEach-Object { Get-Item $_ }; $h=Get-ChildItem -Recurse -File -Path sokol -Include *.h,*.c,*.cpp; exit [int]([bool](@($src) + @($h) | Where-Object { $_.LastWriteTime -gt $m }))"
+if errorlevel 1 exit /b 0
+set STALE=0
 exit /b 0
