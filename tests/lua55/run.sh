@@ -69,6 +69,9 @@ prepare_work() {
     mkdir -p "$WORK" || return 1
     cp -R "$HERE"/. "$WORK"/ || return 1
     rm -f "$WORK/run.sh" "$WORK/run.bat" "$WORK/run.ps1" "$WORK/harness.lua"
+    #------------------ upstream asks for a libs/P1 subdirectory before the full suite: attrib.lua
+    #------------------ writes sub-package modules into it, and git cannot carry an empty directory
+    mkdir -p "$WORK/libs/P1"
 }
 
 #------------------ build_generator: compile harness.lua, which emits the per-test source files

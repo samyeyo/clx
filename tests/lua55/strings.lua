@@ -95,9 +95,9 @@ assert(string.byte("hi", 2, 1) == nil)
 assert(string.char() == "")
 assert(string.char(0, 255, 0) == "\0\255\0")
 assert(string.char(0, string.byte("\xe4"), 0) == "\0\xe4\0")
-assert(string.char(string.byte("\xe4l\0ï¿½u", 1, -1)) == "\xe4l\0ï¿½u")
-assert(string.char(string.byte("\xe4l\0ï¿½u", 1, 0)) == "")
-assert(string.char(string.byte("\xe4l\0ï¿½u", -10, 100)) == "\xe4l\0ï¿½u")
+assert(string.char(string.byte("\xe4l\0óu", 1, -1)) == "\xe4l\0óu")
+assert(string.char(string.byte("\xe4l\0óu", 1, 0)) == "")
+assert(string.char(string.byte("\xe4l\0óu", -10, 100)) == "\xe4l\0óu")
 
 checkerror("out of range", string.char, 256)
 checkerror("out of range", string.char, -1)
@@ -107,7 +107,7 @@ checkerror("out of range", string.char, math.mininteger)
 assert(string.upper("ab\0c") == "AB\0C")
 assert(string.lower("\0ABCc%$") == "\0abcc%$")
 assert(string.rep('teste', 0) == '')
-assert(string.rep('tï¿½s\00tï¿½', 2) == 'tï¿½s\0tï¿½tï¿½s\000tï¿½')
+assert(string.rep('tés\00tê', 2) == 'tés\0têtés\000tê')
 assert(string.rep('', 10) == '')
 
 do
@@ -203,8 +203,8 @@ do  -- tests for '%p' format
   end -- clx: disabled -- end of long-string identity block
 end
 
-local x = '"ï¿½lo"\n\\'
-assert(string.format('%q%s', x, x) == '"\\"ï¿½lo\\"\\\n\\\\""ï¿½lo"\n\\')
+local x = '"ílo"\n\\'
+assert(string.format('%q%s', x, x) == '"\\"ílo\\"\\\n\\\\""ílo"\n\\')
 assert(string.format('%q', "\0") == [["\0"]])
 assert(load(string.format('return %q', x))() == x)
 x = "\0\1\0023\5\0009"
@@ -426,36 +426,34 @@ assert(table.concat(a, ",", 2) == "b,c")
 assert(table.concat(a, ",", 3) == "c")
 assert(table.concat(a, ",", 4) == "")
 
-if not _port then
 
-  local locales = { "ptb", "pt_BR.iso88591", "ISO-8859-1" }
-  local function trylocale (w)
-    for i = 1, #locales do
-      if os.setlocale(locales[i], w) then
-        print(string.format("'%s' locale set to '%s'", w, locales[i]))
-        return locales[i]
-      end
+local locales = { "ptb", "pt_BR.iso88591", "ISO-8859-1" }
+local function trylocale (w)
+  for i = 1, #locales do
+    if os.setlocale(locales[i], w) then
+      print(string.format("'%s' locale set to '%s'", w, locales[i]))
+      return locales[i]
     end
-    print(string.format("'%s' locale not found", w))
-    return false
   end
-
-  if trylocale("collate")  then
-    assert("alo" < "ï¿½lo" and "ï¿½lo" < "amo")
-  end
-
-  if trylocale("ctype") then
-    assert(string.gsub("ï¿½ï¿½ï¿½ï¿½ï¿½", "%a", "x") == "xxxxx")
-    assert(string.gsub("ï¿½ï¿½ï¿½ï¿½", "%l", "x") == "xï¿½xï¿½")
-    assert(string.gsub("ï¿½ï¿½ï¿½ï¿½", "%u", "x") == "ï¿½xï¿½x")
-    assert(string.upper"ï¿½ï¿½ï¿½{xuxu}ï¿½ï¿½o" == "ï¿½ï¿½ï¿½{XUXU}ï¿½ï¿½O")
-  end
-
-  os.setlocale("C")
-  assert(os.setlocale() == 'C')
-  assert(os.setlocale(nil, "numeric") == 'C')
-
+  print(string.format("'%s' locale not found", w))
+  return false
 end
+
+if trylocale("collate")  then
+  assert("alo" < "álo" and "álo" < "amo")
+end
+
+if trylocale("ctype") then
+  assert(string.gsub("áéíóú", "%a", "x") == "xxxxx")
+  assert(string.gsub("áÁéÉ", "%l", "x") == "xÁxÉ")
+  assert(string.gsub("áÁéÉ", "%u", "x") == "áxéx")
+  assert(string.upper"áÁé{xuxu}ção" == "ÁÁÉ{XUXU}ÇÃO")
+end
+
+os.setlocale("C")
+assert(os.setlocale() == 'C')
+assert(os.setlocale(nil, "numeric") == 'C')
+
 
 
 -- bug in Lua 5.3.2

@@ -102,6 +102,9 @@ foreach ($f in 'run.sh', 'run.bat', 'run.ps1', 'harness.lua') {
     $p = Join-Path $Work $f
     if (Test-Path $p) { Remove-Item -Force $p }
 }
+#------------------ upstream asks for a libs\P1 subdirectory before the full suite: attrib.lua writes
+#------------------ sub-package modules into it, and git cannot carry an empty directory
+New-Item -ItemType Directory -Force -Path (Join-Path $Work 'libs\P1') | Out-Null
 
 #------------------ compile the generator once; it writes "<prelude + test body>" per test
 function Find-Exe([string]$base) {
@@ -111,14 +114,38 @@ function Find-Exe([string]$base) {
     return $null
 }
 
+#------------------ Invoke-ClxCompile: run the compiler with its streams captured to a file. A bare
+#------------------ native command under $ErrorActionPreference='Stop' aborts on any compiler warning
+#------------------ written to stderr (MSVC emits C4172 here), so the process is driven directly.
+function Invoke-ClxCompile {
+    param([string[]]$CompilerArgs, [string]$Log)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $Clx
+    $psi.Arguments = (($CompilerArgs | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join ' ')
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $p = New-Object System.Diagnostics.Process
+    $p.StartInfo = $psi
+    [void]$p.Start()
+    $outTask = $p.StandardOutput.ReadToEndAsync()
+    $errTask = $p.StandardError.ReadToEndAsync()
+    $p.WaitForExit()
+    Set-Content -Path $Log -Value (($outTask.Result + $errTask.Result) + "`n") -NoNewline
+    return $p.ExitCode
+}
+
 $GenBase = Join-Path $BuildDir 'harness'
 foreach ($old in @($GenBase, "$GenBase.exe")) {
     if (Test-Path $old) { Remove-Item -Force $old }
 }
-& $Clx (Join-Path $Here 'harness.lua') '--dynamic' '-o' $GenBase | Out-Null
+$null = Invoke-ClxCompile -CompilerArgs @((Join-Path $Here 'harness.lua'), '--dynamic', '-o', $GenBase) `
+    -Log (Join-Path $OutDir 'harness.compile.log')
 $Gen = Find-Exe $GenBase
 if (-not $Gen) {
     Write-Host "harness build failed" -ForegroundColor Red
+    Get-Content (Join-Path $OutDir 'harness.compile.log') -Tail 5
     exit 1
 }
 
@@ -136,7 +163,8 @@ function Build-Test([string]$name) {
     foreach ($old in @($bin, "$bin.exe")) {
         if (Test-Path $old) { Remove-Item -Force $old }
     }
-    & $Clx $src '--dynamic' '-o' $bin 2>&1 | Out-File -FilePath (Join-Path $OutDir "$stem.compile.log") -Encoding utf8
+    $null = Invoke-ClxCompile -CompilerArgs @($src, '--dynamic', '-o', $bin) `
+        -Log (Join-Path $OutDir "$stem.compile.log")
     return (Find-Exe $bin)
 }
 
@@ -152,7 +180,8 @@ function Build-All {
     foreach ($old in @($bin, "$bin.exe")) {
         if (Test-Path $old) { Remove-Item -Force $old }
     }
-    & $Clx $src '--dynamic' '-o' $bin 2>&1 | Out-File -FilePath (Join-Path $OutDir 'all.compile.log') -Encoding utf8
+    $null = Invoke-ClxCompile -CompilerArgs @($src, '--dynamic', '-o', $bin) `
+        -Log (Join-Path $OutDir 'all.compile.log')
     return (Find-Exe $bin)
 }
 
