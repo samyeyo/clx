@@ -179,9 +179,9 @@ local function coordinator_run()
     for i, path in ipairs(FILES) do
         local cmd = string.format('%s %q', self, path)
         local rc = os.execute(cmd)
-        -- clx's os.execute returns 0 on success, non-zero on failure,
-        -- matching stock Lua's convention.
-        if rc == 0 then
+        -- os.execute follows stock Lua: true on success (with "exit", 0),
+        -- nil on failure. Older builds returned the raw status code.
+        if rc == true or rc == 0 then
             ok_count = ok_count + 1
             io.write(string.format("[%3d/%3d] %s\n", i, #FILES, "OK   " .. path))
         else
