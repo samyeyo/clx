@@ -157,6 +157,11 @@ extern "C" int clx_vm_native_bridge_call(lua_State *L) {
     }
     LState *clx_L = nb->vm->clx_L();
 
+    //------------------ lua_error() unwinds with longjmp, so the root frames opened below never run their
+    //------------------ destructors: the chain has to be cut back to the head we entered with, or it keeps
+    //------------------ pointing into this abandoned stack frame and a later mark walks garbage
+    RootRange *saved_top_root = clx_L->top_root;
+
     int nargs = lua_gettop(L);
     std::vector<LValue> cv_args(static_cast<size_t>(nargs));
 
@@ -241,6 +246,7 @@ extern "C" int clx_vm_native_bridge_call(lua_State *L) {
             err = clx_L->intern_lvalue(e.what(), std::strlen(e.what()));
         }
         clx_to_vm_value_(clx_L, L, err);
+        clx_L->top_root = saved_top_root;
         return lua_error(L);
     }
 }

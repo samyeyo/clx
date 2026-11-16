@@ -62,6 +62,13 @@ public:
 
     int bridge_cache_registry_ref() const { return bridge_cache_ref_; }
 
+    //------------------ object_index -- clx table mapping a VM object (a table or closure, as its pointer)
+    //------------------ to the clx value already made from it, weakly held: the collector drops an entry
+    //------------------ when its clx value dies, so an object crossing back finds its own wrapper again
+    //------------------ and a dead one is never handed out
+    LValue object_index_get(const void* vm_obj) const;
+    void object_index_put(const void* vm_obj, const LValue& value);
+
     static DynamicVM* find(LState* clx_L);
 
     //------------------ Proxy list maintenance
@@ -85,6 +92,7 @@ private:
     int env_table_ref_;
     int bridge_cache_ref_ = LUA_NOREF;
     int gc_fn_ref_ = LUA_NOREF;
+    LValue object_index_ = LValue();
     bool opened_libs_;
     ProxyNode* proxy_head_ = nullptr;
     BridgeNode* bridge_head_ = nullptr;
@@ -93,6 +101,7 @@ private:
     void build_parking_lot();
     int build_default_env();
     void build_bridge_cache();
+    void build_object_index();
 };
 
 }

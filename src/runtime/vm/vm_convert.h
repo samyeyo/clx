@@ -29,6 +29,8 @@ void clx_register_vm_proxy(LState* clx_L, LHeader* proxy, size_t bytes);
 
 extern void (*clx_free_vm_proxy_ptr)(LState* clx_L, LHeader* proxy);
 
+extern void (*clx_table_release_ptr)(LState* clx_L, LTable* t);
+
 }
 
 extern "C" {

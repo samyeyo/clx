@@ -31,15 +31,26 @@ VMFunction::~VMFunction() {
     }
 }
 
-//------------------ VMFunction::wrap - push aside Lua stack and ref
+//------------------ VMFunction::wrap - push aside Lua stack and ref. A closure clx already wraps maps back
+//------------------ to that wrapper, so the same VM function compares equal across the boundary
 LValue VMFunction::wrap(LState *clx_L, lua_State *L, int idx) {
     DynamicVM *vm = DynamicVM::acquire(clx_L);
+    const void *key = lua_topointer(L, idx);
+
+    if (key) {
+        LValue existing = vm->object_index_get(key);
+        if (existing.type == Function && existing.as_pointer())
+            return existing;
+    }
 
     lua_pushvalue(L, idx);
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
     VMFunction *vf = new VMFunction(vm, ref);
     clx_register_vm_proxy(clx_L, vf, sizeof(VMFunction));
-    return LValue(Function, vf);
+    LValue result(Function, vf);
+    if (key)
+        vm->object_index_put(key, result);
+    return result;
 }
 
 //------------------ VMFunction::from_ref - already a registry ref
@@ -94,6 +105,9 @@ bool vm_pcall_function_(LState *clx_L, int lua_ref, const LValue *args, size_t n
     if (rc != LUA_OK) {
 
         LValue err = clx_vm_capture_error_(clx_L, L);
+        //------------------ the call is over, so give the slots it used back: a stack that is never cut back
+        //------------------ only ever grows, and the VM can shed a grown stack only above its top
+        lua_settop(L, base - 1);
         out = MultiValue(err);
         return false;
     }
@@ -101,17 +115,20 @@ bool vm_pcall_function_(LState *clx_L, int lua_ref, const LValue *args, size_t n
     int top = lua_gettop(L);
     int results = top - (base - 1);
     if (results == 0) {
+        lua_settop(L, base - 1);
         out = MultiValue();
         return true;
     }
     if (results == 1) {
         out = MultiValue(vm_to_clx_value_(clx_L, L, base));
+        lua_settop(L, base - 1);
         return true;
     }
     std::vector<LValue> tmp(static_cast<size_t>(results));
     RootRange tmp_rr(clx_L, tmp.data(), tmp.size());
     for (int i = 0; i < results; ++i)
         tmp[i] = vm_to_clx_value_(clx_L, L, base + i);
+    lua_settop(L, base - 1);
     out = MultiValue(tmp.data(), tmp.size(), clx_L);
     return true;
 }

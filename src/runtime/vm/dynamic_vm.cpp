@@ -37,6 +37,10 @@ void clx_mark_vm_proxies_(LState* clx_L, LState::GCStack& wl);
 //------------------ clx_register_vm_proxy - link a VM proxy into clx GC
 void clx_register_vm_proxy(LState* clx_L, LHeader* proxy, size_t bytes)
 {
+    //------------------ a wrapper is often the only thing a crossing allocates, so it has to drive the
+    //------------------ pacing itself: charging the bytes without ever asking for a collection makes a long
+    //------------------ run of crossings pile up every wrapper and with it every VM reference it pins
+    clx_L->gc_maybe_collect();
     proxy->next = clx_L->allocated_objects;
     clx_L->allocated_objects = proxy;
     clx_L->gc_recent.push(proxy);
@@ -58,6 +62,18 @@ static void clx_free_vm_proxy_(LState* clx_L, LHeader* proxy)
         clx_L->allocated_bytes -= sizeof(VMFunction);
         delete static_cast<VMFunction*>(proxy);
     }
+}
+
+//------------------ clx_table_release_ - drop a converted table's VM registry reference as the table is
+//------------------ recycled, so the VM table it was copied from is collectable once no clx copy pins it
+static void clx_table_release_(LState* clx_L, LTable* t)
+{
+    if (!t->ext || t->ext->vm_origin < 0)
+        return;
+    DynamicVM* vm = DynamicVM::find(clx_L);
+    if (vm && vm->lua_L())
+        luaL_unref(vm->lua_L(), LUA_REGISTRYINDEX, t->ext->vm_origin);
+    t->ext->vm_origin = -1;
 }
 
 namespace {
@@ -89,6 +105,7 @@ DynamicVM::DynamicVM(LState* clx_L)
         build_parking_lot();
         env_table_ref_ = build_default_env();
         build_bridge_cache();
+        build_object_index();
     } catch (...) {
         g_dynamic_vms_.erase(clx_L);
         throw;
@@ -96,6 +113,7 @@ DynamicVM::DynamicVM(LState* clx_L)
 
     clx_mark_vm_proxies_ptr = clx_mark_vm_proxies_;
     clx_free_vm_proxy_ptr = clx_free_vm_proxy_;
+    clx_table_release_ptr = clx_table_release_;
 }
 
 //------------------ DynamicVM::~DynamicVM
@@ -161,6 +179,20 @@ int DynamicVM::build_default_env()
     lua_pushvalue(L_, mirrored_idx);
     lua_pushcclosure(L_, clx_vm_env_newindex, 5);
     lua_setfield(L_, mt_idx, "__newindex");
+
+    //------------------ pairs walks the clx globals, where __newindex keeps every chunk-written name, so a
+    //------------------ walk of _G sees the same names a read does
+    lua_pushlightuserdata(L_, static_cast<void*>(clx_L_));
+    lua_pushlightuserdata(L_, static_cast<void*>(clx_L_->_G));
+    lua_pushinteger(L_, 0);
+    lua_pushcclosure(L_, clx_vm_env_pairs, 3);
+    lua_setfield(L_, mt_idx, "__pairs");
+
+    //------------------ a chunk that asks for the environment's metatable gets a stand-in: stock's _G has
+    //------------------ none, so a test clearing __index on it (errors.lua, to mimic the 'strict' module)
+    //------------------ must not unplug the fallback that reaches clx's globals
+    lua_newtable(L_);
+    lua_setfield(L_, mt_idx, "__metatable");
 
     lua_pushvalue(L_, mt_idx);
     lua_setmetatable(L_, g_idx);
@@ -312,6 +344,46 @@ int DynamicVM::build_env_table(const LValue& preferred)
     return luaL_ref(L_, LUA_REGISTRYINDEX);
 }
 
+//------------------ DynamicVM::build_object_index - create the weak-valued VM-object -> clx-wrapper index
+//------------------ and root it, so an object that crosses back keeps the wrapper clx already made for it
+void DynamicVM::build_object_index()
+{
+    LValue index = clx_L_->create_table();
+    RootRange index_rr(clx_L_, &index, 1);
+    LValue weak = clx_L_->create_table();
+    RootRange weak_rr(clx_L_, &weak, 1);
+    static_cast<LTable*>(weak.as_pointer())->settable(
+        LValue(clx_L_->intern_string("__mode")), LValue::istr("v", 1));
+    LTable* index_tbl = static_cast<LTable*>(index.as_pointer());
+    tbl_set_metatable(index_tbl, static_cast<LTable*>(weak.as_pointer()));
+    //------------------ the collector only runs the weak pass over tables on its metatabled list, so the
+    //------------------ index has to join it or every entry it ever holds would keep its wrapper alive
+    meta_list_add(clx_L_, index_tbl);
+    gc_barrier(clx_L_, index_tbl, weak);
+    clx_L_->root_value(index);
+    object_index_ = index;
+}
+
+//------------------ DynamicVM::object_index_get - the clx value recorded for a VM object, or nil
+LValue DynamicVM::object_index_get(const void* vm_obj) const
+{
+    if (object_index_.type != Table || !object_index_.as_pointer())
+        return LValue();
+    LTable* index = static_cast<LTable*>(object_index_.as_pointer());
+    return index->gettable(LValue(static_cast<int64_t>(reinterpret_cast<uintptr_t>(vm_obj))));
+}
+
+//------------------ DynamicVM::object_index_put - record the clx value made from a VM object
+void DynamicVM::object_index_put(const void* vm_obj, const LValue& value)
+{
+    if (object_index_.type != Table || !object_index_.as_pointer() || !value.is_gc_obj())
+        return;
+    LTable* index = static_cast<LTable*>(object_index_.as_pointer());
+    int64_t key = static_cast<int64_t>(reinterpret_cast<uintptr_t>(vm_obj));
+    gc_barrier_table(clx_L_, index, value);
+    index->settable(LValue(key), value);
+}
+
 //------------------ DynamicVM::build_bridge_cache - weak-valued table keyed by clx callable address,
 //------------------ so the same clx function always maps to the same VM closure (identity and %p)
 void DynamicVM::build_bridge_cache()
@@ -399,6 +471,21 @@ void DynamicVM::release(LState* clx_L)
     auto it = g_dynamic_vms_.find(clx_L);
     if (it == g_dynamic_vms_.end())
         return;
+
+    if (it->second->object_index_.is_gc_obj())
+        clx_L->unroot_value(it->second->object_index_);
+
+    //------------------ every registry reference dies with this VM: clear the origin of each live table so
+    //------------------ a later VM cannot be handed a reference that belongs to the closed one
+    for (int pass = 0; pass < 2; ++pass) {
+        for (LHeader* h = (pass == 0) ? clx_L->allocated_objects : clx_L->old_objects; h; h = h->next) {
+            if (h->type == static_cast<uint8_t>(Table) && !(h->flags & LFLAG_VM_PROXY)) {
+                LTable* t = static_cast<LTable*>(h);
+                if (t->ext)
+                    t->ext->vm_origin = -1;
+            }
+        }
+    }
 
     ProxyNode* n = it->second->proxy_head_;
     while (n) {
