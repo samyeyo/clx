@@ -270,7 +270,23 @@ static MultiValue pack_require(LState *L, const LValue *args, size_t count) {
                 final_val = LValue(true);
                 loaded->settable(mod_key, final_val);
             }
-            return MultiValue(final_val, extra);
+            //------------------ the loader data handed back to the caller reports the module with the
+            //------------------ platform's separator standardized to '/', the way stock's searchpath
+            //------------------ reports a file, so a module's name does not depend on the host; the chunk
+            //------------------ itself still receives the real path as its second vararg
+            LValue reported = extra;
+            if (extra.type == String && CLX_DIRSEP != '/') {
+                std::string name(extra.as_string(), extra.string_len());
+                bool changed = false;
+                for (char &c : name)
+                    if (c == CLX_DIRSEP) {
+                        c = '/';
+                        changed = true;
+                    }
+                if (changed)
+                    reported = LValue(L->intern_string(name.data(), name.size()));
+            }
+            return MultiValue(final_val, reported);
         }
     }
 
@@ -292,7 +308,8 @@ void luastd_package(LState *L) {
     pack->settable(LValue(L->intern_string("preload")), preload_tbl);
     pack->settable(LValue(L->intern_string("path")), LValue(L->intern_string(CLX_LPATH_DEFAULT)));
     pack->settable(LValue(L->intern_string("cpath")), LValue(L->intern_string(CLX_CPATH_DEFAULT)));
-    pack->settable(LValue(L->intern_string("config")), LValue(L->intern_string("/\n;\n?\n!\n-\n")));
+    pack->settable(LValue(L->intern_string("config")),
+        LValue(L->intern_string(CLX_DIRSEP_STR "\n;\n?\n!\n-\n")));
 
     LValue searchers_tbl = L->create_table();
     LTable *searchers = static_cast<LTable *>(searchers_tbl.as_pointer());

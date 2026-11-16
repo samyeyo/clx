@@ -487,6 +487,10 @@ void LState::gc_minor() {
     for (FuncArena *ar = active_arenas; ar; ar = ar->next_active)
         for (LTable *at = ar->tables; at; at = static_cast<LTable *>(at->next))
             at->marked = 0;
+    //------------------ the main thread is on neither GC chain (it is never swept), so no sweep ever
+    //------------------ clears its mark: a stale one would skip the main frame's stashed root chain
+    if (main_thread)
+        main_thread->marked = 0;
 
     auto push_if_needed = [&](const LValue &v) {
         if (!v.is_gc_obj())
@@ -1157,6 +1161,9 @@ void LState::gc_collect_mark() {
     for (FuncArena *ar = active_arenas; ar; ar = ar->next_active)
         for (LTable *at = ar->tables; at; at = static_cast<LTable *>(at->next))
             at->marked = 0;
+    //------------------ the main thread is on neither chain, so the sweep never clears its mark
+    if (main_thread)
+        main_thread->marked = 0;
 
     auto mark_gc = [&](LValue v, uint8_t mark) -> LHeader * { return gc_mark_value(this, v, mark); };
     auto push_if_needed = [&](LValue v) {

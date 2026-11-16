@@ -97,7 +97,8 @@ MultiValue table_concat(LState *L, const LValue *args, size_t count) {
     //------------------ __index; the raw array fast paths below only apply without a metatable
     if (tbl_metatable(list)) {
         StringBuilder mmsb;
-        for (int64_t k = i; k <= j; ++k) {
+        int64_t k = i;
+        for (; k < j; ++k) {
             if (k > i)
                 mmsb.append(sep, sep_len);
             LValue v = list->get_value(L, LValue(k));
@@ -109,6 +110,16 @@ MultiValue table_concat(LState *L, const LValue *args, size_t count) {
             }
             mmsb.append(L, v);
         }
+        if (k > i)
+            mmsb.append(sep, sep_len);
+        LValue v = list->get_value(L, LValue(k));
+        if (v.type != String && v.type != Int64 && v.type != Double) {
+            char cbuf[160];
+            std::snprintf(cbuf, sizeof(cbuf), "invalid value (%s) at index %lld in table for 'concat'",
+                stock_type_name(v), static_cast<long long>(k - i + 1));
+            throw_runtime_error(file_line_prefix(L) + cbuf);
+        }
+        mmsb.append(L, v);
         return MultiValue(mmsb.to_lvalue(L));
     }
 
@@ -117,7 +128,8 @@ MultiValue table_concat(LState *L, const LValue *args, size_t count) {
         if (in_array_part
             && !clx_validate_types_range(reinterpret_cast<const uint8_t *>(list->array_types),
                 static_cast<size_t>(i - 1), static_cast<size_t>(j - i + 1), 2, 4)) {
-            for (int64_t k = i; k <= j; ++k) {
+            int64_t k = i;
+            for (; k < j; ++k) {
                 LValue v = get_elem(list, static_cast<size_t>(k));
                 if (v.type != String && v.type != Int64 && v.type != Double) {
                     char cbuf[160];
@@ -126,13 +138,18 @@ MultiValue table_concat(LState *L, const LValue *args, size_t count) {
                     throw_runtime_error(file_line_prefix(L) + cbuf);
                 }
             }
+            LValue v = get_elem(list, static_cast<size_t>(k));
+            if (v.type != String && v.type != Int64 && v.type != Double) {
+                char cbuf[160];
+                std::snprintf(cbuf, sizeof(cbuf), "invalid value (%s) at index %lld in table for 'concat'",
+                    stock_type_name(v), static_cast<long long>(k));
+                throw_runtime_error(file_line_prefix(L) + cbuf);
+            }
         }
     }
 
     StringBuilder sb;
-    for (int64_t k = i; k <= j; ++k) {
-        if (k > i)
-            sb.append(sep, sep_len);
+    auto append_field = [&](int64_t k) {
         LValue v = get_elem(list, static_cast<size_t>(k));
         if (v.type != String && v.type != Int64 && v.type != Double) {
             char cbuf[160];
@@ -141,7 +158,16 @@ MultiValue table_concat(LState *L, const LValue *args, size_t count) {
             throw_runtime_error(file_line_prefix(L) + cbuf);
         }
         sb.append(L, v);
+    };
+    int64_t k = i;
+    for (; k < j; ++k) {
+        if (k > i)
+            sb.append(sep, sep_len);
+        append_field(k);
     }
+    if (k > i)
+        sb.append(sep, sep_len);
+    append_field(k);
     return MultiValue(sb.to_lvalue(L));
 }
 
@@ -436,7 +462,12 @@ MultiValue table_move(LState *L, const LValue *args, size_t count) {
 
     //------------------ stock's range guards, before any element is touched
     if (e >= f) {
-        if (!(f > 0 || e < INT64_MAX + f))
+        //------------------ INT64_MAX + f wraps in stock's lua_Integer arithmetic, and the tests rely on that
+        //------------------ sum (minI + 1 with maxI gives 0, so a range ending at -1 is accepted): compute it
+        //------------------ through an unsigned add so the wrap is defined here too
+        const int64_t max_plus_f
+            = static_cast<int64_t>(static_cast<uint64_t>(INT64_MAX) + static_cast<uint64_t>(f));
+        if (!(f > 0 || e < max_plus_f))
             throw_runtime_error(file_line_prefix(L) + "too many elements to move");
         int64_t n_move = e - f + 1;
         if (t > INT64_MAX - n_move + 1)
@@ -464,31 +495,24 @@ MultiValue table_move(LState *L, const LValue *args, size_t count) {
     LTable *dst_mt = tbl_metatable(dst);
     bool meta_read = src_mt && src_mt->gettable(L->str_index).type != Nil;
     bool meta_write = dst_mt && dst_mt->gettable(L->str_newindex).type != Nil;
-    if (t > e || t <= f || (dst != src)) {
-        for (int64_t k = f; k <= e; ++k) {
-            LValue key(static_cast<int64_t>(k));
-            LValue v = meta_read ? table_get(L, LValue(src), key) : get_elem(src, static_cast<size_t>(k));
-            LValue dkey(static_cast<int64_t>(t + (k - f)));
-            if (meta_write)
-                table_set(L, LValue(dst), dkey, v);
-            else {
-                gc_barrier_table(L, dst, v);
-                set_elem(dst, static_cast<size_t>(t + (k - f)), v);
-            }
+    //------------------ both loops count iterations the way stock's tmove does: stepping the key itself past
+    //------------------ an INT64_MAX end would wrap around and never terminate
+    int64_t last = e - f;
+    auto move_one = [&](int64_t k, int64_t i) {
+        LValue v = meta_read ? table_get(L, LValue(src), LValue(k)) : get_elem(src, static_cast<size_t>(k));
+        if (meta_write)
+            table_set(L, LValue(dst), LValue(t + i), v);
+        else {
+            gc_barrier_table(L, dst, v);
+            set_elem(dst, static_cast<size_t>(t + i), v);
         }
-    } else {
-        for (int64_t k = e; k >= f; --k) {
-            LValue key(static_cast<int64_t>(k));
-            LValue v = meta_read ? table_get(L, LValue(src), key) : get_elem(src, static_cast<size_t>(k));
-            LValue dkey(static_cast<int64_t>(t + (k - f)));
-            if (meta_write)
-                table_set(L, LValue(dst), dkey, v);
-            else {
-                gc_barrier_table(L, dst, v);
-                set_elem(dst, static_cast<size_t>(t + (k - f)), v);
-            }
-        }
-    }
+    };
+    if (t > e || t <= f || (dst != src))
+        for (int64_t i = 0; i <= last; ++i)
+            move_one(f + i, i);
+    else
+        for (int64_t i = last; i >= 0; --i)
+            move_one(f + i, i);
     return MultiValue(LValue(dst));
 }
 

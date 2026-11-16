@@ -240,35 +240,11 @@ static LValue read_line(LState *L, FILE *fp, bool keep_eol = false) {
 
 //------------------ read_all — read entire file into interned string
 static LValue read_all(LState *L, FILE *fp) {
-    static constexpr size_t SINGLE_SHOT_LIMIT = 64 * 1024 * 1024;
     static constexpr size_t CHUNK = 65536;
 
-    size_t hint = 0;
-    long start = std::ftell(fp);
-    if (start >= 0 && std::fseek(fp, 0, SEEK_END) == 0) {
-        long end = std::ftell(fp);
-        std::fseek(fp, start, SEEK_SET);
-        if (end > start)
-            hint = static_cast<size_t>(end - start);
-    }
-
-    if (hint > 0 && hint <= SINGLE_SHOT_LIMIT) {
-
-        char *dst = new char[hint + 1];
-        size_t r = std::fread(dst, 1, hint, fp);
-        dst[r] = '\0';
-        if (r > 0) {
-            LValue result = make_string_pooled(L, dst, r);
-            delete[] dst;
-            return result;
-        }
-        delete[] dst;
-        return LValue(L->intern_string("", 0));
-    }
-
+    //------------------ no ftell/fseek size hint on purpose: MSVC's ftell does not count a byte pushed back
+    //------------------ by ungetc, so seeking to it would hand back a byte the caller already read
     std::string content;
-    if (hint > 0)
-        content.reserve(std::min(hint, SINGLE_SHOT_LIMIT));
     char buf[CHUNK];
     size_t r;
     while ((r = std::fread(buf, 1, sizeof(buf), fp)) > 0)
@@ -959,8 +935,11 @@ static MultiValue io_lines(LState *L, const LValue *args, size_t count) {
         const char *filename = check_string(L, args[0]);
         //------------------ the filename form returns four values: the iterator, two placeholders and the
         //------------------ file handle, which the generic for treats as the to-be-closed variable
+        //------------------ the handle must close on collection as well as on the to-be-closed variable:
+        //------------------ stock's __gc closes a stream nobody reached, and an iterator dropped without
+        //------------------ exhausting it would otherwise leak the descriptor until the process ends
         FILE *fp = open_or_throw(filename, "r");
-        LValue file_val = make_file(L, fp, false);
+        LValue file_val = make_file(L, fp, true);
         RootRange rr(L, &file_val, 1);
         LValue iter = make_lines_iter(L, file_val, nfmts ? args + 1 : nullptr, nfmts, true);
         return MultiValue({ iter, nil(), nil(), file_val });
