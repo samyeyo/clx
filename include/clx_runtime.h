@@ -895,6 +895,15 @@ struct LTableExt {
     uint8_t weak_mode = 0;
     uint32_t weak_stamp = 0;
     LTable *weak_meta = nullptr;
+    //------------------ vm_origin: VM registry reference to the table this copy was made from under
+    //------------------ --dynamic, or -1 when the table did not come from a loaded chunk. It pins the VM
+    //------------------ table for exactly as long as this copy lives, so a value that crosses into clx and
+    //------------------ back is the same VM table again (clx_table_release_ptr drops it on recycle).
+    int vm_origin = -1;
+    //------------------ vm_dirty: set when clx writes into the copy, so the write-back into the VM table
+    //------------------ happens only for a copy clx actually changed. Syncing an untouched copy would push
+    //------------------ the stale snapshot over changes made on the VM side (table.sort, for one).
+    uint8_t vm_dirty = 0;
 };
 
 struct LTable : public LHeader {
@@ -2691,6 +2700,7 @@ CLX_INLINE_HOT LValue arena_create_table(LState *L, FuncArena *a, size_t asize, 
         ex->ic = nullptr;
         ex->metatable = nullptr;
         ex->meta_next = nullptr;
+        ex->vm_origin = -1;
         for (size_t i = 0; i < hsize; ++i) {
             ex->entries[i].key.payload.u64 = HASH_EMPTY;
             ex->entries[i].ktype = Nil;

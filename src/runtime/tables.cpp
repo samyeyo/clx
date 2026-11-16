@@ -248,6 +248,9 @@ static std::string store_error_prefix() {
 
 //------------------ LTable::settable — set value by key
 void LTable::settable(const LValue &key, const LValue &val) {
+    //------------------ mark a table copied out of the VM so pushing it back writes clx's changes into it
+    if (ext && ext->vm_origin >= 0)
+        ext->vm_dirty = 1;
     //------------------ stock luaV_finishset rejects a NaN key; without this it silently created an
     //------------------ unreachable entry (NaN never equals itself, so the lookup could never find it)
     if (key.type == Double && std::isnan(key.val.payload.f64))
@@ -513,6 +516,10 @@ void LTable::op_direct(LState *L, const LValue &obj, const LValue &key, double a
     };
     LValue amt = table_op_amount(amount);
     auto generic = [&]() { table_set(L, obj, key, table_op_apply(L, table_get(L, obj, key), amt, op_kind)); };
+
+    //------------------ a fused write is still a write into the copy, so it has to reach the VM table too
+    if (ext && ext->vm_origin >= 0)
+        ext->vm_dirty = 1;
 
     if (key.is_gc_obj())
         gc_barrier_table(L, this, key);

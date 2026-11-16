@@ -38,6 +38,12 @@ extern bool (*clx_vm_debug_upvalue_hook)(LState *L, LHeader *fn, int64_t n, LVal
 //------------------ closures have no line table, so the hook returns false for them and the caller errors.
 extern bool (*clx_vm_debug_getinfo_hook)(LState *L, const LValue &fn, const char *what, LValue &out);
 
+//------------------ clx_table_release_ptr: assigned by the embedded-VM bridge (libclx_lua) when linked with
+//------------------ --dynamic, null otherwise. Called before a table is recycled, so the VM registry
+//------------------ reference that a converted table holds on its source table is dropped with it. Same
+//------------------ always-linked-pointer pattern as clx_free_vm_proxy_ptr.
+extern void (*clx_table_release_ptr)(LState *L, LTable *t);
+
 //------------------ register_static_preload: registers a static preload loader for a module
 void register_static_preload(LState *L, const char *name, LValue(open_func)(LState *));
 

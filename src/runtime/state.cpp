@@ -147,7 +147,9 @@ void raise_stack_overflow(LState *L) {
     throw_stack_overflow(L);
 }
 
-static void dtor_free_table(LTable *t) {
+static void dtor_free_table(LState *L, LTable *t) {
+    if (clx_table_release_ptr && t->ext && t->ext->vm_origin >= 0)
+        clx_table_release_ptr(L, t);
     table_free_array(t->array, t->array_types, t->small_array);
     if (t->ext) {
         table_free_hash(t->ext->entries, t->ext->hash_bitmap);
@@ -258,7 +260,7 @@ LState::~LState() {
                 if (clx_free_vm_proxy_ptr)
                     clx_free_vm_proxy_ptr(this, curr);
             } else if (curr->type == static_cast<uint8_t>(Table))
-                dtor_free_table(static_cast<LTable *>(curr));
+                dtor_free_table(this, static_cast<LTable *>(curr));
             else if (curr->type == static_cast<uint8_t>(Function))
                 delete static_cast<LCFunction *>(curr);
             else if (curr->type == static_cast<uint8_t>(UserData))
@@ -275,7 +277,7 @@ LState::~LState() {
         LTable *t = static_cast<LTable *>(gc_finalizable);
         while (t) {
             LTable *nxt = static_cast<LTable *>(t->next);
-            dtor_free_table(t);
+            dtor_free_table(this, t);
             t = nxt;
         }
     }
@@ -295,14 +297,14 @@ LState::~LState() {
     LTable *ft = free_tables;
     while (ft) {
         LTable *next = static_cast<LTable *>(ft->next);
-        dtor_free_table(ft);
+        dtor_free_table(this, ft);
         ft = next;
     }
     free_tables = nullptr;
     ft = free_tables_big;
     while (ft) {
         LTable *next = static_cast<LTable *>(ft->next);
-        dtor_free_table(ft);
+        dtor_free_table(this, ft);
         ft = next;
     }
     free_tables_big = nullptr;
@@ -446,6 +448,9 @@ LValue LState::create_table(size_t asize, size_t hsize) {
     if (*pool) {
         t = *pool;
         *pool = static_cast<LTable *>((*pool)->next);
+        //------------------ a recycled table must not still pin a VM table it was copied from
+        if (clx_table_release_ptr && t->ext && t->ext->vm_origin >= 0)
+            clx_table_release_ptr(this, t);
         if (!want_big && t->array && t->array != t->small_array) {
             //------------------ small creation drew big (small list drained): free the array it will never
             //------------------ use instead of parking it. No accounting: dispose already subtracted it.
