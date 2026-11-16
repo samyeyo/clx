@@ -561,14 +561,14 @@ int main(int argc, char* argv[])
         opt_flags = (cc.name == "GNU")
             ? "-O1 -foptimize-sibling-calls -fno-inline-functions -fvisibility=hidden"
             : "-Os -fno-inline-functions -fvisibility=hidden";
-        msvc_opt_flags = "/O1 /Ob0" + msvc_wpo + " /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy /utf-8";
+        msvc_opt_flags = "/O1 /Ob0" + msvc_wpo + " /GR- /MD /EHsc /GS- /fp:precise /Gw /Gy /utf-8";
     } else {
 #ifdef _WIN32
         opt_flags = "-O3 -fvisibility=hidden";
 #else
         opt_flags = "-O3 -flto=auto -fvisibility=hidden";
 #endif
-        msvc_opt_flags = "/O2 /Ot" + msvc_wpo + " /GR- /MD /EHsc /GS- /fp:fast /Gw /Gy /utf-8";
+        msvc_opt_flags = "/O2 /Ot" + msvc_wpo + " /GR- /MD /EHsc /GS- /fp:precise /Gw /Gy /utf-8";
     }
 
 #ifndef CLX_ARCH_GCC_FLAG
