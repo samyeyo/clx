@@ -410,6 +410,22 @@ std::string CodeEmitter::int_value_expr(uint32_t expr_idx, int depth, bool *ok) 
     return "0";
 }
 
+//------------------ numeric_key_expr: preserves the integer subtype of a numeric table key - a
+//------------------ static integer expression emits the exact Int64 directly, a runtime int flag
+//------------------ selects the int64 shadow, and anything else falls back to key_of's float view
+std::string CodeEmitter::numeric_key_expr(uint32_t key_idx, std::string_view kd) {
+    bool ok = false;
+    std::string iv = int_value_expr(key_idx, 0, &ok);
+    if (!ok)
+        return "clx::key_of(" + std::string(kd) + ")";
+    if (is_purely_integer_expr(ctx, state, key_idx))
+        return "clx::LValue(" + iv + ")";
+    std::string ifl = int_flag_expr(key_idx, 0);
+    if (ifl != "false")
+        return "clx::key_of_native(" + std::string(kd) + ", " + ifl + ", " + iv + ")";
+    return "clx::key_of(" + std::string(kd) + ")";
+}
+
 //------------------ unboxed_arg_ok: true when an argument's double, int-flag and int-shadow are
 //------------------ all exact without boxing: integer/number literals, unboxed native locals/params
 //------------------ with exact runtime flags, integer counters, and arithmetic over such. Anything

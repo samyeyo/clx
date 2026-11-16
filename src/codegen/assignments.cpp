@@ -1141,7 +1141,10 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
                                     << "); } else { clx::LValue _sv" << t_idx << " = ";
                                 emit_node(_vo);
                                 out << "; clx::table_set(L, clx::LValue(clx::ValueType::Table, _td" << t_idx
-                                    << "), clx::key_of(_kd" << t_idx << "), _sv" << t_idx << "); } } }\n";
+                                    << "), "
+                                    << numeric_key_expr(
+                                           t_node.as.table_access.key, "_kd" + std::to_string(t_idx))
+                                    << ", _sv" << t_idx << "); } } }\n";
                                 _did_store = true;
                             }
                         }
@@ -1171,7 +1174,10 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
                         << "->array_size) _t" << t_idx << "->array_size = _k" << t_idx
                         << "; } else "
                            "clx::table_set(L, clx::LValue(clx::ValueType::Table, _t"
-                        << t_idx << "), clx::key_of(_kd" << t_idx << "), _sv" << t_idx << "); }\n";
+                        << t_idx << "), "
+                        << numeric_key_expr(
+                               t_node.as.table_access.key, "_kd" + std::to_string(t_idx))
+                        << ", _sv" << t_idx << "); }\n";
                 }
             } else {
                 bool key_is_native = false;
@@ -1204,7 +1210,8 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
                         out << "; clx::gc_barrier_table(L, _t, _sv)";
                     out << "; _t->array[_k - 1] = _sv.val; _t->array_types[_k - 1] = _sv.type; "
                            "clx::table_hint_on_array_write(_t, _k - 1, _sv.type); } else "
-                           "clx::table_set(L, clx::LValue(clx::ValueType::Table, _t), clx::key_of(_kd), ";
+                           "clx::table_set(L, clx::LValue(clx::ValueType::Table, _t), "
+                        << numeric_key_expr(k_idx, "_kd") << ", ";
                     if (v_count > 0)
                         emit_node(ctx.block_statements[first_v]);
                     else
@@ -1951,8 +1958,8 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
                         out << "clx::gc_barrier_table(L, _t, _svw); ";
                     out << "_t->array[_k - 1] = _svw.val; _t->array_types[_k - 1] = _svw.type; "
                            "clx::table_hint_on_array_write(_t, _k - 1, _svw.type); "
-                           "} else clx::table_set(L, clx::LValue(clx::ValueType::Table, _t), clx::key_of(_kdw), "
-                        << val_str << "); }\n";
+                           "} else clx::table_set(L, clx::LValue(clx::ValueType::Table, _t), "
+                        << numeric_key_expr(k_idx, "_kdw") << ", " << val_str << "); }\n";
                 } else {
                     uint32_t kt2 = t_node.as.table_access.key;
                     if (kt2 < ctx.nodes.size() && ctx.nodes[kt2].type == NodeType::String) {

@@ -170,11 +170,11 @@ void CodeEmitter::emit_native(uint32_t n_idx) {
                     emit_native(n.as.bin_op.right);
                     out << "))";
                 } else {
-                    out << "std::floor((";
+                    out << "clx::floor_div(";
                     emit_native(n.as.bin_op.left);
-                    out << ") / (";
+                    out << ", ";
                     emit_native(n.as.bin_op.right);
-                    out << "))";
+                    out << ")";
                 }
                 return;
             }
@@ -214,6 +214,14 @@ void CodeEmitter::emit_native(uint32_t n_idx) {
             return;
         }
         if (n.type == NodeType::TableAccess) {
+            {
+                bool exact_ok = false;
+                std::string exact = int_value_expr(n_idx, 1, &exact_ok);
+                if (exact_ok) {
+                    out << exact;
+                    return;
+                }
+            }
             {
                 auto hit = state.hoisted_lookups.find(n_idx);
                 if (hit != state.hoisted_lookups.end()) {
@@ -1399,6 +1407,38 @@ bool CodeEmitter::try_emit_array_cmp(int cmp_op, uint32_t l_idx, uint32_t r_idx,
     return true;
 }
 
+//------------------ expr_has_call: true when an expression subtree contains a call, whose side
+//------------------ effects make evaluation order observable (C++ leaves operand order unspecified)
+static bool expr_has_call(const ASTContext &ctx, uint32_t idx, int depth = 0) {
+    if (depth > 24 || idx == 0xFFFFFFFF || idx >= ctx.nodes.size())
+        return false;
+    const auto &n = ctx.nodes[idx];
+    switch (n.type) {
+    case NodeType::CallExpression:
+    case NodeType::IntrinsicCall:
+        return true;
+    case NodeType::BinaryOp:
+        return expr_has_call(ctx, n.as.bin_op.left, depth + 1)
+            || expr_has_call(ctx, n.as.bin_op.right, depth + 1);
+    case NodeType::UnaryOp:
+        return expr_has_call(ctx, n.as.unary_op.expr, depth + 1);
+    case NodeType::ParenExpression:
+        return expr_has_call(ctx, n.as.paren_expr.expr, depth + 1);
+    case NodeType::TableAccess:
+        return expr_has_call(ctx, n.as.table_access.table, depth + 1)
+            || expr_has_call(ctx, n.as.table_access.key, depth + 1);
+    case NodeType::TableConstructor:
+        for (uint32_t i = 0; i < n.as.table_cons.count; ++i) {
+            if (expr_has_call(ctx, ctx.block_statements[n.as.table_cons.first_item + i * 2], depth + 1)
+                || expr_has_call(ctx, ctx.block_statements[n.as.table_cons.first_item + i * 2 + 1], depth + 1))
+                return true;
+        }
+        return false;
+    default:
+        return false;
+    }
+}
+
 //------------------ emitBinaryOp: handles NodeType::BinaryOp
 void CodeEmitter::emitBinaryOp(const ASTNode &node, uint32_t node_idx) {
     int op = node.as.bin_op.op;
@@ -1407,6 +1447,36 @@ void CodeEmitter::emitBinaryOp(const ASTNode &node, uint32_t node_idx) {
     bool right_native = yields_number(ctx, state, node.as.bin_op.right, nullptr, state.current_fast_func);
 
     if (left_native && right_native) {
+        if (op >= static_cast<int>(BinaryOp::Eq) && op <= static_cast<int>(BinaryOp::Ne)
+            && (expr_has_call(ctx, node.as.bin_op.left) || expr_has_call(ctx, node.as.bin_op.right))) {
+            out << "([&](){ clx::LValue _cl" << node_idx << " = ";
+            emit_node(node.as.bin_op.left);
+            out << "; clx::LValue _cr" << node_idx << " = ";
+            emit_node(node.as.bin_op.right);
+            out << "; return ";
+            switch (op) {
+            case static_cast<int>(BinaryOp::Eq):
+                out << "clx::eq(L, _cl" << node_idx << ", _cr" << node_idx << ")";
+                break;
+            case static_cast<int>(BinaryOp::Ne):
+                out << "clx::LValue(!clx::eq(L, _cl" << node_idx << ", _cr" << node_idx << ").as_bool())";
+                break;
+            case static_cast<int>(BinaryOp::Lt):
+                out << "clx::lt(L, _cl" << node_idx << ", _cr" << node_idx << ")";
+                break;
+            case static_cast<int>(BinaryOp::Le):
+                out << "clx::le(L, _cl" << node_idx << ", _cr" << node_idx << ")";
+                break;
+            case static_cast<int>(BinaryOp::Gt):
+                out << "clx::lt(L, _cr" << node_idx << ", _cl" << node_idx << ")";
+                break;
+            default:
+                out << "clx::le(L, _cr" << node_idx << ", _cl" << node_idx << ")";
+                break;
+            }
+            out << "; }())";
+            return;
+        }
         bool both_int = clx::is_purely_integer_expr(ctx, state, node.as.bin_op.left)
             && clx::is_purely_integer_expr(ctx, state, node.as.bin_op.right);
         if (op == static_cast<int>(BinaryOp::Add) || op == static_cast<int>(BinaryOp::Sub)
@@ -1839,6 +1909,23 @@ void CodeEmitter::emitBinaryOp(const ASTNode &node, uint32_t node_idx) {
             else
                 emit_node(oi);
         };
+        //------------------ operands that call are evaluated left to right: as call arguments C++ leaves the
+        //------------------ order unspecified (MSVC runs right to left), which would read the right operand
+        //------------------ before the left one's side effects
+        if (expr_has_call(ctx, node.as.bin_op.left) || expr_has_call(ctx, node.as.bin_op.right)) {
+            out << "([&](){ clx::LValue _cl" << node_idx << " = ";
+            emit_node(ord_l);
+            out << "; clx::LValue _cr" << node_idx << " = ";
+            emit_node(ord_r);
+            out << "; return ";
+            if (op == static_cast<int>(BinaryOp::Ne))
+                out << "clx::LValue(!";
+            out << "clx::" << fn[op] << "(L, _cl" << node_idx << ", _cr" << node_idx << ")";
+            if (op == static_cast<int>(BinaryOp::Ne))
+                out << ".as_bool())";
+            out << "; }())";
+            return;
+        }
         if (op == static_cast<int>(BinaryOp::Ne))
             out << "clx::LValue(!(";
         out << "clx::" << fn[op] << "(L, ";
@@ -2101,8 +2188,8 @@ void CodeEmitter::emitTableAccess(const ASTNode &node, uint32_t node_idx) {
                     out << "); size_t _k" << _i << " = clx::array_key(_kd" << _i << ");";
                     out << " clx::LValue _v" << _i << " = (_k" << _i
                         << " - 1 < _tc->array_size) ? clx::LValue(_tc->array[_k" << _i << " - 1], _tc->array_types[_k"
-                        << _i << " - 1]) : clx::table_get(L, clx::LValue(clx::ValueType::Table, _tc), clx::key_of(_kd"
-                        << _i << "));";
+                        << _i << " - 1]) : clx::table_get(L, clx::LValue(clx::ValueType::Table, _tc), "
+                        << numeric_key_expr(_cks[_i], "_kd" + std::to_string(_i)) << ");";
                     out << " if (_v" << _i << ".type != clx::ValueType::Table) clx::throw_index_error(L, _v" << _i
                         << "); _tc = static_cast<clx::LTable*>(_v" << _i << ".as_pointer());";
                 }
@@ -2112,8 +2199,8 @@ void CodeEmitter::emitTableAccess(const ASTNode &node, uint32_t node_idx) {
                 out << "); size_t _k" << _last << " = clx::array_key(_kd" << _last << ");";
                 out << " return (_k" << _last << " - 1 < _tc->array_size) ? clx::LValue(_tc->array[_k" << _last
                     << " - 1], _tc->array_types[_k" << _last
-                    << " - 1]) : clx::table_get(L, clx::LValue(clx::ValueType::Table, _tc), clx::key_of(_kd" << _last
-                    << ")); }())";
+                    << " - 1]) : clx::table_get(L, clx::LValue(clx::ValueType::Table, _tc), "
+                    << numeric_key_expr(_cks[_last], "_kd" + std::to_string(_last)) << "); }())";
             } else {
                 out << "([&](){ ";
                 if (!_hp.empty()) {
@@ -2127,11 +2214,13 @@ void CodeEmitter::emitTableAccess(const ASTNode &node, uint32_t node_idx) {
                 emit_native(k_idx);
                 out << "); size_t _k = clx::array_key(_kd);";
                 if (_hp.empty()) {
-                    out << " if (_b.type != clx::ValueType::Table) return clx::table_get(L, _b, clx::key_of(_kd));";
+                    out << " if (_b.type != clx::ValueType::Table) return clx::table_get(L, _b, "
+                        << numeric_key_expr(k_idx, "_kd") << ");";
                     out << " clx::LTable* _t = static_cast<clx::LTable*>(_b.as_pointer());";
                 }
                 out << " return (_k - 1 < _t->array_size) ? clx::LValue(_t->array[_k - 1], _t->array_types[_k - 1]) "
-                       ": clx::table_get(L, clx::LValue(clx::ValueType::Table, _t), clx::key_of(_kd)); }())";
+                       ": clx::table_get(L, clx::LValue(clx::ValueType::Table, _t), "
+                    << numeric_key_expr(k_idx, "_kd") << "); }())";
             }
         } else {
             uint32_t kt = node.as.table_access.key;

@@ -106,6 +106,9 @@ private:
     //------------------ int_value_expr: C++ int64 expression for an expression proven integral by int_flag_expr;
     //------------------ ok reports whether an exact int64 value could be produced at all
     std::string int_value_expr(uint32_t expr_idx, int depth, bool *ok = nullptr);
+    //------------------ numeric_key_expr: C++ LValue key for a numeric expression, preserving the exact
+    //------------------ Int64 subtype when the expression is statically or dynamically integer-typed
+    std::string numeric_key_expr(uint32_t key_idx, std::string_view kd);
     //------------------ fast_call_box_flag: C++ bool expression restoring the return subtype of a fast call
     std::string fast_call_box_flag(std::string_view fname, uint32_t first_arg, uint32_t arg_count);
 
