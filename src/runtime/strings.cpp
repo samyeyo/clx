@@ -136,6 +136,19 @@ MultiValue str_reverse(LState *L, const LValue *args, size_t count) {
     return result;
 }
 
+//------------------ fold_high_bytes — outside the C locale the host's case tables also cover bytes above
+//------------------ ASCII, which the ASCII fast fold leaves alone; stock asks tolower/toupper per byte so
+//------------------ those bytes follow the host's tables too
+static void fold_high_bytes(char *dst, size_t len, int to_lower) {
+    if (ctype_is_c())
+        return;
+    for (size_t i = 0; i < len; ++i) {
+        unsigned char c = static_cast<unsigned char>(dst[i]);
+        if (c >= 0x80)
+            dst[i] = static_cast<char>(to_lower ? std::tolower(c) : std::toupper(c));
+    }
+}
+
 //------------------ str_lower — string.lower: convert to lowercase
 MultiValue str_lower(LState *L, const LValue *args, size_t count) {
     size_t l;
@@ -143,10 +156,12 @@ MultiValue str_lower(LState *L, const LValue *args, size_t count) {
     if (l <= 6) {
         char buf[8];
         clx_case_fold(buf, s, l, 1);
+        fold_high_bytes(buf, l, 1);
         return MultiValue(LValue::istr(buf, static_cast<uint32_t>(l)));
     }
     char *dst = new char[l + 1];
     clx_case_fold(dst, s, l, 1);
+    fold_high_bytes(dst, l, 1);
     dst[l] = '\0';
     MultiValue result = MultiValue(make_string_pooled(L, dst, l));
     delete[] dst;
@@ -160,10 +175,12 @@ MultiValue str_upper(LState *L, const LValue *args, size_t count) {
     if (l <= 6) {
         char buf[8];
         clx_case_fold(buf, s, l, 0);
+        fold_high_bytes(buf, l, 0);
         return MultiValue(LValue::istr(buf, static_cast<uint32_t>(l)));
     }
     char *dst = new char[l + 1];
     clx_case_fold(dst, s, l, 0);
+    fold_high_bytes(dst, l, 0);
     dst[l] = '\0';
     MultiValue result = MultiValue(make_string_pooled(L, dst, l));
     delete[] dst;
@@ -616,7 +633,9 @@ static const char *classend(MatchState *ms, const char *p) {
 struct MatchClassTable {
     unsigned short bit[256];
 
-    MatchClassTable() {
+    MatchClassTable() { rebuild(); }
+
+    void rebuild() {
         for (int c = 0; c < 256; ++c) {
             unsigned short b = 0;
             if (std::isalpha(c))
@@ -644,8 +663,24 @@ struct MatchClassTable {
     }
 };
 
+//------------------ g_match_class: class bits for the locale it was built in. stock asks the C library per
+//------------------ character, so '%a' and friends follow the host's tables; the table is rebuilt when
+//------------------ os.setlocale bumps the locale generation
+static MatchClassTable g_match_class;
+static uint64_t g_match_class_generation = 0;
+
+//------------------ sync_match_class: called once per pattern operation, never per character, so that a
+//------------------ locale change between two matches is picked up without paying for it inside the scan
+static void sync_match_class() {
+    uint64_t gen = locale_generation();
+    if (gen != g_match_class_generation) {
+        g_match_class.rebuild();
+        g_match_class_generation = gen;
+    }
+}
+
 static int match_class(int c, int cl) {
-    static const MatchClassTable tbl;
+    const MatchClassTable &tbl = g_match_class;
     int res;
     switch (std::tolower(cl)) {
     case 'a':
@@ -1005,6 +1040,7 @@ static MultiValue str_find_aux(LState *L, const LValue *args, size_t count, int 
     size_t init = posrelat(init_i, ls) - 1;
     if (init > ls)
         return MultiValue(LValue());
+    sync_match_class();
 
     bool plain = (count >= 4) ? args[3].as_bool() : false;
 
@@ -1100,6 +1136,7 @@ struct GMatchState {
 static MultiValue gmatch_aux(LState *L, const LValue *args, size_t count, void *ud) {
     GMatchState *gm = (GMatchState *)ud;
     const char *src;
+    sync_match_class();
     gm->ms.L = L;
     for (src = gm->src; src <= gm->ms.src_end; src++) {
         const char *e;
@@ -1184,6 +1221,7 @@ MultiValue str_gsub(LState *L, const LValue *args, size_t count) {
         result.reserve(std::min<size_t>(srcl / 4 + 8, 4096));
 
     while (n < max_s) {
+        sync_match_class();
         reprepstate(&ms);
         const char *e;
         if ((e = match(&ms, src_pos, p)) != NULL && e != lastmatch) {

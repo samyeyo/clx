@@ -14,7 +14,6 @@
 #include <cstring>
 #include <ctime>
 #include <filesystem>
-#include <sys/wait.h>
 #if defined(_WIN32) || defined(_WIN64)
 #include <cstdio>
 
@@ -32,6 +31,7 @@ inline struct tm *localtime(const time_t *timep, struct tm *result) {
     return nullptr;
 }
 #else
+#include <sys/wait.h>
 
 //------------------ gmtime: thread-safe gmtime wrapper (POSIX)
 inline struct tm *gmtime(const time_t *timep, struct tm *result) {
@@ -273,6 +273,7 @@ MultiValue os_setlocale(LState *L, const LValue *args, size_t count) {
     const char *result = std::setlocale(category, locale);
     if (!result)
         return MultiValue(LValue());
+    clx::refresh_locale_flags();
     return MultiValue(clx::string(L, result));
 }
 

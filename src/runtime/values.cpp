@@ -8,6 +8,7 @@
 #include "clx.h"
 #include "clx_runtime.h"
 #include <algorithm>
+#include <clocale>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -131,6 +132,52 @@ LValue LValue::slow_eq(const LValue &other) const {
     return LValue(false);
 }
 
+//------------------ g_collate_is_c, g_ctype_is_c: true while LC_COLLATE/LC_CTYPE are the C locale, where string
+//------------------ ordering is a byte comparison and case folding only covers ASCII. os.setlocale refreshes
+//------------------ them; outside the C locale stock defers to strcoll and to the host's character tables
+static bool g_collate_is_c = true;
+static bool g_ctype_is_c = true;
+static uint64_t g_locale_generation = 0;
+
+//------------------ collate_is_c: reports whether string ordering may skip the host's collation rules
+bool collate_is_c() { return g_collate_is_c; }
+
+//------------------ ctype_is_c: reports whether character classes and case folding cover ASCII only
+bool ctype_is_c() { return g_ctype_is_c; }
+
+//------------------ locale_generation: the number of locale changes so far
+uint64_t locale_generation() { return g_locale_generation; }
+
+//------------------ refresh_locale_flags: re-reads LC_COLLATE/LC_CTYPE after os.setlocale changed them
+void refresh_locale_flags() {
+    const char *collate = std::setlocale(LC_COLLATE, nullptr);
+    const char *ctype = std::setlocale(LC_CTYPE, nullptr);
+    g_collate_is_c = !collate || std::strcmp(collate, "C") == 0 || std::strcmp(collate, "POSIX") == 0;
+    g_ctype_is_c = !ctype || std::strcmp(ctype, "C") == 0 || std::strcmp(ctype, "POSIX") == 0;
+    g_locale_generation++;
+}
+
+//------------------ collate_strcmp: stock's l_strcmp - strcoll segment by segment, so strings that share a
+//------------------ prefix up to an embedded zero are still ordered the way stock orders them
+static int collate_strcmp(std::string_view l, std::string_view r) {
+    for (;;) {
+        std::string lz(l);
+        std::string rz(r);
+        int temp = std::strcoll(lz.c_str(), rz.c_str());
+        if (temp != 0)
+            return temp;
+        size_t len = std::strlen(lz.c_str());
+        if (len == std::strlen(rz.c_str())) {
+            if (len == l.size())
+                return 0;
+            l.remove_prefix(len + 1);
+            r.remove_prefix(len + 1);
+        } else {
+            return (len == l.size()) ? -1 : 1;
+        }
+    }
+}
+
 //------------------ LValue::slow_lt — less-than comparison
 LValue LValue::slow_lt(const LValue &other) const {
     if ((type == Double || type == Int64) && (other.type == Double || other.type == Int64)) {
@@ -140,6 +187,9 @@ LValue LValue::slow_lt(const LValue &other) const {
     }
     if (type == String && other.type == String) {
         size_t al = string_len(), bl = other.string_len();
+        if (!g_collate_is_c)
+            return LValue(collate_strcmp(std::string_view(as_string(), al), std::string_view(other.as_string(), bl))
+                < 0);
         int cmp = clx_memcmp(as_string(), other.as_string(), std::min(al, bl));
         if (cmp != 0)
             return LValue(cmp < 0);
@@ -157,6 +207,9 @@ LValue LValue::slow_le(const LValue &other) const {
     }
     if (type == String && other.type == String) {
         size_t al = string_len(), bl = other.string_len();
+        if (!g_collate_is_c)
+            return LValue(collate_strcmp(std::string_view(as_string(), al), std::string_view(other.as_string(), bl))
+                <= 0);
         int cmp = clx_memcmp(as_string(), other.as_string(), std::min(al, bl));
         if (cmp != 0)
             return LValue(cmp <= 0 ? cmp < 0 : false);
