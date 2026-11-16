@@ -164,11 +164,15 @@ What this means in practice:
   metatable `__index` — `rawget` does not follow it — and a global either side
   writes is visible to the other (see
   [Sharing values](#sharing-values-with-loaded-code)).
-- **Bridged values get a stable proxy.** Reading a compiled table or function
-  from a chunk yields the same proxy each time for as long as it lives, so
-  `rawequal` and `tostring` agree inside the chunk and a write through the proxy
-  is a write to the original table. Values travelling *back* are converted
-  again, so don't compare a returned value with one you still hold.
+- **Values keep their identity across the boundary.** Reading a compiled table
+  or function from a chunk yields the same proxy each time for as long as it
+  lives, so `rawequal` and `tostring` agree inside the chunk and a write through
+  the proxy is a write to the original table. The other direction works the same
+  way: a table or function that comes out of a chunk and is handed back in is
+  the very object the chunk had, not a copy of it. The compiled side gets a copy
+  of the table, and whatever it changes there travels back — while a table it
+  never touched is used as it stands on the VM, so `table.sort` and other
+  in-place updates done inside the chunk are never undone.
 - **Coroutines stay on one side.** Create, resume, and yield a coroutine either
   in your compiled code or inside the loaded chunk — not across the boundary.
 
@@ -227,9 +231,9 @@ environment — either the compiled one or the loaded one.
 - `string.dump` of a compiled or C function returns a callable snapshot,
   not bytecode (see above); only VM-loaded functions dump to real bytecode.
 - Metatables and coroutines do not cross the boundary. A table or userdata is
-  handed over as a stable proxy for its lifetime, but a value returned from a
-  chunk is converted again on arrival, so identity is not preserved in that
-  direction.
+  handed over as a stable proxy for its lifetime, and a table or function
+  returned from a chunk is the same object again when it goes back in — but what
+  crosses is the table's contents, not its metatable.
 - `debug` exists on both sides but is not the same library: the compiled
   program's global offers the metatable, uservalue, `traceback` and upvalue
   entries (upvalue names are empty and `upvaluejoin` raises), while a chunk's own
