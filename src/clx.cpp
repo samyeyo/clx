@@ -193,7 +193,7 @@ static ModuleLinkKind clx_scan_module_kind(const fs::path& lib, const std::strin
     return ModuleLinkKind::Cpp;
 }
 
-//------------------ CLX: execute - runs a shell command, captures stdout and exit code
+//------------------ CLX: execute - runs a shell command, captures stdout, stderr and exit code
 std::string execute(const std::string& cmd, int& out_code)
 {
     std::string result;
@@ -250,7 +250,7 @@ std::string execute(const std::string& cmd, int& out_code)
     }
     out_code = run_one(remaining);
 #else
-    auto pipe = popen(cmd.c_str(), "r");
+    auto pipe = popen(("{ " + cmd + "; } 2>&1").c_str(), "r");
     if (!pipe)
         return "";
     std::array<char, 128> buffer;
@@ -1233,7 +1233,11 @@ int main(int argc, char* argv[])
     std::string output = execute(cmd, exit_code);
 
     if (exit_code != 0) {
-        if (output.empty()) {
+        if (!output.empty())
+            std::cerr << output << std::endl;
+        bool launch_failed = output.empty() || output.find(": not found") != std::string::npos
+            || output.find("command not found") != std::string::npos;
+        if (launch_failed) {
             std::cerr << "clx: could not run C++ compiler: \"" << cc.cmd << "\"\n";
 #ifdef _WIN32
             std::cerr << "clx: install Visual Studio Build Tools (MSVC or the clang-cl/LLVM component) and run"
@@ -1242,7 +1246,6 @@ int main(int argc, char* argv[])
             std::cerr << "clx: install a C++ toolchain or set CLX_CXX to a C++ compiler.\n";
 #endif
         } else {
-            std::cerr << output << std::endl;
 #ifdef _WIN32
             bool missing_header = (cc.name == "MSVC" && output.find("C1083") != std::string::npos)
                 || (cc.name == "ClangCL" && output.find("file not found") != std::string::npos);
