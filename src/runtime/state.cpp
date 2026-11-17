@@ -10,6 +10,7 @@
 #include "internal.h"
 #include "vm/vm_convert.h"
 #include <algorithm>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -23,6 +24,7 @@
 #include <windows.h>
 #else
 #include <pthread.h>
+#include <sys/wait.h>
 #endif
 
 namespace clx {
@@ -231,6 +233,27 @@ void (*clx_io_write_ptr)(FILE *fp, const char *p, size_t n) = nullptr;
 MultiValue (*clx_string_dump_hook)(LState *L, const LValue *args, size_t count) = nullptr;
 bool (*clx_vm_debug_upvalue_hook)(LState *L, LHeader *fn, int64_t n, LValue &name, LValue &value) = nullptr;
 bool (*clx_vm_debug_getinfo_hook)(LState *L, const LValue &fn, const char *what, LValue &out) = nullptr;
+
+//------------------ exec_result: stock luaL_execresult — a wait status decoded into (ok, "exit"|"signal",
+//------------------ code). Core-resident so a popen handle's close reports the same triple as os.execute
+//------------------ without the io archive depending on the os archive (--minimal --modules io links alone)
+MultiValue exec_result(LState *L, int status) {
+    if (status == -1) {
+        int en = errno;
+        char buf[256];
+        std::snprintf(buf, sizeof(buf), "%s", std::strerror(en));
+        return MultiValue({ LValue(), LValue(L->intern_string(buf)), clx::integer(en) });
+    }
+#if defined(_WIN32) || defined(_WIN64)
+    int code = status;
+    const char *what = "exit";
+#else
+    int code = WIFSIGNALED(status) ? WTERMSIG(status) : WEXITSTATUS(status);
+    const char *what = WIFSIGNALED(status) ? "signal" : "exit";
+#endif
+    return MultiValue({ code == 0 ? clx::boolean(true) : clx::LValue(), clx::string(L, what),
+        clx::integer(static_cast<int64_t>(code)) });
+}
 
 //------------------ LState::~LState — state destructor
 LState::~LState() {

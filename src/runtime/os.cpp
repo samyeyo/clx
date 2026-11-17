@@ -31,8 +31,6 @@ inline struct tm *localtime(const time_t *timep, struct tm *result) {
     return nullptr;
 }
 #else
-#include <sys/wait.h>
-
 //------------------ gmtime: thread-safe gmtime wrapper (POSIX)
 inline struct tm *gmtime(const time_t *timep, struct tm *result) {
     return gmtime_r(timep, result);
@@ -154,26 +152,6 @@ MultiValue os_difftime(LState *L, const LValue *args, size_t count) {
     double t2 = check_number(L, args[0]);
     double t1 = check_number(L, args[1]);
     return MultiValue(clx::number(t2 - t1));
-}
-
-//------------------ exec_result: stock luaL_execresult — a wait status decoded into (ok, "exit"|"signal",
-//------------------ code), so os.execute and a popen handle's close report the same triple
-MultiValue exec_result(LState *L, int status) {
-    if (status == -1) {
-        int en = errno;
-        char buf[256];
-        std::snprintf(buf, sizeof(buf), "%s", std::strerror(en));
-        return MultiValue({ LValue(), LValue(L->intern_string(buf)), clx::integer(en) });
-    }
-#if defined(_WIN32) || defined(_WIN64)
-    int code = status;
-    const char *what = "exit";
-#else
-    int code = WIFSIGNALED(status) ? WTERMSIG(status) : WEXITSTATUS(status);
-    const char *what = WIFSIGNALED(status) ? "signal" : "exit";
-#endif
-    return MultiValue({ code == 0 ? clx::boolean(true) : clx::LValue(), clx::string(L, what),
-        clx::integer(static_cast<int64_t>(code)) });
 }
 
 //------------------ os_execute: executes a system command

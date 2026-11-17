@@ -4191,6 +4191,10 @@ void luastd_utf8(LState *L);
 void luastd_io(LState *L);
 void luastd_debug(LState *L);
 
+//------------------ exec_result: stock luaL_execresult — a wait status decoded into (ok, "exit"|"signal",
+//------------------ code), shared by os.execute and a popen handle's close (separate archives)
+MultiValue exec_result(LState *L, int status);
+
 //------------------ Gets a global variable
 LValue get_global(LState *L, const char *name);
 //------------------ Sets a global variable

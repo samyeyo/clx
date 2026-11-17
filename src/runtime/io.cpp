@@ -296,9 +296,6 @@ static ReadFmt match_read_fmt(const char *fmt, int64_t *count) {
 //------------------ the iterator holds its state and the formats given to f:lines(...) / io.lines(...) in
 //------------------ traced gc cells rather than expecting them as arguments, so `local it = f:lines();
 //------------------ it()` reads a line like stock instead of nothing
-//------------------ exec_result (os.cpp): stock luaL_execresult, shared so a popen handle's close reports
-//------------------ the same (ok, what, code) triple as os.execute
-MultiValue exec_result(LState *L, int status);
 
 static bool take_stream_error(LState *L, FileUd *f, MultiValue &out);
 static MultiValue file_read_args(
