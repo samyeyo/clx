@@ -116,6 +116,20 @@ std::string LValue::to_string(LState *L) const {
         std::snprintf(buf, sizeof(buf), "thread: %p", as_pointer());
         return std::string(buf);
     }
+    case UserData: {
+        const char *prefix = "userdata";
+        if (L) {
+            LUserdata *ud = static_cast<LUserdata *>(as_pointer());
+            if (ud->metatable) {
+                LValue n = ud->metatable->gettable(L->str_name);
+                if (n.type != Nil && n.type == String)
+                    prefix = n.as_string();
+            }
+        }
+        char ptr[32];
+        std::snprintf(ptr, sizeof(ptr), "%p", as_pointer());
+        return std::string(prefix) + ": " + ptr;
+    }
     default:
         return "userdata";
     }
