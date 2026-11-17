@@ -120,7 +120,7 @@ Detailed guides live in the `doc/` directory:
 - [Dynamic Lua](./doc/dynamic-lua.md)
 - [Compatibility](./doc/compatibility.md)
 - [Modules](./doc/modules.md)
-- [Clx C++ API](./doc/api.md)
+- [Clx C++ API](./doc/clx-api.md)
 - [Lua C API](./doc/luacapi.md)
 - [Migration Guide](./doc/migration-guide.md)
 - [Benchmarks](./doc/benchmarks.md)

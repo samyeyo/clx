@@ -131,7 +131,7 @@ clx/
 ├── benchmarks/                  # Performance benchmarks with comparisons (lua / luajit / clx)
 └── doc/                         # Comprehensive documentation
     ├── index.md
-    ├── api.md
+    ├── clx-api.md
     ├── cli.md
     ├── modules.md
     ├── luacapi.md

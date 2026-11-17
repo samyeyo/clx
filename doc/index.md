@@ -16,7 +16,8 @@ extending clx, the Lua to native compiler.
 
 ## For developers
 
-- **[C++ API](./api.md)** - Write native C++ modules
+- **[High Level Object Oriented C++ API](./hl-api.md)** - The value-semantic `clx.hpp` layer for native C++ code
+- **[C++ API](./clx-api.md)** - The low-level `clx.h` layer: write native C++ modules
 - **[Lua C API](./luacapi.md)** - Use the standard Lua 5.5 C API from C/C++ modules
 - **[Migration Guide](./migration-guide.md)** - Port existing Lua C modules to the clx C++ API
 

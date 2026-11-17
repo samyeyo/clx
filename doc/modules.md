@@ -121,7 +121,7 @@ clx main.lua --modules my_native_mod
 clx looks for the module (`.a` / `.lib`) in the current directory first, then a
 few standard install locations. The `--modules` name is the filename without
 its extension. Need more details on where it searches or how to write native
-modules? See the [C++ API](./api.md).
+modules? See the [C++ API](./clx-api.md).
 
 ## Standard library modules
 
@@ -137,9 +137,24 @@ clx main.lua --minimal --modules string,io,math -o main
 
 Names matching a std module (`base`, `package`, `string`, `table`, `math`,
 `io`, `os`, `utf8`, `coroutine`, `debug`) always resolve to the runtime's archives next
-to `libclx.a`, never to a same-named user file. Using a std global without its
-module (e.g. `string.format` in a bare `--minimal` build) fails at runtime
-with an index-on-nil error — add the module and rebuild.
+to `libclx.a`, never to a same-named user file. Using a std function without its
+module (e.g. `string.format` in a bare `--minimal` build) is caught at link time as an
+undefined `clx::str_format` reference — add the module and rebuild. Reaching the library
+through a value instead (e.g. `local s = string; s.format(...)`, or `("x"):rep(2)`)
+compiles, then fails at runtime with an index-on-nil or call-a-nil-value error.
+
+The same rule applies to native modules: a module built against the runtime's helpers
+needs the archive that implements them. `clx::str_*` — and the high level API's
+`String::find`, `String::format`, `String::gsub` and friends — lives in `string`;
+`clx::table_*` (`Table::sort`, `Table::concat`, `Table::insert`, `Table::remove`,
+`Table::move`, `Table::unpack`, `Table::pack`) in `table`:
+
+```bash
+clx main.lua --minimal --modules my_mod,string,table -o main
+```
+
+Indexing, `size`, iteration and the numeric/string conversions live in `base`, so a
+module that only moves values around needs nothing beyond `base` + `package`.
 
 If your native module depends on external libraries, pass the link flags too:
 
@@ -254,7 +269,7 @@ clx mylib.lua --object --output mylib   # mylib.o / mylib.obj
 ```
 
 These export a `luaopen_mylib` function that a host C++ program can register and
-call. See the [C++ API](./api.md) for the details.
+call. See the [C++ API](./clx-api.md) for the details.
 
 ## Combining approaches
 
@@ -283,6 +298,8 @@ local proc = require("native_processor")  -- native C++ module
 ## More on the C++ API
 
 For a full look at the native C++ API — values, tables, calling functions,
-coroutines, and error handling — see the [C++ API reference](./api.md). If
+coroutines, and error handling — see the [C++ API reference](./clx-api.md). The
+[High Level Object Oriented C++ API](./hl-api.md) covers `clx.hpp`, the
+higher-level binding most new modules are written with. If
 you're porting an existing Lua C (C API) module, the [Migration Guide](./migration-guide.md)
 walks you through it step by step.

@@ -9,7 +9,7 @@ This page is for people *using* the C API from C or C++. It covers how to write
 a module, what the bridge implements, and where it behaves differently from
 stock Lua. For compiling, finding and linking archives, see
 [Lua modules](./modules.md). If you would rather write native code in C++,
-see the [C++ API](./api.md) instead.
+see the [C++ API](./clx-api.md) instead.
 
 ## A first module
 
@@ -380,7 +380,7 @@ mangled (`nm -g lfs.a | grep luaopen`).
 
 - [Lua modules](./modules.md) — building, finding and linking module archives,
   and the `libclx_capi` wrapper archive
-- [C++ API](./api.md) — the native, stack-free API for new code
+- [C++ API](./clx-api.md) — the native, stack-free API for new code
 - [Migration guide](./migration-guide.md) — porting a C module to the C++ API
 - [Lua 5.5 compatibility](./compatibility.md) — language and library support
 - [Dynamic Lua](./dynamic-lua.md) — running Lua source at runtime

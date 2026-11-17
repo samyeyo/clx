@@ -267,4 +267,4 @@ to native code (there's no bytecode and no VM stack):
 6. Replace module registration.
 7. Delete all stack-management code.
 
-For the full API reference, see the [C++ API](./api.md).
+For the full API reference, see the [C++ API](./clx-api.md).

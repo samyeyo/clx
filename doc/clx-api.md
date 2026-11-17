@@ -5,6 +5,10 @@ library module — this guide shows you the API.
 
 Everything lives in `namespace clx` and starts with `#include <clx.h>`.
 
+> Looking for the higher-level binding? [`clx.hpp`](./hl-api.md) builds value-semantic
+> `lua::Table`, `lua::String` and `lua::Function` objects on top of this layer, with
+> automatic C++ conversions and no state argument at every call.
+
 One thing sets clx apart from the classic Lua C API: **there's no stack**. You
 work directly with `LValue` objects, which is closer to normal C++. That makes
 the API smaller and less error-prone.
