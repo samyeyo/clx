@@ -13,10 +13,13 @@ AR="${AR:-ar}"
 [ -f "$CLX_INCLUDE/lua.h" ] || { echo "Error: $CLX_INCLUDE/lua.h not found (set CLX_INCLUDE to clx's include directory)."; exit 1; }
 
 # Rebuild clx when sources/headers changed; stale libs linked against fresh
-# generated code ABI-mismatch and the result crashes at startup
-if [ ! -x ../../build/clx ] || [ -n "$(find ../../src ../../include ../../CMakeLists.txt -newer ../../build/clx -print -quit 2>/dev/null)" ]; then
+# generated code ABI-mismatch and the result crashes at startup. build/clx keeps its
+# old mtime when only runtime sources are rebuilt, so build.sh writes a stamp instead.
+STAMP=../../build/.clx-built
+if [ ! -x ../../build/clx ] || [ ! -f "$STAMP" ] || [ -n "$(find ../../src ../../include ../../CMakeLists.txt -newer "$STAMP" -print -quit 2>/dev/null)" ]; then
     echo "Building clx..."
     (cd ../.. && ./build.sh)
+    touch "$STAMP"
 fi
 CLX="$(cd ../../build && pwd)/clx"
 

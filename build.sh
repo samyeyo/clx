@@ -44,6 +44,9 @@ done
 
 cmake -S . -B build -DCMAKE_BUILD_TYPE=$BUILD_TYPE $ARCH_ARGS
 cmake --build build --config $BUILD_TYPE
+#------------------ stamp for scripts that rebuild clx when sources change (the driver binary keeps
+#------------------ its old mtime when only runtime sources are rebuilt)
+touch build/.clx-built
 
 if [ "$DO_INSTALL" = true ]; then
     if [ -w /usr/bin ] 2>/dev/null || [ "$OSTYPE" = "msys" ] || [ "$OSTYPE" = "win32" ]; then
