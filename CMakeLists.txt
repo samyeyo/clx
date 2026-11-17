@@ -392,7 +392,7 @@ if(TARGET clx_lua)
     install(TARGETS clx_lua ARCHIVE
             DESTINATION ${CMAKE_INSTALL_LIBDIR} OPTIONAL)
 endif()
-install(FILES include/clx.h include/clx_runtime.h include/clx_simd.h
+install(FILES include/clx.h include/clx.hpp include/clx_runtime.h include/clx_simd.h
               OPTIONAL DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(FILES include/lua.h include/lauxlib.h include/lualib.h
               OPTIONAL DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
