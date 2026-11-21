@@ -317,6 +317,24 @@ static CLX_INLINE_HOT void gc_push_for_trace(LState::GCStack &wl, LHeader *h, LV
         wl.push(h);
 }
 
+//------------------ gc_mark_external_value — mark one value rooted outside the frame chains (a C API stack slot)
+void gc_mark_external_value(LState *L, const LValue &v, LState::GCStack &wl) {
+    if (!v.is_gc_obj())
+        return;
+    LHeader *h = v.as_pointer();
+    if (!h || h->type != static_cast<uint8_t>(v.type))
+        return;
+    if (v.type == ValueType::UserData && !L->is_allocated_userdata(h))
+        return;
+    if (h->marked != 0)
+        return;
+    //------------------ a minor only traces young objects: old marks are never cleared by a minor sweep
+    if (L->gc_minor_active && h->age == AGE_OLD)
+        return;
+    h->marked = 1;
+    gc_push_for_trace(wl, h, v);
+}
+
 //------------------ weak_mode_of — cached __mode bits of a table's metatable (1 = weak keys, 2 = weak values)
 static uint8_t weak_mode_of(LState *L, LTable *t);
 //------------------ weak_clearable — stock clears weak references only to these four kinds (never strings)
@@ -444,8 +462,12 @@ static bool gc_trace_function_young(LState *L, LCFunction *f, LState::GCStack &w
     return has_nonold;
 }
 
-//------------------ LState::is_allocated_userdata — membership check on both GC chains
+//------------------ LState::is_allocated_userdata — membership check on both GC chains, plus the userdata whose
+//------------------ __gc is running: it was unlinked by the sweep but its block is still alive until the call ends
 bool LState::is_allocated_userdata(const LHeader *h) const {
+    for (const LUserdata *ud : finalizing_ud)
+        if (ud == h)
+            return true;
     return chain_contains(allocated_objects, h) || chain_contains(old_objects, h);
 }
 
@@ -531,6 +553,9 @@ void LState::gc_minor() {
     if (running_thread && running_thread != main_thread)
         push_if_needed(LValue(Thread, running_thread));
     gc_walk_roots(top_root, push_if_needed);
+    for (CapiRootNode *cr = capi_roots; cr; cr = cr->next)
+        if (cr->mark)
+            cr->mark(cr, this, wl);
     for (const LValue &r : permanent_roots)
         push_if_needed(r);
 
@@ -1201,6 +1226,9 @@ void LState::gc_collect_mark() {
     if (running_thread && running_thread != main_thread)
         push_if_needed(LValue(Thread, running_thread));
     gc_walk_roots(top_root, push_if_needed);
+    for (CapiRootNode *cr = capi_roots; cr; cr = cr->next)
+        if (cr->mark)
+            cr->mark(cr, this, wl);
 
     for (const LValue &r : permanent_roots)
         push_if_needed(r);

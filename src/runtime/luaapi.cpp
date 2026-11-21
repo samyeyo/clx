@@ -33,15 +33,26 @@
 #endif
 
 //---------- One API frame: a deque of frame-rooted values plus the upvalues of the C function that owns it.
-//---------- `rroots` aliases every element of `stack` (push grows both, truncate shrinks both), so the
-//---------- collector sees in-place slot updates exactly like the old shadow-stack aliases did.
+//---------- `roots` registers the frame's live slots with the collector. They must stay rooted across
+//---------- coroutine switches and they outlive the coroutine that pushed them, so they are not RootRange
+//---------- chain nodes (a chain mirrors one coroutine's C stack and only unlinks from its head).
 struct ApiFrame {
     std::deque<clx::LValue> stack;
     std::shared_ptr<std::vector<clx::LUpValue>> ups;
-    clx::Frame<8> rroots;
+    clx::CapiRootNode roots;
 
     explicit ApiFrame(clx::LState *S)
-        : rroots(S) { }
+        : roots(S) {
+        roots.ctx = this;
+        roots.mark = &ApiFrame::mark_roots;
+    }
+
+    //---------- mark_roots: hand every live slot of this frame to the collector
+    static void mark_roots(clx::CapiRootNode *self, clx::LState *L, clx::LState::GCStack &wl) {
+        ApiFrame *f = static_cast<ApiFrame *>(self->ctx);
+        for (const clx::LValue &v : f->stack)
+            clx::gc_mark_external_value(L, v, wl);
+    }
 };
 
 //---------- CFrameReturn: abandons a C function once its continuation ran; n becomes the function's result count
@@ -267,43 +278,6 @@ static lua_State *luaapi_fetch(clx::LState *L) {
     return &static_cast<ApiBundle *>(L->luaapi)->st;
 }
 
-//---------- luaapi_owner: the thread whose GC-root region backs one bundle's API frames
-static clx::LThread *luaapi_owner(lua_State *L) {
-    if (L->thread)
-        return L->thread;
-    clx::LState *S = L->L;
-    if (S->main_thread)
-        return S->main_thread;
-    return S->running_thread;
-}
-
-//---------- luaapi_detach_frame: splice one API frame's root range out of whichever root chain holds it
-//---------- (running chain or a stashed per-thread chain). Teardown/reset paths destroy frames non-LIFO,
-//---------- so they detach explicitly instead of relying on the head-only RootRange unlink.
-static void luaapi_detach_frame(clx::LState *S, clx::LThread *t, ApiFrame &f) {
-    clx::RootRange *r = &f.rroots;
-    for (clx::RootRange **p = &S->top_root; *p;) {
-        if (*p == r) {
-            *p = r->prev;
-            break;
-        }
-        p = &(*p)->prev;
-    }
-    clx::LThread *threads[3] = { t, S->main_thread, S->running_thread };
-    for (int i = 0; i < 3; ++i) {
-        clx::LThread *th = threads[i];
-        if (!th)
-            continue;
-        for (clx::RootRange **p = &th->top_root; *p;) {
-            if (*p == r) {
-                *p = r->prev;
-                break;
-            }
-            p = &(*p)->prev;
-        }
-    }
-}
-
 //---------- luaapi_fetch_thread: lazily create the ApiBundle backing one coroutine
 static lua_State *luaapi_fetch_thread(clx::LThread *t) {
     if (!t->luaapi) {
@@ -379,11 +353,12 @@ static clx::LValue *luaapi_locate(lua_State *L, int idx) {
     return &f->stack[static_cast<size_t>(i)];
 }
 
-//---------- luaapi_push: append a value and root it in the frame's own root range
+//---------- luaapi_push: append a value and register the frame with the collector while it holds values
 static void luaapi_push(lua_State *L, const clx::LValue &v) {
     ApiFrame &f = luaapi_frame(L);
     f.stack.push_back(v);
-    f.rroots.push(f.stack.back());
+    if (f.stack.size() == 1)
+        f.roots.link();
 }
 
 //---------- luaapi_truncate: shrink the frame to n slots; growth must go through luaapi_push
@@ -392,7 +367,8 @@ static void luaapi_truncate(lua_State *L, size_t n) {
     if (n >= f.stack.size())
         return;
     f.stack.resize(n);
-    f.rroots.restore(n);
+    if (f.stack.empty())
+        f.roots.unlink();
 }
 
 //---------- luaapi_pop: drop the top n slots
@@ -468,6 +444,8 @@ static int luaapi_tag(clx::LState *S, const clx::LValue &v) {
         return LUA_TFUNCTION;
     case ValueType::UserData:
         return luaapi_full_ud(S, v) ? LUA_TUSERDATA : LUA_TLIGHTUSERDATA;
+    case ValueType::LightUserData:
+        return LUA_TLIGHTUSERDATA;
     case ValueType::Thread:
         return LUA_TTHREAD;
     default:
@@ -537,8 +515,6 @@ void luaapi_free_state(LState *L) {
         ApiBundle *tb = g_capi_thread_bundles[i];
         if (tb->st.L != L)
             continue;
-        for (ApiFrame &ff : tb->st.frames)
-            luaapi_detach_frame(L, tb->st.thread, ff);
         tb->st.frames.clear();
         tb->st.registry = LValue();
         tb->st.uservalues = LValue();
@@ -552,8 +528,6 @@ void luaapi_free_state(LState *L) {
     L->unroot_value(b->st.uservalues);
     b->st.registry = LValue();
     b->st.uservalues = LValue();
-    for (ApiFrame &ff : b->st.frames)
-        luaapi_detach_frame(L, b->st.thread, ff);
     b->st.frames.clear();
     L->luaapi = nullptr;
     L->luaapi_cleanup = nullptr;
@@ -564,8 +538,6 @@ void luaapi_free_state(LState *L) {
 //---------- luaapi_reset_thread_bundle: clear a recycled coroutine's API frames so it starts from a clean stack
 void luaapi_reset_thread_bundle(LState *L, void *bundle) {
     ApiBundle *b = static_cast<ApiBundle *>(bundle);
-    for (ApiFrame &ff : b->st.frames)
-        luaapi_detach_frame(L, b->st.thread, ff);
     b->st.frames.clear();
     b->st.pcall_depth = 0;
     b->st.catching_frames = 0;
@@ -795,7 +767,7 @@ int lua_isinteger(lua_State *L, int idx) {
 
 int lua_isuserdata(lua_State *L, int idx) {
     clx::LValue *v = luaapi_locate(L, idx);
-    return (v && v->type == clx::ValueType::UserData) ? 1 : 0;
+    return (v && (v->type == clx::ValueType::UserData || v->type == clx::ValueType::LightUserData)) ? 1 : 0;
 }
 
 int lua_type(lua_State *L, int idx) {
@@ -927,7 +899,11 @@ lua_CFunction lua_tocfunction(lua_State *L, int idx) {
 
 void *lua_touserdata(lua_State *L, int idx) {
     clx::LValue *v = luaapi_locate(L, idx);
-    if (!v || v->type != clx::ValueType::UserData)
+    if (!v)
+        return nullptr;
+    if (v->type == clx::ValueType::LightUserData)
+        return v->val.payload.ptr;
+    if (v->type != clx::ValueType::UserData)
         return nullptr;
     clx::LHeader *p = v->as_pointer();
     if (!p)
@@ -962,6 +938,8 @@ const void *lua_topointer(lua_State *L, int idx) {
     case ValueType::UserData:
         return luaapi_full_ud(L->L, *v) ? static_cast<clx::LUserdata *>(v->as_pointer())->data()
                                         : static_cast<const void *>(v->as_pointer());
+    case ValueType::LightUserData:
+        return v->val.payload.ptr;
     default:
         return nullptr;
     }
@@ -1209,7 +1187,7 @@ void lua_pushboolean(lua_State *L, int b) {
 }
 
 void lua_pushlightuserdata(lua_State *L, void *p) {
-    luaapi_push(L, clx::LValue(clx::ValueType::UserData, static_cast<clx::LHeader *>(p)));
+    luaapi_push(L, clx::LValue::light_udata(p));
 }
 
 int lua_pushthread(lua_State *L) {
@@ -1306,7 +1284,7 @@ int lua_rawgetp(lua_State *L, int idx, const void *p) {
     clx::LValue *t = luaapi_locate(L, idx);
     if (!t)
         return luaL_error(L, "table expected");
-    clx::LValue key(clx::ValueType::UserData, static_cast<clx::LHeader *>(const_cast<void *>(p)));
+    clx::LValue key = clx::LValue::light_udata(p);
     clx::LValue r = clx::raw_get(S, *t, key);
     luaapi_push(L, r);
     return luaapi_tag(S, r);
@@ -1468,7 +1446,7 @@ void lua_rawsetp(lua_State *L, int idx, const void *p) {
         luaL_error(L, "table expected");
         return;
     }
-    clx::LValue key(clx::ValueType::UserData, static_cast<clx::LHeader *>(const_cast<void *>(p)));
+    clx::LValue key = clx::LValue::light_udata(p);
     clx::raw_set(S, *t, key, f.stack.back());
     luaapi_truncate(L, f.stack.size() - 1);
 }
@@ -1737,8 +1715,11 @@ int lua_resume(lua_State *L, lua_State *from, int narg, int *nres) {
         }
         t->function = fn;
     } else {
+        //------------------ stock resumes inside the coroutine's own stack frame, so the values left
+        //------------------ over from the previous yield are overwritten by the new results; the API
+        //------------------ stack has to drop them explicitly or every resume leaves a stale prefix
         arg_start = sz - na;
-        keep = arg_start;
+        keep = 0;
     }
     std::vector<clx::LValue> args(
         f.stack.begin() + static_cast<long long>(arg_start), f.stack.begin() + static_cast<long long>(sz));

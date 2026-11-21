@@ -207,6 +207,16 @@ void LState::slab_release() {
     slab_current = slab_end = nullptr;
 }
 
+//------------------ FinalizingUdGuard — keep the dying userdata recognizable as a full userdata for __gc
+struct FinalizingUdGuard {
+    LState *L;
+    FinalizingUdGuard(LState *S, LUserdata *ud)
+        : L(S) {
+        L->finalizing_ud.push_back(ud);
+    }
+    ~FinalizingUdGuard() { L->finalizing_ud.pop_back(); }
+};
+
 //------------------ LState::invoke_gc_finalizer — call __gc metamethod on userdata
 void LState::invoke_gc_finalizer(LUserdata *ud, const char *tag) {
     if (!ud->metatable)
@@ -216,6 +226,7 @@ void LState::invoke_gc_finalizer(LUserdata *ud, const char *tag) {
         return;
     LValue args[1] = { LValue(UserData, ud) };
     RootRange rr(this, args, 1);
+    FinalizingUdGuard finalizing(this, ud);
     try {
         CallSite gc_site = { tag, 0, false, false };
         call_function(this, gc_func, args, 1, &gc_site);
