@@ -59,6 +59,10 @@ static MultiValue debug_setmetatable(LState *L, const LValue *args, size_t count
         error(L, bad_arg_msg(L, 2, "debug.setmetatable", "nil or table expected").c_str());
     LTable *mt = (mt_val.type == ValueType::Table) ? static_cast<LTable *>(mt_val.as_pointer()) : nullptr;
 
+    //------------------ a light userdata has no metatable at all, so there is no slot to install one into
+    if (v.type == ValueType::LightUserData)
+        error(L, bad_arg_msg(L, 1, "debug.setmetatable", "cannot set a metatable for a light userdata").c_str());
+
     switch (v.type) {
     case ValueType::Table: {
         LTable *t = static_cast<LTable *>(v.as_pointer());

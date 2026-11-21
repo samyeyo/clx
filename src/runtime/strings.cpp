@@ -450,6 +450,7 @@ MultiValue str_format(LState *L, const LValue *args, size_t count) {
             case ValueType::Function:
             case ValueType::Thread:
             case ValueType::UserData:
+            case ValueType::LightUserData:
                 ptr = args[arg - 1].as_pointer();
                 break;
             case ValueType::String:

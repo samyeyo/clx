@@ -54,9 +54,13 @@ const char *LRuntimeException::what() const noexcept {
 
 //------------------ LValue::to_string — convert value to string
 std::string LValue::to_string(LState *L) const {
-    if (L && (type == Table || type == UserData)) {
-        LTable *mt = (type == Table) ? tbl_metatable(static_cast<LTable *>(as_pointer()))
-                                     : static_cast<LUserdata *>(as_pointer())->metatable;
+    //------------------ light userdata carries a foreign pointer: only a GC-allocated block may be
+    //------------------ dereferenced for a metatable, exactly as the C API's lua_touserdata decides
+    LUserdata *ud = nullptr;
+    if (L && type == UserData && L->is_allocated_userdata(as_pointer()))
+        ud = static_cast<LUserdata *>(as_pointer());
+    if (L && (type == Table || ud)) {
+        LTable *mt = (type == Table) ? tbl_metatable(static_cast<LTable *>(as_pointer())) : ud->metatable;
         if (mt) {
             LValue meta_key = L->str_tostring;
             LValue meta_func = mt->gettable(meta_key);
@@ -116,10 +120,14 @@ std::string LValue::to_string(LState *L) const {
         std::snprintf(buf, sizeof(buf), "thread: %p", as_pointer());
         return std::string(buf);
     }
+    case LightUserData: {
+        char ptr[32];
+        std::snprintf(ptr, sizeof(ptr), "%p", as_pointer());
+        return std::string("userdata: ") + ptr;
+    }
     case UserData: {
         const char *prefix = "userdata";
-        if (L) {
-            LUserdata *ud = static_cast<LUserdata *>(as_pointer());
+        if (ud) {
             if (ud->metatable) {
                 LValue n = ud->metatable->gettable(L->str_name);
                 if (n.type != Nil && n.type == String)
@@ -247,6 +255,8 @@ LTable *metatable_of(LState *L, const LValue &v) {
         return tbl_metatable(static_cast<LTable *>(v.as_pointer()));
     case UserData:
         return static_cast<LUserdata *>(v.as_pointer())->metatable;
+    case LightUserData:
+        return nullptr;
     case String:
         return L->string_metatable;
     default:
@@ -296,6 +306,10 @@ LValue call_bin_metamethod(LState *L, const LValue &a, const LValue &b, const LV
                 = (v.type == ValueType::Int64) ? static_cast<size_t>(ValueType::Double) : static_cast<size_t>(v.type);
             return VALUE_TYPE_NAMES[idx];
         };
+        //------------------ stock names the shared type once when both operands have it (luaG_ordererror)
+        if (std::strcmp(type_name(a), type_name(b)) == 0)
+            throw LRuntimeException(LValue(L->intern_string(
+                prefix + "attempt to compare two " + type_name(a) + " values")));
         throw LRuntimeException(
             LValue(L->intern_string(prefix + "attempt to compare " + type_name(a) + " with " + type_name(b))));
     }

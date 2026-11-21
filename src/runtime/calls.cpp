@@ -198,7 +198,7 @@ static MultiValue lazy_funcs_index(LState *L, const LValue *args, size_t n) {
 
     LValue regs_val = mt->gettable(regs_key);
     LValue count_val = mt->gettable(count_key);
-    if (regs_val.type != UserData || regs_val.type == Nil || count_val.type == Nil || count_val.type != Int64)
+    if (regs_val.type != LightUserData || count_val.type == Nil || count_val.type != Int64)
         return MultiValue();
 
     const LazyReg *regs = reinterpret_cast<const LazyReg *>(regs_val.as_pointer());
@@ -231,8 +231,7 @@ void set_lazy_funcs(LState *L, const LValue &table, const LazyReg *regs, size_t 
             gc_barrier_header(L, t, LValue(Table, mt));
     }
     meta_list_add(L, t);
-    mt->settable(LValue(L->intern_string("__lazy_regs")),
-        LValue(UserData, reinterpret_cast<LHeader *>(const_cast<LazyReg *>(regs))));
+    mt->settable(LValue(L->intern_string("__lazy_regs")), LValue::light_udata(regs));
     mt->settable(LValue(L->intern_string("__lazy_count")), LValue(static_cast<int64_t>(count)));
 
     LValue existing = mt->gettable(L->str_index);

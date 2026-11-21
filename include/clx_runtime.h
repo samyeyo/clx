@@ -159,7 +159,8 @@ enum class ValueType : uint8_t {
     Table = 5,
     Function = 6,
     UserData = 7,
-    Thread = 8
+    Thread = 8,
+    LightUserData = 9
 };
 
 //------------------ ValueType short aliases (clx::Nil, clx::String, etc.)
@@ -172,13 +173,16 @@ constexpr auto Table = ValueType::Table;
 constexpr auto Function = ValueType::Function;
 constexpr auto UserData = ValueType::UserData;
 constexpr auto Thread = ValueType::Thread;
+constexpr auto LightUserData = ValueType::LightUserData;
 
 //------------------ Type name strings by ValueType index
-static constexpr const char *VALUE_TYPE_NAMES[]
-    = { "nil", "boolean", "integer", "number", "string", "table", "function", "userdata", "thread" };
+static constexpr const char *VALUE_TYPE_NAMES[] = { "nil", "boolean", "integer", "number", "string", "table",
+    "function", "userdata", "thread", "userdata" };
 
 //------------------ type_meta_index: slot in LState::type_metatables for a value's type; stock has a
-//------------------ single metatable for all numbers, so integers and floats share one slot
+//------------------ single metatable for all numbers, so integers and floats share one slot. Light userdata
+//------------------ owns the last slot and never fills it: a light userdata has no metatable at all, so every
+//------------------ lookup of that slot reads back nullptr.
 CLX_INLINE size_t type_meta_index(ValueType t) {
     return static_cast<size_t>(t == ValueType::Double ? ValueType::Int64 : t);
 }
@@ -305,7 +309,18 @@ struct LValue {
         : val()
         , type(ValueType::Nil) { }
 
+    //------------------ light_udata: a value carrying a light userdata — a bare foreign pointer the runtime never
+    //------------------ dereferences, never traces and never gives a metatable
+    CLX_INLINE_HOT static LValue light_udata(const void *p) {
+        LValue v;
+        v.val.payload.ptr = const_cast<void *>(p);
+        v.type = ValueType::LightUserData;
+        return v;
+    }
+
     CLX_INLINE_HOT bool is_gc_obj() const { return is_gc_obj_tag(type); }
+
+    CLX_INLINE_HOT bool is_light_udata() const { return type == ValueType::LightUserData; }
 
     CLX_INLINE_HOT double as_number() const {
         if (type == ValueType::Int64)
@@ -712,6 +727,7 @@ private:
 struct LState;
 struct LTable;
 struct RootRange;
+struct CapiRootNode;
 struct CallSite;
 
 //------------------ default_call_site: no-file/no-line descriptor used when a call has no source context
@@ -1515,6 +1531,10 @@ struct LState {
     //------------------ Metatabled-userdata list: files register here so the protect passes can shield
     //------------------ their metatable (+ __gc closure) when the userdata itself dies in the same cycle.
     LUserdata *metatabled_ud = nullptr;
+    //------------------ Userdata whose __gc is running. A finalizable userdata leaves the allocation chains
+    //------------------ when it is swept, before __gc runs, so without this marker is_allocated_userdata()
+    //------------------ would reject it and the C API would hand out the header pointer as light userdata.
+    std::vector<LUserdata *> finalizing_ud;
 
     //------------------ LTable slab arena: bump-allocated object slabs (freed whole at close)
 
@@ -1530,6 +1550,10 @@ struct LState {
 
     //---------- top_root: head of the running thread's RootRange chain (one frame per generated function)
     RootRange *top_root = nullptr;
+    //---------- capi_roots: C API stack frames registered by the Lua C API bridge. Those frames keep values
+    //---------- alive across coroutine switches and outlive the coroutine whose C stack pushed them, so they
+    //---------- are not RootRange chain nodes; the collector marks their slots through the node callback.
+    CapiRootNode *capi_roots = nullptr;
 
     //------------------ Active call site: the descriptor captured at the most recent call/statement, read by
     //------------------ file_line_prefix and bad_arg_msg for Lua-compatible error context.
@@ -1606,7 +1630,7 @@ struct LState {
     LTable *string_metatable;
     //------------------ Type metatables set through debug.setmetatable (indexed by ValueType; the string
     //------------------ slot is unused, strings keep string_metatable). Marked as roots by the collector.
-    LTable *type_metatables[9] = { nullptr };
+    LTable *type_metatables[10] = { nullptr };
     //------------------ debug.getregistry table: a plain table, rooted by the collector
     LTable *registry = nullptr;
 
@@ -1847,6 +1871,53 @@ struct LState {
     //------------------ established allocation layout. Re-validate hot table benchmarks before resizing.
     char _layout_reserve[256] = { };
 };
+
+//------------------ CapiRootNode — one C API stack block registered with the collector. A frame chain mirrors one
+//------------------ coroutine's C stack and only unlinks from its head; C API frames are dropped in arbitrary
+//------------------ order, so registration uses a doubly linked list and unlinks in O(1) from any position.
+struct CapiRootNode {
+    CapiRootNode *prev = nullptr;
+    CapiRootNode *next = nullptr;
+    LState *owner = nullptr;
+    //------------------ ctx: the block this node belongs to (the ApiFrame that owns it)
+    void *ctx = nullptr;
+    //------------------ mark: hand every live slot of the block to the collector
+    void (*mark)(CapiRootNode *self, LState *L, LState::GCStack &wl) = nullptr;
+
+    CLX_INLINE_HOT explicit CapiRootNode(LState *L)
+        : owner(L) { }
+
+    CLX_INLINE_HOT ~CapiRootNode() { unlink(); }
+
+    CLX_INLINE_HOT void link() {
+        if (!owner || prev || owner->capi_roots == this)
+            return;
+        next = owner->capi_roots;
+        if (next)
+            next->prev = this;
+        owner->capi_roots = this;
+    }
+
+    CLX_INLINE_HOT void unlink() {
+        if (!owner)
+            return;
+        if (prev)
+            prev->next = next;
+        else if (owner->capi_roots == this)
+            owner->capi_roots = next;
+        if (next)
+            next->prev = prev;
+        prev = nullptr;
+        next = nullptr;
+    }
+
+    CapiRootNode(const CapiRootNode &) = delete;
+    CapiRootNode &operator=(const CapiRootNode &) = delete;
+};
+
+//------------------ gc_mark_external_value — mark one value rooted outside the frame chains (a C API stack slot).
+//------------------ During a minor only young objects are marked: the minor sweep never clears an old object's mark.
+void gc_mark_external_value(LState *L, const LValue &v, LState::GCStack &wl);
 
 //------------------ RootRange — one GC-root frame. The constructor links it into the owning thread's chain, the
 //------------------ destructor unlinks it (RAII, so unwinding unroots without any explicit restore). `base[0..n)` is

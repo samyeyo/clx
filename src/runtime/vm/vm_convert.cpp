@@ -306,6 +306,9 @@ void clx_to_vm_value_(LState* clx_L, lua_State* L, const LValue& v)
         }
         return;
     }
+    case LightUserData:
+        lua_pushlightuserdata(L, v.val.payload.ptr);
+        return;
     case Thread:
 
         throw_runtime_error("cannot pass clx coroutine to Lua VM function: "
@@ -469,6 +472,8 @@ LValue vm_to_clx_value_(LState* clx_L, lua_State* L, int idx)
         LValue vf = vm_to_clx_function_(clx_L, L, idx);
         return vf;
     }
+    case LUA_TLIGHTUSERDATA:
+        return LValue::light_udata(lua_touserdata(L, idx));
     case LUA_TUSERDATA: {
 
         if (lua_getmetatable(L, idx)) {

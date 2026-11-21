@@ -93,7 +93,7 @@ CLX_INLINE_HOT LValue thread(LThread* t)
 //------------------ Creates a light userdata LValue
 CLX_INLINE_HOT LValue lightuserdata(void* p)
 {
-    return LValue(ValueType::UserData, reinterpret_cast<LHeader*>(p));
+    return LValue::light_udata(p);
 }
 
 //------------------ Returns type enum of a value
@@ -160,6 +160,12 @@ CLX_INLINE_HOT bool is_thread(const LValue& v)
 CLX_INLINE_HOT bool is_userdata(const LValue& v)
 {
     return v.type == ValueType::UserData;
+}
+
+//------------------ Checks if value is light userdata
+CLX_INLINE_HOT bool is_lightuserdata(const LValue& v)
+{
+    return v.type == ValueType::LightUserData;
 }
 
 //------------------ Always false (API compat)
