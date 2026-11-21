@@ -28,7 +28,7 @@ for dir in conformance regression stress edge_cases; do
         name=$(basename "$file" .lua)
         # Skip files handled by dedicated tests below
         case "$file" in
-            conformance/package.lua|conformance/mymod.lua|conformance/test_native_mod.lua|conformance/test_capi_mod.lua|conformance/struct_odr_main.lua|conformance/struct_odr_a.lua|conformance/struct_odr_b.lua) continue ;;
+            conformance/package.lua|conformance/mymod.lua|conformance/test_native_mod.lua|conformance/test_capi_mod.lua|            conformance/test_capi_sched.lua|conformance/test_capi_lightud.lua|conformance/struct_odr_main.lua|conformance/struct_odr_a.lua|conformance/struct_odr_b.lua) continue ;;
         esac
         if [ "$(basename "$file")" = "load.lua" ]; then
             echo "SKIP: $file (run tests/test-load.sh to exercise --dynamic)"
@@ -177,6 +177,84 @@ if [ -f "$CAPI_SRC" ] && [ -f "$CAPI_TEST_LUA" ]; then
         rm -f "$CAPI_A" "$SCRIPT_DIR/capi_mod.o"
     else
         echo "[FAIL] capi_mod -- g++ compilation of capi_mod.cpp failed"
+        FAIL=$((FAIL + 1))
+    fi
+fi
+
+# Lua C API scheduler test (--modules, C-driven coroutines)
+SCHED_SRC="$SCRIPT_DIR/conformance/capi_sched_mod.cpp"
+SCHED_TEST_LUA="$SCRIPT_DIR/conformance/test_capi_sched.lua"
+SCHED_BIN="$SCRIPT_DIR/capi_sched_mod_test"
+if [ -f "$SCHED_SRC" ] && [ -f "$SCHED_TEST_LUA" ]; then
+    g++ -c -std=c++20 -fPIC -I "$ROOT_DIR/include" -o "$SCRIPT_DIR/capi_sched_mod.o" "$SCHED_SRC" 2>/dev/null
+    if [ -f "$SCRIPT_DIR/capi_sched_mod.o" ]; then
+        SCHED_A="$SCRIPT_DIR/capi_sched_mod.a"
+        ar rcs "$SCHED_A" "$SCRIPT_DIR/capi_sched_mod.o" 2>/dev/null
+
+        SCHED_OUT="$SCRIPT_DIR/capi_sched_mod_out.log"
+        "$COMPILER" "$SCHED_TEST_LUA" --modules capi_sched_mod --output "$SCHED_BIN" 2>/dev/null
+        if [ -f "$SCHED_BIN" ]; then
+            "$SCHED_BIN" > "$SCHED_OUT" 2>&1
+            sched_exit=$?
+            cat "$SCHED_OUT"
+            if [ "$sched_exit" -ne 0 ]; then
+                echo "[FAIL] capi_sched_mod -- runtime exit code $sched_exit"
+                FAIL=$((FAIL + 1))
+            elif grep -q "\[FAIL\]" "$SCHED_OUT"; then
+                echo "[FAIL] capi_sched_mod"
+                FAIL=$((FAIL + 1))
+            else
+                echo "[PASS] capi_sched_mod"
+                PASS=$((PASS + 1))
+            fi
+            rm -f "$SCHED_BIN" "$SCHED_OUT"
+        else
+            echo "[FAIL] capi_sched_mod -- linking with clx compiler failed"
+            FAIL=$((FAIL + 1))
+        fi
+
+        rm -f "$SCHED_A" "$SCRIPT_DIR/capi_sched_mod.o"
+    else
+        echo "[FAIL] capi_sched_mod -- g++ compilation of capi_sched_mod.cpp failed"
+        FAIL=$((FAIL + 1))
+    fi
+fi
+
+# Lua C API light userdata test (--modules, value type separation)
+LUD_SRC="$SCRIPT_DIR/conformance/capi_lightud_mod.cpp"
+LUD_TEST_LUA="$SCRIPT_DIR/conformance/test_capi_lightud.lua"
+LUD_BIN="$SCRIPT_DIR/capi_lightud_mod_test"
+if [ -f "$LUD_SRC" ] && [ -f "$LUD_TEST_LUA" ]; then
+    g++ -c -std=c++20 -fPIC -I "$ROOT_DIR/include" -o "$SCRIPT_DIR/capi_lightud_mod.o" "$LUD_SRC" 2>/dev/null
+    if [ -f "$SCRIPT_DIR/capi_lightud_mod.o" ]; then
+        LUD_A="$SCRIPT_DIR/capi_lightud_mod.a"
+        ar rcs "$LUD_A" "$SCRIPT_DIR/capi_lightud_mod.o" 2>/dev/null
+
+        LUD_OUT="$SCRIPT_DIR/capi_lightud_mod_out.log"
+        "$COMPILER" "$LUD_TEST_LUA" --modules capi_lightud_mod --output "$LUD_BIN" 2>/dev/null
+        if [ -f "$LUD_BIN" ]; then
+            "$LUD_BIN" > "$LUD_OUT" 2>&1
+            lud_exit=$?
+            cat "$LUD_OUT"
+            if [ "$lud_exit" -ne 0 ]; then
+                echo "[FAIL] capi_lightud_mod -- runtime exit code $lud_exit"
+                FAIL=$((FAIL + 1))
+            elif grep -q "\[FAIL\]" "$LUD_OUT"; then
+                echo "[FAIL] capi_lightud_mod"
+                FAIL=$((FAIL + 1))
+            else
+                echo "[PASS] capi_lightud_mod"
+                PASS=$((PASS + 1))
+            fi
+            rm -f "$LUD_BIN" "$LUD_OUT"
+        else
+            echo "[FAIL] capi_lightud_mod -- linking with clx compiler failed"
+            FAIL=$((FAIL + 1))
+        fi
+
+        rm -f "$LUD_A" "$SCRIPT_DIR/capi_lightud_mod.o"
+    else
+        echo "[FAIL] capi_lightud_mod -- g++ compilation of capi_lightud_mod.cpp failed"
         FAIL=$((FAIL + 1))
     fi
 fi
