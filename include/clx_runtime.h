@@ -2202,8 +2202,19 @@ CLX_INLINE_HOT MultiValue call_cfunc_direct(
     return f(L, args, count);
 }
 
+//------------------ A metatable carrying __gc marks the object for finalization when it is installed, as stock's
+//------------------ luaC_checkfinalizer does. Every path that installs a metatable goes through the two list-add
+//------------------ helpers below, so the mark cannot be forgotten at an install site. The metamethod is looked up
+//------------------ again when the object dies, so replacing or clearing __gc later decides which finalizer runs,
+//------------------ while adding __gc to an already installed metatable does not mark the objects set before it.
+CLX_INLINE void meta_mark_finalizable(LState *L, LHeader *h, LTable *mt) {
+    if (mt && mt->gettable(L->str_gc).type != ValueType::Nil)
+        h->flags |= LFLAG_GC_MARKED;
+}
+
 //------------------ Metatabled-tables list (protect-pass fast path)
 CLX_INLINE void meta_list_add(LState *L, LTable *t) {
+    meta_mark_finalizable(L, t, tbl_metatable(t));
     if (t->flags & LFLAG_META_LIST)
         return;
     LTableExt *ex = tbl_ensure_ext(t);
@@ -2228,6 +2239,7 @@ CLX_INLINE void meta_list_remove(LState *L, LTable *t) {
 
 //------------------ Metatabled-userdata list (dead-__gc protection fast path)
 CLX_INLINE void meta_ud_list_add(LState *L, LUserdata *ud) {
+    meta_mark_finalizable(L, ud, ud->metatable);
     if (ud->flags & LFLAG_META_UD)
         return;
     ud->meta_next = L->metatabled_ud;

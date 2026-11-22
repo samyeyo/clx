@@ -66,24 +66,24 @@ static MultiValue debug_setmetatable(LState *L, const LValue *args, size_t count
     switch (v.type) {
     case ValueType::Table: {
         LTable *t = static_cast<LTable *>(v.as_pointer());
+        tbl_set_metatable(t, mt);
+        //------------------ registered after the install, so the list add sees the metatable that is now in
+        //------------------ place (it is what decides whether the table is marked finalizable)
         if (mt)
             meta_list_add(L, t);
         else
             meta_list_remove(L, t);
-        tbl_set_metatable(t, mt);
-        mark_gc_object(L, t, mt);
         if (mt)
             gc_barrier_table(L, t, mt_val);
         break;
     }
     case ValueType::UserData: {
         LUserdata *ud = static_cast<LUserdata *>(v.as_pointer());
+        ud->metatable = mt;
         if (mt)
             meta_ud_list_add(L, ud);
         else
             meta_ud_list_remove(L, ud);
-        ud->metatable = mt;
-        mark_gc_object(L, ud, mt);
         if (mt)
             gc_barrier_header(L, ud, mt_val);
         break;
