@@ -80,7 +80,7 @@ collectgarbage("collect")
 collectgarbage("collect")
 
 assert_eq(s.pending_count(), 0, "queue drained")
-assert_eq(s.gc_count() >= 0, true, "payload finalizers ran or not")
+assert_eq(s.gc_count() > 0, true, "payload finalizers ran for the dropped tasks")
 
 print("-----")
 print("PASS  :", passed)
