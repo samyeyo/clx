@@ -8,6 +8,8 @@ The format is loosely based on Keep a Changelog and the project follows Semantic
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-22
+
 ### Added
 
 * The `clx.hpp` high level object oriented C++ API: value-semantic `lua::Table`/`String`/`Function`/`UserData`/`Thread`, automatic C++ conversions, lambda bindings and `lua::Class<T>` for userdata types, installed next to `clx.h` (see `doc/hl-api.md`)
