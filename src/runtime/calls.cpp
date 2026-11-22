@@ -121,6 +121,11 @@ MultiValue call_function(LState *L, const LValue &func, const LValue *args, size
 
 //------------------ pcall_function — protected call
 MultiValue pcall_function(LState *L, const LValue &func, const LValue *args, size_t count) {
+    //------------------ every root frame opened inside the call dies with it, but MSVC skips the cleanup of a
+    //------------------ few of them while the error unwinds (a root frame left behind points at a returned C
+    //------------------ frame, and marking through it reads dead stack): the handler restores the chain the call
+    //------------------ found, dropping every entry the unwind should have removed
+    RootRange *root_mark = L->top_root;
     try {
         //------------------ stock luaL_where sees the C pcall frame for its callers: no line, so errors
         //------------------ raised directly under pcall carry no file:line prefix (keep the source name).
@@ -145,6 +150,7 @@ MultiValue pcall_function(LState *L, const LValue &func, const LValue *args, siz
             vals.push_back(ret[i]);
         return MultiValue(vals, L);
     } catch (const LRuntimeException &e) {
+        L->top_root = root_mark;
         //------------------ a __close that raised while this error unwound replaced it (stock rethrows the
         //------------------ last close error), so report that one and drop the pending slot
         LValue err_obj = e.error_obj;
@@ -158,7 +164,13 @@ MultiValue pcall_function(LState *L, const LValue &func, const LValue *args, siz
             return MultiValue(false, LValue(L->intern_string("<no error object>")));
         return MultiValue(false, err_obj);
     } catch (const std::exception &e) {
+        L->top_root = root_mark;
         return MultiValue(false, LValue(L->intern_string(e.what())));
+    } catch (...) {
+        //------------------ a coroutine close or C-frame return unwinds the same way: restore the chain before
+        //------------------ the exception continues past this call
+        L->top_root = root_mark;
+        throw;
     }
 }
 
