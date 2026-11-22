@@ -718,6 +718,7 @@ static LValue make_file(LState *L, FILE *fp, bool close_on_gc, bool is_pipe = fa
     mt->settable(LValue(L->intern_string("__name")), LValue::istr("FILE*", 5));
     mt->settable(LValue(L->intern_string("__index")), LValue(Table, mt));
     ud->metatable = mt;
+    ud->flags |= LFLAG_GC_MARKED;
     meta_ud_list_add(L, ud);
     L->unroot_value(LValue(UserData, ud));
     L->unroot_value(file_mt);

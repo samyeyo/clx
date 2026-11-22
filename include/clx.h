@@ -474,6 +474,21 @@ CLX_INLINE LValue getmetatable(LState* L, const LValue& obj)
     return LValue();
 }
 
+//------------------ Marks an object for finalization when a metatable is installed, mirroring stock's
+//------------------ luaC_checkfinalizer: only a metatable that already carries __gc at this moment marks the
+//------------------ object. The metamethod itself is looked up again when the object dies, so replacing or
+//------------------ clearing __gc later decides which finalizer runs, while adding __gc to an already installed
+//------------------ metatable does not mark the objects that were set before it existed.
+CLX_INLINE void mark_gc_object(LState* L, LHeader* h, LTable* mt)
+{
+    if (!mt) {
+        return;
+    }
+    if (mt->gettable(L->str_gc).type != ValueType::Nil) {
+        h->flags |= LFLAG_GC_MARKED;
+    }
+}
+
 //------------------ Sets metatable of table/userdata
 CLX_INLINE void setmetatable(LState* L, const LValue& obj, const LValue& mt)
 {
@@ -494,6 +509,7 @@ CLX_INLINE void setmetatable(LState* L, const LValue& obj, const LValue& mt)
             }
         }
         tbl_set_metatable(t, new_mt);
+        mark_gc_object(L, t, new_mt);
         if (new_mt && new_mt->age == AGE_YOUNG && t->age == AGE_OLD)
             gc_barrier_header(L, t, mt);
         if (new_mt)
@@ -503,6 +519,7 @@ CLX_INLINE void setmetatable(LState* L, const LValue& obj, const LValue& mt)
     } else if (obj.type == ValueType::UserData) {
         LUserdata* ud = static_cast<LUserdata*>(obj.as_pointer());
         ud->metatable = new_mt;
+        mark_gc_object(L, ud, new_mt);
         if (new_mt && new_mt->age == AGE_YOUNG && ud->age == AGE_OLD)
             gc_barrier_header(L, ud, mt);
         if (new_mt)

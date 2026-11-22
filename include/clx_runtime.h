@@ -203,7 +203,7 @@ CLX_INLINE_HOT int clx_format_double(char *buf, size_t cap, double v) {
 struct LHeader {
     uint8_t type;
     uint8_t marked;
-    uint8_t flags = 0;
+    uint16_t flags = 0;
     uint8_t age = 0;
     LHeader *next;
 };
@@ -212,14 +212,15 @@ static constexpr uint8_t AGE_YOUNG = 0;
 static constexpr uint8_t AGE_SURVIVOR = 1;
 static constexpr uint8_t AGE_OLD = 2;
 
-static constexpr uint8_t LFLAG_VM_PROXY = 0x01;
-static constexpr uint8_t LFLAG_ARENA = 0x02;
-static constexpr uint8_t LFLAG_META_LIST = 0x04;
-static constexpr uint8_t LFLAG_SLAB = 0x08;
-static constexpr uint8_t LFLAG_REMEMBERED = 0x10;
-static constexpr uint8_t LFLAG_GC_PIN = 0x20;
-static constexpr uint8_t LFLAG_FINALIZABLE = 0x40;
-static constexpr uint8_t LFLAG_META_UD = 0x80;
+static constexpr uint16_t LFLAG_VM_PROXY = 0x01;
+static constexpr uint16_t LFLAG_ARENA = 0x02;
+static constexpr uint16_t LFLAG_META_LIST = 0x04;
+static constexpr uint16_t LFLAG_SLAB = 0x08;
+static constexpr uint16_t LFLAG_REMEMBERED = 0x10;
+static constexpr uint16_t LFLAG_GC_PIN = 0x20;
+static constexpr uint16_t LFLAG_FINALIZABLE = 0x40;
+static constexpr uint16_t LFLAG_META_UD = 0x80;
+static constexpr uint16_t LFLAG_GC_MARKED = 0x100;
 
 struct LState;
 struct FuncArena;
@@ -1834,6 +1835,8 @@ struct LState {
     void gc_collect_mark();
     bool gc_step(int64_t size = -1);
     void invoke_gc_finalizer(LUserdata *ud, const char *tag);
+    void invoke_gc_finalizer(LTable *t, const char *tag);
+    void run_exit_finalizers();
     bool is_allocated_userdata(const LHeader *h) const;
 
     //------------------ MultiValue overflow slots. Blocks are never moved or shrunk: a live MultiValue's

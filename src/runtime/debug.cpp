@@ -71,6 +71,7 @@ static MultiValue debug_setmetatable(LState *L, const LValue *args, size_t count
         else
             meta_list_remove(L, t);
         tbl_set_metatable(t, mt);
+        mark_gc_object(L, t, mt);
         if (mt)
             gc_barrier_table(L, t, mt_val);
         break;
@@ -82,6 +83,7 @@ static MultiValue debug_setmetatable(LState *L, const LValue *args, size_t count
         else
             meta_ud_list_remove(L, ud);
         ud->metatable = mt;
+        mark_gc_object(L, ud, mt);
         if (mt)
             gc_barrier_header(L, ud, mt_val);
         break;
