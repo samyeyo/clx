@@ -28,7 +28,7 @@ for dir in conformance regression stress edge_cases; do
         name=$(basename "$file" .lua)
         # Skip files handled by dedicated tests below
         case "$file" in
-            conformance/package.lua|conformance/mymod.lua|conformance/test_native_mod.lua|conformance/test_capi_mod.lua|            conformance/test_capi_sched.lua|conformance/test_capi_lightud.lua|conformance/struct_odr_main.lua|conformance/struct_odr_a.lua|conformance/struct_odr_b.lua) continue ;;
+            conformance/package.lua|conformance/mymod.lua|conformance/test_native_mod.lua|conformance/test_capi_mod.lua|            conformance/test_capi_sched.lua|conformance/test_capi_lightud.lua|conformance/test_capi_gc.lua|conformance/struct_odr_main.lua|conformance/struct_odr_a.lua|conformance/struct_odr_b.lua) continue ;;
         esac
         if [ "$(basename "$file")" = "load.lua" ]; then
             echo "SKIP: $file (run tests/test-load.sh to exercise --dynamic)"
@@ -255,6 +255,45 @@ if [ -f "$LUD_SRC" ] && [ -f "$LUD_TEST_LUA" ]; then
         rm -f "$LUD_A" "$SCRIPT_DIR/capi_lightud_mod.o"
     else
         echo "[FAIL] capi_lightud_mod -- g++ compilation of capi_lightud_mod.cpp failed"
+        FAIL=$((FAIL + 1))
+    fi
+fi
+
+# Lua C API userdata finalizer test (--modules, __gc at collection and at state close)
+GCM_SRC="$SCRIPT_DIR/conformance/capi_gc_mod.cpp"
+GCM_TEST_LUA="$SCRIPT_DIR/conformance/test_capi_gc.lua"
+GCM_BIN="$SCRIPT_DIR/capi_gc_mod_test"
+if [ -f "$GCM_SRC" ] && [ -f "$GCM_TEST_LUA" ]; then
+    g++ -c -std=c++20 -fPIC -I "$ROOT_DIR/include" -o "$SCRIPT_DIR/capi_gc_mod.o" "$GCM_SRC" 2>/dev/null
+    if [ -f "$SCRIPT_DIR/capi_gc_mod.o" ]; then
+        GCM_A="$SCRIPT_DIR/capi_gc_mod.a"
+        ar rcs "$GCM_A" "$SCRIPT_DIR/capi_gc_mod.o" 2>/dev/null
+
+        GCM_OUT="$SCRIPT_DIR/capi_gc_mod_out.log"
+        "$COMPILER" "$GCM_TEST_LUA" --modules capi_gc_mod --output "$GCM_BIN" 2>/dev/null
+        if [ -f "$GCM_BIN" ]; then
+            "$GCM_BIN" > "$GCM_OUT" 2>&1
+            gcm_exit=$?
+            cat "$GCM_OUT"
+            if [ "$gcm_exit" -ne 0 ]; then
+                echo "[FAIL] capi_gc_mod -- runtime exit code $gcm_exit"
+                FAIL=$((FAIL + 1))
+            elif grep -q "\[FAIL\]" "$GCM_OUT"; then
+                echo "[FAIL] capi_gc_mod"
+                FAIL=$((FAIL + 1))
+            else
+                echo "[PASS] capi_gc_mod"
+                PASS=$((PASS + 1))
+            fi
+            rm -f "$GCM_BIN" "$GCM_OUT"
+        else
+            echo "[FAIL] capi_gc_mod -- linking with clx compiler failed"
+            FAIL=$((FAIL + 1))
+        fi
+
+        rm -f "$GCM_A" "$SCRIPT_DIR/capi_gc_mod.o"
+    else
+        echo "[FAIL] capi_gc_mod -- g++ compilation of capi_gc_mod.cpp failed"
         FAIL=$((FAIL + 1))
     fi
 fi
