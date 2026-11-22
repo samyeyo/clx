@@ -56,7 +56,7 @@ jobs:
           FOLDER=${{ matrix.artifact }}
           mkdir -p staging/$FOLDER/bin staging/$FOLDER/include staging/$FOLDER/lib
           cp -f build/${{ matrix.binary }} staging/$FOLDER/bin/
-          cp -f include/clx.h include/clx_runtime.h include/clx_simd.h staging/$FOLDER/include/
+          cp -f include/clx.h include/clx.hpp include/clx_runtime.h include/clx_simd.h staging/$FOLDER/include/
           cp -f build/libclx.a build/libclx_size.a staging/$FOLDER/lib/
           cp -f build/clx_lua/libclx_lua.a staging/$FOLDER/lib/ 2>/dev/null || true
           tar czf $FOLDER.tar.gz -C staging $FOLDER
@@ -68,7 +68,7 @@ jobs:
           $FOLDER = "${{ matrix.artifact }}"
           New-Item -ItemType Directory -Path "staging/$FOLDER/bin","staging/$FOLDER/include","staging/$FOLDER/lib" -Force | Out-Null
           Copy-Item "bin/${{ matrix.binary }}" "staging/$FOLDER/bin/"
-          Copy-Item "include/clx.h","include/clx_runtime.h","include/clx_simd.h" "staging/$FOLDER/include/"
+          Copy-Item "include/clx.h","include/clx.hpp","include/clx_runtime.h","include/clx_simd.h" "staging/$FOLDER/include/"
           Copy-Item "lib/clx.lib" "staging/$FOLDER/lib/"
           Copy-Item "lib/clx_size.lib" "staging/$FOLDER/lib/"
           if (Test-Path "lib/clx_lua.lib") { Copy-Item "lib/clx_lua.lib" "staging/$FOLDER/lib/" }
