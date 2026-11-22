@@ -170,6 +170,15 @@ MultiValue os_exit(LState *L, const LValue *args, size_t count) {
     if (count >= 1 && args[0].type != Nil) {
         code = check_integer(L, args[0]);
     }
+    //------------------ stock's os.exit closes the state by default, which runs every pending __gc; only an
+    //------------------ explicit false skips the finalizers (and the stream flushes that go with them). The state
+    //------------------ itself is left allocated: os.exit may be called from a coroutine, whose stack is the one
+    //------------------ still running, and the process exits immediately after this anyway.
+    bool do_close = true;
+    if (count >= 2 && args[1].type != Nil)
+        do_close = !(args[1].type == Boolean && !args[1].as_bool());
+    if (do_close)
+        L->run_exit_finalizers();
     std::exit(static_cast<int>(code));
     return MultiValue();
 }

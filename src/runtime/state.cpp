@@ -221,8 +221,12 @@ struct FinalizingUdGuard {
 void LState::invoke_gc_finalizer(LUserdata *ud, const char *tag) {
     if (!ud->metatable)
         return;
+    //------------------ any non-nil __gc is called, as in stock: a table or userdata with __call finalizes the
+    //------------------ object, and a value that cannot be called raises the usual error. Like stock, that error
+    //------------------ is swallowed: luaE_warnerror only reaches a host warning function, and the default host
+    //------------------ has none, so a failing __gc never stops the collection or prints anything
     LValue gc_func = ud->metatable->gettable(this->str_gc);
-    if (gc_func.type != Function)
+    if (gc_func.type == Nil)
         return;
     LValue args[1] = { LValue(UserData, ud) };
     RootRange rr(this, args, 1);
@@ -230,12 +234,51 @@ void LState::invoke_gc_finalizer(LUserdata *ud, const char *tag) {
     try {
         CallSite gc_site = { tag, 0, false, false };
         call_function(this, gc_func, args, 1, &gc_site);
-    } catch (const LRuntimeException &e) {
-        std::cerr << "error in __gc metamethod: " << e.what() << "\n";
-    } catch (std::exception &e) {
-        std::cerr << "error in __gc metamethod: " << e.what() << "\n";
     } catch (...) {
-        std::cerr << "error in __gc metamethod\n";
+    }
+}
+
+//------------------ LState::invoke_gc_finalizer — call __gc metamethod on a table. The table is rooted for the
+//------------------ duration of the call: a finalizer that allocates may trigger a collection, and an unrooted
+//------------------ object would then be swept out from under its own finalizer.
+void LState::invoke_gc_finalizer(LTable *t, const char *tag) {
+    if (!t)
+        return;
+    LTable *mt = tbl_metatable(t);
+    if (!mt)
+        return;
+    LValue gc_func = mt->gettable(this->str_gc);
+    if (gc_func.type == Nil)
+        return;
+    LValue args[1] = { LValue(Table, t) };
+    RootRange rr(this, args, 1);
+    try {
+        CallSite gc_site = { tag, 0, false, false };
+        call_function(this, gc_func, args, 1, &gc_site);
+    } catch (...) {
+    }
+}
+
+//------------------ LState::run_exit_finalizers — run the __gc of every marked table and userdata still alive,
+//------------------ the way stock's lua_close does: an object is marked when a metatable carrying __gc is
+//------------------ installed, so a later __gc assignment cannot mark it retroactively. The candidates are pinned
+//------------------ first so a finalizer that allocates cannot sweep (and recycle) one before its own __gc runs.
+void LState::run_exit_finalizers() {
+    std::vector<LHeader *> dying;
+    for (int pass = 0; pass < 2; ++pass) {
+        for (LHeader *h = (pass == 0) ? allocated_objects : old_objects; h; h = h->next) {
+            if ((h->type == static_cast<uint8_t>(UserData) || h->type == static_cast<uint8_t>(Table)) &&
+                (h->flags & LFLAG_GC_MARKED))
+                dying.push_back(h);
+        }
+    }
+    for (LHeader *h : dying)
+        h->flags |= LFLAG_GC_PIN;
+    for (LHeader *h : dying) {
+        if (h->type == static_cast<uint8_t>(UserData))
+            invoke_gc_finalizer(static_cast<LUserdata *>(h), "StateClose_Finalizer");
+        else
+            invoke_gc_finalizer(static_cast<LTable *>(h), "StateClose_Finalizer");
     }
 }
 
@@ -277,14 +320,7 @@ LState::~LState() {
             gc_step();
     }
 
-    for (int pass = 0; pass < 2; ++pass) {
-        for (LHeader *h = (pass == 0) ? allocated_objects : old_objects; h; h = h->next) {
-            if (h->type == static_cast<uint8_t>(UserData)) {
-                LUserdata *ud = static_cast<LUserdata *>(h);
-                invoke_gc_finalizer(ud, "StateClose_Finalizer");
-            }
-        }
-    }
+    run_exit_finalizers();
 
     for (int pass = 0; pass < 2; ++pass) {
         LHeader *curr = (pass == 0) ? allocated_objects : old_objects;
@@ -311,6 +347,8 @@ LState::~LState() {
         LTable *t = static_cast<LTable *>(gc_finalizable);
         while (t) {
             LTable *nxt = static_cast<LTable *>(t->next);
+            if (t->flags & LFLAG_GC_MARKED)
+                invoke_gc_finalizer(t, "GC_Finalizer");
             dtor_free_table(this, t);
             t = nxt;
         }
@@ -321,7 +359,8 @@ LState::~LState() {
         LUserdata *ud = static_cast<LUserdata *>(gc_finalizable_ud);
         while (ud) {
             LUserdata *nxt = static_cast<LUserdata *>(ud->next);
-            invoke_gc_finalizer(ud, "GC_Finalizer");
+            if (ud->flags & LFLAG_GC_MARKED)
+                invoke_gc_finalizer(ud, "GC_Finalizer");
             delete[] reinterpret_cast<char *>(ud);
             ud = nxt;
         }
@@ -372,6 +411,12 @@ LState::~LState() {
     gc_worklist.free();
     gc_recent.free();
     gc_pinned.free();
+
+    //------------------ the main thread is on neither GC chain, so it is released here: last, because
+    //------------------ run_exit_finalizers can run a collection (and the finalizer's own calls) that still
+    //------------------ consult it
+    delete main_thread;
+    main_thread = nullptr;
 }
 
 //------------------ CloseGuard::~CloseGuard — close guard destructor
@@ -690,7 +735,6 @@ void close(LState *L) {
 #if defined(_WIN32)
     ConvertFiberToThread();
 #endif
-    delete L->main_thread;
     delete L;
 }
 
