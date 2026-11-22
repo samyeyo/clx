@@ -31,27 +31,6 @@ static void release_table(LState *L, LTable *t) {
         clx_table_release_ptr(L, t);
 }
 
-static void clx_trigger_gc(LState *L, LTable *t) {
-    LTable *mt = tbl_metatable(t);
-    if (!mt)
-        return;
-    LValue gc_func = mt->gettable(L->str_gc);
-    if (gc_func.type == Nil)
-        return;
-
-    LValue args[1] = { LValue(Table, t) };
-    try {
-        static constexpr CallSite finalizer_site = { "GC_Finalizer", 0, false, false };
-        call_function_rooted(L, gc_func, args, 1, &finalizer_site);
-    } catch (const LRuntimeException &e) {
-        std::cerr << "error in __gc metamethod: " << e.what() << "\n";
-    } catch (std::exception &e) {
-        std::cerr << "error in __gc metamethod: " << e.what() << "\n";
-    } catch (...) {
-        std::cerr << "error in __gc metamethod\n";
-    }
-}
-
 #define GC_SUB(TAG, PTR, amt)                                                                                          \
     do {                                                                                                               \
         if (static_cast<size_t>(amt) > allocated_bytes)                                                                \
@@ -92,6 +71,9 @@ static void gc_dispose_swept(LState *L, LHeader *curr) {
             }
             t->array_size = 0;
             t->array_lim = 0;
+            //------------------ a table can be marked and lose its metatable later; the bit must not ride into
+            //------------------ the recycled table, which was never marked
+            t->flags &= ~LFLAG_GC_MARKED;
             if (t->array && t->array != t->small_array) {
                 t->next = L->free_tables_big;
                 L->free_tables_big = t;
@@ -172,7 +154,10 @@ static void gc_drain_finalizables(LState *L) {
     for (LTable *t = static_cast<LTable *>(L->gc_finalizable); t;) {
         LTable *nx = static_cast<LTable *>(t->next);
         meta_list_remove(L, t);
-        clx_trigger_gc(L, t);
+        //------------------ a metatable alone does not finalize: only an object marked when a metatable with __gc
+        //------------------ was installed runs its finalizer, as in stock. Unmarked ones are just recycled.
+        if (t->flags & LFLAG_GC_MARKED)
+            L->invoke_gc_finalizer(t, "GC_Finalizer");
         size_t t_bytes = sizeof(LTable) + table_heap_bytes(t);
         if (t_bytes > L->allocated_bytes)
             L->allocated_bytes = 0;
@@ -190,7 +175,7 @@ static void gc_drain_finalizables(LState *L) {
         }
         t->array_size = t->array_cap = 0;
         t->array_lim = 0;
-        t->flags &= ~(LFLAG_META_LIST | LFLAG_FINALIZABLE);
+        t->flags &= ~(LFLAG_META_LIST | LFLAG_FINALIZABLE | LFLAG_GC_MARKED);
         if (t->array && t->array != t->small_array) {
             t->next = L->free_tables_big;
             L->free_tables_big = t;
@@ -204,7 +189,8 @@ static void gc_drain_finalizables(LState *L) {
     for (LUserdata *ud = static_cast<LUserdata *>(L->gc_finalizable_ud); ud;) {
         LUserdata *nx = static_cast<LUserdata *>(ud->next);
         meta_ud_list_remove(L, ud);
-        L->invoke_gc_finalizer(ud, "GC_Finalizer");
+        if (ud->flags & LFLAG_GC_MARKED)
+            L->invoke_gc_finalizer(ud, "GC_Finalizer");
         size_t ud_bytes = sizeof(LUserdata) + ud->size;
         if (ud_bytes > L->allocated_bytes)
             L->allocated_bytes = 0;
