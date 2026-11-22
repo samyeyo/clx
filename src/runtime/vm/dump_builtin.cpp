@@ -23,13 +23,7 @@ static int dump_writer(lua_State *, const void *p, size_t sz, void *ud) {
     return 0;
 }
 
-//------------------ clx_string_dump_dynamic - string.dump hooked up when linked with --dynamic
-//
-//------------------ A VM-side function carries real Lua bytecode, so it dumps to a stock-identical
-//------------------ bytecode string (load() reads it back through the usual VM path). A native
-//------------------ (AOT or C) closure has no bytecode; it is bridged into the VM and handed back
-//------------------ as a VMFunction box, which stays callable and can cross into VM code. Anything
-//------------------ else is stock's "Lua function expected" error.
+//------------------ clx_string_dump_dynamic: string.dump under --dynamic — VM bytecode strings, native closures as callable boxes
 MultiValue clx_string_dump_dynamic(LState *L, const LValue *args, size_t count) {
     if (count < 1 || args[0].type != Function || args[0].as_pointer() == nullptr)
         throw_runtime_error(bad_arg_msg(L, 1, "string.dump", "Lua function expected"));

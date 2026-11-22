@@ -100,8 +100,7 @@ void pass_pure_arrays(const ASTContext &ctx, AnalysisState &state, PassScratch &
                         }
                     }
                     if (tc.count > 0) {
-                        //------------------ any explicit key (a string, but also [nil], [i] or a negative
-                        //------------------ integer) means the table is not a plain positional array
+                        //------------------ any explicit key (a string, but also [nil], [i] or a negative integer) means it is not an array
                         bool has_string_key = false;
                         bool all_numeric = true;
                         for (uint32_t ei = 0; ei < tc.count && !has_string_key && all_numeric; ++ei) {
@@ -275,8 +274,7 @@ void pass_pure_arrays(const ASTContext &ctx, AnalysisState &state, PassScratch &
                         std::string_view _fname(
                             ctx.nodes[_call_target].as.ident.name, ctx.nodes[_call_target].as.ident.length);
                         _is_dynamic = (_fname == "setmetatable");
-                        //------------------ alias of table.insert/table.remove changes length too
-                        //                        (aliases registered by pass_constants_and_bounds)
+                        //------------------ alias of table.insert/table.remove changes length too (registered by pass_constants_and_bounds)
                         if (!_is_dynamic) {
                             auto _bit = state.builtin_aliases.find(std::string(_fname));
                             _is_dynamic = _bit != state.builtin_aliases.end()
@@ -297,9 +295,7 @@ void pass_pure_arrays(const ASTContext &ctx, AnalysisState &state, PassScratch &
                 }
             }
             {
-                //------------------ any table a call can reach may be grown by the callee, even when it is
-                //------------------ nested in an argument expression (setmetatable({}, {__newindex = t})):
-                //------------------ its length must stay a runtime question
+                //------------------ any table a call can reach may be grown by the callee, even nested in an argument expression
                 auto mark_escaped = [&](uint32_t nid) {
                     const auto &nd2 = ctx.nodes[nid];
                     if (nd2.type != NodeType::Identifier || nd2.as.ident.is_global)
@@ -337,8 +333,7 @@ void pass_pure_arrays(const ASTContext &ctx, AnalysisState &state, PassScratch &
                 }
             }
         } else if (n.type == NodeType::TableConstructor) {
-            //------------------ a table stored in another table escapes: its length can change behind a
-            //------------------ later __newindex/__index chain, so it must not be folded to a constant
+            //------------------ a table stored in another table escapes: its length can change behind a __newindex chain
             auto mark_stored = [&](uint32_t nid) {
                 const auto &nd2 = ctx.nodes[nid];
                 if (nd2.type != NodeType::Identifier || nd2.as.ident.is_global)
@@ -349,8 +344,7 @@ void pass_pure_arrays(const ASTContext &ctx, AnalysisState &state, PassScratch &
             for (uint32_t ei = 0; ei < n.as.table_cons.count; ++ei) {
                 uint32_t ev = ctx.block_statements[n.as.table_cons.first_item + ei * 2 + 1];
                 traverse_node(ctx, ev, mark_stored);
-                //------------------ storing a whole table in another table makes it escape as a value:
-                //------------------ a pure numeric array cannot be handed out as a clx table
+                //------------------ storing a whole table elsewhere makes it escape as a value, so no pure numeric array
                 while (ev < ctx.nodes.size() && ctx.nodes[ev].type == NodeType::ParenExpression)
                     ev = ctx.nodes[ev].as.paren_expr.expr;
                 if (ev < ctx.nodes.size() && ctx.nodes[ev].type == NodeType::Identifier
@@ -1277,8 +1271,7 @@ void pass_array_safety(const ASTContext &ctx, AnalysisState &state, PassScratch 
     }
 }
 
-//------------------ write_stores_non_number: true if an assignment value statically must hold a
-//------------------ non-number (declared above the drop scan that uses it; see comment there)
+//------------------ write_stores_non_number: true if an assignment value statically must hold a non-number
 static bool write_stores_non_number(const ASTContext &ctx, uint32_t node_idx, int depth = 0) {
     if (depth > 32 || node_idx == 0xFFFFFFFF || node_idx >= ctx.nodes.size())
         return false;
@@ -1748,10 +1741,7 @@ void pass_table_fields(const ASTContext &ctx, AnalysisState &state, PassScratch 
             }
         }
     }
-    //------------------ drop a field from numeric_table_fields when any write to it stores a provable
-    //------------------ non-number: the native read path would otherwise swallow string/nil writes
-    //------------------ (as_number() maps strings to 0.0) instead of erroring like Lua.
-    //------------------ Over-dropping from name collisions is only conservative (generic path = Lua semantics).
+    //------------------ drop a field from numeric_table_fields when a write stores a provable non-number, so reads error like Lua
     {
         std::set<std::string_view> captured_entry_names;
         for (const auto &node : ctx.nodes) {

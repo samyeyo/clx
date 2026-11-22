@@ -43,14 +43,7 @@ static inline MultiValue cannot_close_std(LState *L) {
     return MultiValue({ LValue(), LValue(L->intern_string("cannot close standard file")) });
 }
 
-//------------------ Shared per-FILE* output batching. One fwrite() takes two mutexes
-//------------------ (flockfile/funlockfile, ~30ns each), so 2.5M single-char io.writes burn ~70ms in
-//------------------ locking alone (measured microbenchmark: 70ms per-char vs 1ms batched). Batching in
-//------------------ userspace cuts fasta's 2.5M lock pairs to a few hundred flushes.
-//------------------ Keyed by FILE* (not FileUd): io.write's default-output handle and io.stdout are
-//------------------ distinct FileUds over the same FILE*, and stock libc preserves their order through
-//------------------ its shared buffer — per-FileUd buffers would reorder them. Single-threaded
-//------------------ assumption matches the existing process-global default_input/default_output slots.
+//------------------ per-FILE* output batching: userspace buffering drops the two mutexes per write; std handles share one FILE*
 struct OutBufEnt {
     FILE *fp = nullptr;
     char *buf = nullptr;
@@ -97,8 +90,7 @@ static void outbuf_flush_ent(OutBufEnt *e) {
     }
 }
 
-//------------------ outbuf_default_mode — stock-matching buffering: stderr unbuffered,
-//------------------ tty output line-buffered (interactive prompts appear), else fully batched.
+//------------------ outbuf_default_mode: stock-matching buffering — stderr unbuffered, tty line-buffered, else batched
 static int outbuf_default_mode(FILE *fp) {
     if (fp == stderr)
         return 2;
@@ -187,10 +179,7 @@ static void outbuf_drop_fp(FILE *fp) {
     }
 }
 
-//------------------ outbuf_flush_all — flush every batched FILE* (state close and process exit; std
-//------------------ files are never closed so their buffers would otherwise be lost). Published via
-//------------------ clx_io_flush_all_ptr and registered with atexit, since os.exit() bypasses state
-//------------------ close and would drop whatever is still batched.
+//------------------ outbuf_flush_all: flush every batched FILE* on state close and atexit (os.exit bypasses close)
 static void outbuf_flush_all() {
     for (size_t i = 0; i < kOutBufSlots; ++i)
         outbuf_flush_ent(&out_bufs[i]);
@@ -242,8 +231,7 @@ static LValue read_line(LState *L, FILE *fp, bool keep_eol = false) {
 static LValue read_all(LState *L, FILE *fp) {
     static constexpr size_t CHUNK = 65536;
 
-    //------------------ no ftell/fseek size hint on purpose: MSVC's ftell does not count a byte pushed back
-    //------------------ by ungetc, so seeking to it would hand back a byte the caller already read
+    //------------------ no ftell/fseek size hint: MSVC's ftell does not count a byte pushed back by ungetc
     std::string content;
     char buf[CHUNK];
     size_t r;
@@ -292,10 +280,7 @@ static ReadFmt match_read_fmt(const char *fmt, int64_t *count) {
     }
 }
 
-//------------------ Shared file method helpers
-//------------------ the iterator holds its state and the formats given to f:lines(...) / io.lines(...) in
-//------------------ traced gc cells rather than expecting them as arguments, so `local it = f:lines();
-//------------------ it()` reads a line like stock instead of nothing
+//------------------ the iterator holds its state and formats in traced gc cells, so `local it = f:lines(); it()` reads a line
 
 static bool take_stream_error(LState *L, FileUd *f, MultiValue &out);
 static MultiValue file_read_args(
@@ -335,11 +320,7 @@ static LValue make_lines_iter(LState *L, const LValue &file_val, const LValue *f
     return L->create_closure(iter, nullptr, cells);
 }
 
-//------------------ read_number: stock read_number keeps the integer subtype — a numeral made of an
-//------------------ optional sign and digits reads as lua_Integer, anything with a fraction or an
-//------------------ exponent reads as lua_Number (fscanf("%lf") always produced a float); the numeral
-//------------------ is accumulated in a fixed L_MAXLENNUM buffer and a longer one fails, which also
-//------------------ decides how many bytes are left in the stream
+//------------------ read_number: keeps the integer subtype for a bare numeral; a fraction or exponent makes it a float
 static LValue read_number(LState *L, FILE *fp) {
     constexpr size_t kMaxLenNum = 200;
     std::string tok;
@@ -415,8 +396,7 @@ static LValue read_number(LState *L, FILE *fp) {
     return LValue();
 }
 
-//------------------ take_stream_error: stock's luaL_fileresult failure shape (nil, message, errno) after a
-//------------------ stream operation failed. Returns false (and leaves out untouched) when ferror is clear
+//------------------ take_stream_error: stock's luaL_fileresult failure shape (nil, message, errno), false when ferror is clear
 static bool take_stream_error(LState *L, FileUd *f, MultiValue &out) {
     if (!std::ferror(f->fp))
         return false;
@@ -545,7 +525,6 @@ static MultiValue fail_nil(LState *L, const char *filename) {
 }
 
 //------------------ open_or_throw: io.input/io.output/io.lines raise when the file cannot be opened
-//------------------ (stock catches the luaL_fileresult and reports it as an error keeping the reason)
 static FILE *open_or_throw(const char *filename, const char *mode) {
     FILE *fp = std::fopen(filename, mode);
     if (!fp) {
@@ -684,8 +663,7 @@ static LValue make_file(LState *L, FILE *fp, bool close_on_gc, bool is_pipe = fa
     auto meth_write = [](LState *L, const LValue *a, size_t c) -> MultiValue {
         FileUd *f = as_file(L, a[0]);
         file_write_args(L, f, a, c);
-        //------------------ writes are buffered above, so the handle must be flushed before stock's error
-        //------------------ return (nil, message, errno) can be reported for a bad descriptor
+        //------------------ writes are buffered above, so the handle is flushed before an error return can be reported
         outbuf_flush_fp(f->fp);
         MultiValue failed;
         if (take_stream_error(L, f, failed))
@@ -724,9 +702,7 @@ static LValue make_file(LState *L, FILE *fp, bool close_on_gc, bool is_pipe = fa
     return LValue(UserData, ud);
 }
 
-//------------------ the standard handles are process singletons: io.stdin must be the very userdata
-//------------------ the default-input slot holds, otherwise `io.input() == io.stdin` is false and the
-//------------------ collected extra copy reports itself as a closed file
+//------------------ the standard handles are process singletons: io.stdin must be the very userdata the default slot holds
 static LValue std_file_slots[3];
 
 static LValue get_std_file(LState *L, FILE *fp) {
@@ -752,8 +728,7 @@ static LValue get_std_file(LState *L, FILE *fp) {
         return cannot_close_std(L);
     };
 
-    //------------------ stock binds __close to f_gc, which is a no-op on an already-closed handle:
-    //------------------ closing a <close> variable twice (or after f:close()) must not raise
+    //------------------ stock binds __close to f_gc, a no-op on a closed handle, so closing twice must not raise
     auto meth_close_guard = [](LState *L, const LValue *a, size_t c) -> MultiValue {
         if (c < 1 || a[0].type != UserData)
             return MultiValue();
@@ -822,8 +797,7 @@ static LValue get_std_file(LState *L, FILE *fp) {
     mt->settable(LValue(L->intern_string("__index")), LValue(Table, mt));
     ud->metatable = mt;
     meta_ud_list_add(L, ud);
-    //------------------ the cached singleton keeps its own root: unrooting it would leave the slot
-    //------------------ above pointing at a collected userdata
+    //------------------ the cached singleton keeps its own root: unrooting it would leave the slot pointing at collected userdata
     *slot = LValue(UserData, ud);
     return *slot;
 }
@@ -930,11 +904,7 @@ static MultiValue io_lines(LState *L, const LValue *args, size_t count) {
 
     if (count > 0 && args[0].type != Nil) {
         const char *filename = check_string(L, args[0]);
-        //------------------ the filename form returns four values: the iterator, two placeholders and the
-        //------------------ file handle, which the generic for treats as the to-be-closed variable
-        //------------------ the handle must close on collection as well as on the to-be-closed variable:
-        //------------------ stock's __gc closes a stream nobody reached, and an iterator dropped without
-        //------------------ exhausting it would otherwise leak the descriptor until the process ends
+        //------------------ the filename form returns the iterator, two placeholders and the handle (its to-be-closed variable)
         FILE *fp = open_or_throw(filename, "r");
         LValue file_val = make_file(L, fp, true);
         RootRange rr(L, &file_val, 1);
@@ -963,8 +933,7 @@ static MultiValue io_output(LState *L, const LValue *args, size_t count) {
     return MultiValue(default_output);
 }
 
-//------------------ default_file: the default input/output slot as a live FileUd. stock names the
-//------------------ slot rather than the handle when it has been closed ("default input file is closed")
+//------------------ default_file: the default input/output slot as a live FileUd, named even once closed
 static FileUd *default_file(LState *L, const LValue &slot, const char *which) {
     if (slot.type == UserData) {
         LUserdata *ud = static_cast<LUserdata *>(slot.as_pointer());

@@ -26,8 +26,7 @@ namespace clx {
 #define CLX_DIRSEP_STR "/"
 #endif
 
-//------------------ Reads a field of the package table the searchers were created against, returns nil
-//------------------ LValue when absent; the global `package` is not consulted, matching stock's upvalues
+//------------------ get_package_field: reads a field of the package table the searchers were created against
 static LValue get_package_field(LState *L, const char *key, size_t keylen) {
     if (!L->package_table)
         return LValue();
@@ -59,8 +58,7 @@ static void split_path(const char *path, size_t len, std::vector<std::string> &o
     }
 }
 
-//------------------ Replaces every occurrence of 'from' with 'to' in s
-//------------------ replace_all: whole-substring replacement, the same luaL_gsub pass stock's searchpath uses
+//------------------ replace_all: whole-substring replacement, the luaL_gsub pass stock's searchpath uses
 static std::string replace_all(const std::string &s, const std::string &from, const std::string &to) {
     if (from.empty())
         return s;
@@ -166,8 +164,7 @@ static MultiValue pkg_searcher_luafile_aot(LState *L, const LValue *args, size_t
     return MultiValue(LValue(), LValue(L->intern_string(msg.data(), msg.size())));
 }
 
-//------------------ pkg_searcher_c - package.searchers[3]: lists the tried cpath files, then reports that C
-//------------------ modules must be linked statically at compile time (see --modules)
+//------------------ pkg_searcher_c: searchers[3] lists the tried cpath files, then reports that C modules link statically
 static MultiValue pkg_searcher_c(LState *L, const LValue *args, size_t count) {
     if (count < 1 || args[0].type != String)
         return MultiValue(LValue(), LValue());
@@ -181,8 +178,7 @@ static MultiValue pkg_searcher_c(LState *L, const LValue *args, size_t count) {
     return MultiValue(LValue(), LValue(L->intern_string(tried.data(), tried.size())));
 }
 
-//------------------ pkg_loadlib - package.loadlib: clx links native modules at compile time, so no runtime
-//------------------ loading is possible; the failure is reported the way stock reports an unopenable file
+//------------------ pkg_loadlib: clx links native modules at compile time, so loading fails like an unopenable file
 static MultiValue pkg_loadlib(LState *L, const LValue *args, size_t count) {
     if (count < 1 || args[0].type != String)
         throw_runtime_error("bad argument #1 to 'loadlib' (string expected)");
@@ -239,8 +235,7 @@ static MultiValue pack_require(LState *L, const LValue *args, size_t count) {
             msgs.append(res[1].as_string(), res[1].string_len());
 
         if (loader_fn.type == Function) {
-            //------------------ stock passes the searcher's extra value to the loader as a second
-            //------------------ argument and returns it to the caller next to the module
+            //------------------ stock passes the searcher's extra value to the loader as a second argument and returns it to the caller
             LValue extra = (res.count > 1) ? res[1] : LValue();
             LValue call_args[2] = { mod_key, extra };
             //------------------ The loader runs with the env passed to require (nil = real _G)
@@ -260,8 +255,7 @@ static MultiValue pack_require(LState *L, const LValue *args, size_t count) {
             }
             L->_G = saved_G;
 
-            //------------------ stock stores a non-nil chunk result in package.loaded and keeps a value
-            //------------------ the chunk stored itself; only a still-nil entry becomes true
+            //------------------ stock stores a non-nil chunk result in package.loaded; only a still-nil entry becomes true
             LValue result = (mod.count > 0) ? mod[0] : LValue();
             if (result.type != Nil)
                 loaded->settable(mod_key, result);
@@ -270,10 +264,7 @@ static MultiValue pack_require(LState *L, const LValue *args, size_t count) {
                 final_val = LValue(true);
                 loaded->settable(mod_key, final_val);
             }
-            //------------------ the loader data handed back to the caller reports the module with the
-            //------------------ platform's separator standardized to '/', the way stock's searchpath
-            //------------------ reports a file, so a module's name does not depend on the host; the chunk
-            //------------------ itself still receives the real path as its second vararg
+            //------------------ the loader data reports the module path with '/' separators; the chunk still receives the real path
             LValue reported = extra;
             if (extra.type == String && CLX_DIRSEP != '/') {
                 std::string name(extra.as_string(), extra.string_len());

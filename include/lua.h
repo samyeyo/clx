@@ -145,8 +145,7 @@ typedef void (*lua_Hook) (lua_State *L, lua_Debug *ar);
 #endif
 #endif
 
-//------------------ Symbol prefix: every clx C API symbol is clx_lua_* so a C module
-//------------------ never collides with a real Lua VM linked by clx --dynamic.
+//------------------ Symbol prefix: every C API symbol is clx_lua_*, so a module never collides with a real Lua VM
 #define lua_newstate clx_lua_newstate
 #define lua_close clx_lua_close
 #define lua_newthread clx_lua_newthread
@@ -247,8 +246,7 @@ typedef void (*lua_Hook) (lua_State *L, lua_Debug *ar);
 #define lua_gethookcount clx_lua_gethookcount
 #define lua_ident clx_lua_ident
 
-//------------------ RCS ident string (LUA_API: C++ side must stay extern "C" so the
-//------------------ symbol links against the bridge's definition, not a mangled name)
+//------------------ RCS ident string (extern "C" so the symbol links against the bridge's definition)
 LUA_API const char lua_ident[];
 
 //------------------ State manipulation

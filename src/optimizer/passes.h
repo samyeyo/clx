@@ -150,8 +150,7 @@ void pass_table_fields(const ASTContext &ctx, AnalysisState &state, PassScratch 
 //------------------ pass_numeric_params: numeric parameter detection and native_numbers finalization
 void pass_numeric_params(const ASTContext &ctx, AnalysisState &state, PassScratch &sk, uint32_t root_node);
 
-//------------------ pass_multi_native: functions returning 2-4 native doubles as a tuple struct.
-//------------------ Runs after numeric params/table fields so yields_number proofs are final.
+//------------------ pass_multi_native: functions returning 2-4 native doubles as a tuple struct
 void pass_multi_native(const ASTContext &ctx, AnalysisState &state, PassScratch &sk, uint32_t root_node);
 
 //------------------ pass_arena: escaping variables and arena-safe table sizing
@@ -166,8 +165,7 @@ void pass_local_hygiene(const ASTContext &ctx, AnalysisState &state, uint32_t ro
 //------------------ pass_struct_locals: record locals promoted to native C++ structs (kind fixpoint + read presence)
 void pass_struct_locals(const ASTContext &ctx, AnalysisState &state, PassScratch &sk, uint32_t root_node);
 
-//------------------ pass_nogc_locals: block locals proven to never hold a GC-managed value.
-//------------------ Runs last so yields_number and all function facts are final.
+//------------------ pass_nogc_locals: block locals proven to never hold a GC-managed value
 void pass_nogc_locals(const ASTContext &ctx, AnalysisState &state, PassScratch &sk, uint32_t root_node);
 
 }

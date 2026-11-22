@@ -73,8 +73,7 @@ static bool same_expr(const ASTContext &ctx, uint32_t a, uint32_t b) {
     }
 }
 
-//------------------ try_match_swap_idiom: true when statements `pos`..`pos+2` of a block are the array swap idiom
-//------------------ on one hoisted table. Fusing them removes the boxed temp and its frame root.
+//------------------ try_match_swap_idiom: true when pos..pos+2 of a block swap two slots of one hoisted table
 bool CodeEmitter::try_match_swap_idiom(uint32_t block_idx, uint32_t pos, SwapIdiomMatch &m) {
     if (block_idx >= ctx.nodes.size() || ctx.nodes[block_idx].type != NodeType::Block)
         return false;
@@ -158,8 +157,7 @@ bool CodeEmitter::try_match_swap_idiom(uint32_t block_idx, uint32_t pos, SwapIdi
     return true;
 }
 
-//------------------ emit_swap_idiom: raw two-slot exchange on a hoisted array; generic table_get/table_set fallback
-//------------------ when either index is outside the array part.
+//------------------ emit_swap_idiom: raw two-slot exchange on a hoisted array, generic stores when out of the array part
 void CodeEmitter::emit_swap_idiom(const SwapIdiomMatch &m, uint32_t tag) {
     const std::string s = std::to_string(tag);
     out << "{ clx::LTable* _sw" << s << " = " << hoisted_table_ptr(m.table_ident) << "; int64_t _sa" << s
@@ -194,9 +192,7 @@ void CodeEmitter::emit_swap_idiom(const SwapIdiomMatch &m, uint32_t tag) {
         << " } }\n";
 }
 
-//------------------ try_match_cmp_swap: true for `if (A[i] OP A[j]) swap-idiom` with OP in Lt/Gt/Le/Ge,
-//------------------ both sides hoisted integer-indexed reads of one table, and the swap covering the same
-//------------------ two slots (key sets must coincide; order is normalized through ord_l/ord_r).
+//------------------ try_match_cmp_swap: `if (A[i] OP A[j]) swap` on one hoisted table, same two integer slots on both sides
 bool CodeEmitter::try_match_cmp_swap(uint32_t if_idx, CmpSwapMatch &m) {
     if (if_idx >= ctx.nodes.size() || ctx.nodes[if_idx].type != NodeType::IfStatement)
         return false;
@@ -268,9 +264,7 @@ bool CodeEmitter::try_match_cmp_swap(uint32_t if_idx, CmpSwapMatch &m) {
     return true;
 }
 
-//------------------ emit_cmp_swap: one bounds/capacity proof and one tag load feeding a native integer
-//------------------ (or numeric-mix) compare and, when true, a raw two-slot exchange. Anything unproven
-//------------------ falls to the generic compare with generic stores, preserving exact evaluation order.
+//------------------ emit_cmp_swap: one bounds/tag proof feeding a native compare and, when true, a raw two-slot exchange
 void CodeEmitter::emit_cmp_swap(const CmpSwapMatch &m, uint32_t tag) {
     const std::string s = std::to_string(tag);
     const char *cmp = (m.cmp_op == static_cast<int>(BinaryOp::Le)) ? "<=" : "<";
@@ -484,10 +478,7 @@ void CodeEmitter::emitBlock(const ASTNode &node, uint32_t node_idx, DeferredBloc
     int redecl_scopes = 0;
     std::set<std::string_view> current_block_vars;
 
-    //------------------ a block with labels keeps its statements in an inner scope: a goto must not
-    //------------------ bypass the initializers a statement emits (`size_t _rg_base_N = _fr.mark()`,
-    //------------------ `auto _ad_N = adopt_call_result(...)`, `CloseGuard`), and trailing labels —
-    //------------------ the ones Lua allows as a jump target across a local's scope — stay outside it
+    //------------------ a block with labels keeps its statements in an inner scope so a goto cannot bypass their initializers
     uint32_t body_end = node.as.block.count;
     bool has_label = false;
     for (uint32_t i = 0; i < node.as.block.count; ++i) {
@@ -513,8 +504,7 @@ void CodeEmitter::emitBlock(const ASTNode &node, uint32_t node_idx, DeferredBloc
             continue;
         const auto &stmt = ctx.nodes[stmt_idx];
 
-        //------------------ array swap fusion: `local x = A[i]; A[j] = A[k]; A[l] = x` becomes one raw exchange,
-        //------------------ dropping the boxed temp, its frame root and the per-store gap handling.
+        //------------------ array swap fusion: `local x = A[i]; A[j] = A[k]; A[l] = x` becomes one raw exchange
         SwapIdiomMatch _sw;
         if (try_match_swap_idiom(node_idx, i, _sw)) {
             emit_swap_idiom(_sw, stmt_idx);
@@ -592,9 +582,7 @@ void CodeEmitter::emitBlock(const ASTNode &node, uint32_t node_idx, DeferredBloc
         out << "}\n";
 }
 
-//------------------ emit_fast_variant: emits the `_fast_<name>_impl` Y-combinator body and the
-//------------------ `_fast_<name>` wrapper. Shared by all-fast functions and by mixed functions,
-//------------------ which keep a generic closure for call sites whose arguments are not proven numeric.
+//------------------ emit_fast_variant: emits the `_fast_<name>_impl` Y-combinator body and the `_fast_<name>` wrapper
 
 void CodeEmitter::emit_fast_variant(std::string_view name, uint32_t v_idx) {
     const auto &fn = ctx.nodes[v_idx];
@@ -617,9 +605,7 @@ void CodeEmitter::emit_fast_variant(std::string_view name, uint32_t v_idx) {
     out << "auto _fast_" << name << " = [=](clx::FrameBase& _fr";
     for (uint32_t a = 0; a < state.func_param_counts[name]; ++a)
         out << ", double p" << a;
-    //------------------ every fast call except self-recursion enters through this wrapper, so the deferred
-    //------------------ stack overflow is raised here, where a throw costs nothing. Clearing the pending site
-    //------------------ on entry drops one left by a body that raised another error while unwinding as 0.0.
+    //------------------ fast call entry: raisable stack-overflow check, clearing the pending site a body left while unwinding
     out << ") -> double {\n";
     out << "    clx::LState *_L = _fr.owner;\n";
     out << "    _L->stack_overflow_site = nullptr;\n";
@@ -665,18 +651,12 @@ void CodeEmitter::emit_native_impl_def(std::string_view name, uint32_t v_idx) {
     emit_dbl_impl_def(name, v_idx);
 }
 
-//------------------ emit_dbl_impl_def: triple-bound overload of a native-direct function (see
-//------------------ codegen.h). The body is the identical FunctionDef emission with params bound from
-//------------------ (double, int-flag, int-shadow) triples, so a triple call computes exactly what the
-//------------------ boxed call unboxes to — box_int_flag/add_exact ignore shadows when flags are false.
-//------------------ Skipped unless every param binds as a native double (mirrors the prologue predicate
-//------------------ in order); captured, vararg and LValue-bound params have no triple form.
+//------------------ emit_dbl_impl_def: triple-bound overload of a native-direct function, params from (double, flag, shadow)
 void CodeEmitter::emit_dbl_impl_def(std::string_view name, uint32_t v_idx) {
     const auto &fn = ctx.nodes[v_idx];
     if (fn.type != NodeType::FunctionDef || fn.as.func_def.is_vararg)
         return;
-    //------------------ void functions return stock zero values; the boxed impl plus the comma-operator
-    //------------------ wrapper at multi-value sites already model that exactly, so no triple form is needed.
+    //------------------ void functions return stock zero values through the boxed impl, so no triple form is needed
     if (state.void_funcs.count(name) > 0)
         return;
     uint32_t nparams = fn.as.func_def.param_count;
@@ -727,9 +707,7 @@ void CodeEmitter::emit_dbl_impl_def(std::string_view name, uint32_t v_idx) {
     out << "); };\n";
 }
 
-//------------------ emit_multi_impl_def: tuple-struct native overload for a
-//------------------ multi-double function. The generic closure is still emitted separately,
-//------------------ so non-tuple call shapes keep working; exact-arity destructures bypass it.
+//------------------ emit_multi_impl_def: tuple-struct overload for a multi-double function; the closure is still emitted
 void CodeEmitter::emit_multi_impl_def(std::string_view name, uint32_t v_idx, uint32_t tuple_n) {
     const auto &fn = ctx.nodes[v_idx];
     uint32_t nparams = fn.as.func_def.param_count;
@@ -760,11 +738,9 @@ void CodeEmitter::emitFunctionDef(const ASTNode &node, uint32_t node_idx) {
     bool is_fast = state.emit_fast_lambda;
     bool is_multi = state.emit_multi_impl;
     bool is_native = state.emit_native_impl || is_multi;
-    //------------------ is_dbl: triple-bound overload body — same native shape, params bound from
-    //------------------ (double, int-flag, int-shadow) triples instead of LValues (see emit_dbl_impl_def).
+    //------------------ is_dbl: triple-bound overload body, params bound from (double, int-flag, int-shadow) triples
     bool is_dbl = state.emit_dbl_impl;
-    //------------------ A nested closure returns MultiValue even inside a fast function, so the fast
-    //------------------ return path must not leak past the function that owns the double signature.
+    //------------------ a nested closure returns MultiValue even inside a fast function, so the fast path is saved and restored
     bool saved_in_fast_function = state.in_fast_function;
     std::string_view saved_fast_func_name = state.current_fast_func;
     if (!is_fast) {
@@ -807,18 +783,13 @@ void CodeEmitter::emitFunctionDef(const ASTNode &node, uint32_t node_idx) {
             std::string unique = (cnt == 0) ? std::string(pname) : std::string(pname) + std::to_string(cnt);
             fast_param_cpp.push_back(std::move(unique));
         }
-        //------------------ Fast lambdas take the caller's frame: they have no LState* of their own, and
-        //------------------ capturing the defining scope's frame would dangle once a closure escapes.
-        //------------------ `push` lives on FrameBase so the impl can root locals in that frame.
+        //------------------ fast lambdas take the caller's frame: no LState of their own and a captured frame would dangle
         out << "[=](auto& self, clx::FrameBase& _fr";
         for (uint32_t i = 0; i < node.as.func_def.param_count; ++i) {
             out << ", double l_" << fast_param_cpp[i];
         }
         out << ") -> double {\n";
-        //------------------ a fast self-call enters this lambda directly, bypassing the call wrappers' depth check;
-        //------------------ the guard returns instead of throwing so this lambda stays unwind-free (a throw here
-        //------------------ makes the whole body unwind-capable, which measured 1.9x on fib). The store must stay
-        //------------------ inline: writing the state through a cold helper re-measured the same 1.9x.
+        //------------------ a fast self-call bypasses the wrappers' depth check; the guard returns to stay unwind-free
         out << "if (clx::stack_probe() < _fr.owner->stack_low) [[unlikely]]\n";
         out << "{\n";
         out << "    if (!_fr.owner->stack_overflow_site)\n";
@@ -861,8 +832,7 @@ void CodeEmitter::emitFunctionDef(const ASTNode &node, uint32_t node_idx) {
 
         //------------------ native impls are entered lambda-to-lambda (self(self, ...)), bypassing the call wrappers' depth check
         out << "clx::stack_check(L);\n";
-        //------------------ the impl is a lambda, not a closure with an env, so globals need the function's
-        //------------------ own _ENV: capturing the defining scope's would freeze the load-time environment
+        //------------------ the impl is a lambda, not a closure, so globals need the function's own _ENV rather than the capture
         out << "clx::LValue _ENV = (L->current_func && L->current_func->env) ? clx::LValue(clx::ValueType::Table, "
                "L->current_func->env) : clx::LValue(clx::ValueType::Table, L->_G);\n";
         out << "clx::Frame<16> _fr(L);\n";
@@ -999,9 +969,7 @@ void CodeEmitter::emitFunctionDef(const ASTNode &node, uint32_t node_idx) {
     } else {
         state.current_arena_func = 0xFFFFFFFF;
     }
-    //------------------ _va_count/_va_args are consumed only by `...` (emitVararg) and the named-vararg
-    //------------------ binding below, both of which exist solely in vararg functions: skip the
-    //------------------ declarations otherwise to shrink generated output.
+    //------------------ _va_count/_va_args exist solely in vararg functions: skip the declarations otherwise
     if (node.as.func_def.is_vararg) {
         out << "size_t _va_count = (arg_count > " << node.as.func_def.param_count << ") ? (arg_count - "
             << node.as.func_def.param_count << ") : 0;\n";
@@ -1070,8 +1038,7 @@ void CodeEmitter::emitFunctionDef(const ASTNode &node, uint32_t node_idx) {
                 out << "_fr.push(*l_" << cpp_name << ");\n";
             }
         } else if (is_native) {
-            //------------------ coerce_number keeps stock's arithmetic coercion (a numeric string is
-            //------------------ parsed, a non-number raises) where as_number() silently yields 0
+            //------------------ coerce_number keeps stock's arithmetic coercion (a numeric string is parsed, a non-number raises)
             out << "double l_" << cpp_name << " = (" << i << " < arg_count) ? clx::coerce_number(L, args[" << i
                 << "]) : 0.0;\n";
             out << "bool _intf_l_" << cpp_name << " = (" << i << " < arg_count) && args[" << i
@@ -1170,8 +1137,7 @@ void CodeEmitter::emitReturnStatement(const ASTNode &node, uint32_t node_idx) {
     uint32_t v_count = node.as.return_stmt.value_count;
     uint32_t first_v = node.as.return_stmt.first_value;
 
-    //------------------ Frames unlink by RAII at return, so no restore is emitted here. The return
-    //------------------ expression is evaluated with the full root set live (see return_root_restore.lua).
+    //------------------ frames unlink by RAII at return, so the return expression is evaluated with the full root set live
     if (state.in_fast_function) {
         if (v_count == 0) {
             if (state.current_arena_func != 0xFFFFFFFF)
@@ -1276,8 +1242,7 @@ void CodeEmitter::emitReturnStatement(const ASTNode &node, uint32_t node_idx) {
                 is_direct = true;
         }
 
-        //------------------ unboxed tailcall: triple overload with double-ready args, same
-        //------------------ shapes as the native tailcall below; falls through to it when ineligible.
+        //------------------ unboxed tailcall: triple overload with double-ready args, same shapes as the native tailcall
         if (!fname.empty() && state.in_function_def && !dbl_self_ref(tgt)
             && state.void_funcs.count(fname) == 0
             && dbl_call_eligible(tgt, call_node.as.call_expr.first_arg, call_node.as.call_expr.arg_count)) {
@@ -1299,8 +1264,7 @@ void CodeEmitter::emitReturnStatement(const ASTNode &node, uint32_t node_idx) {
 
         //------------------ native-direct tailcall: exact-1 callee, exact
 
-        //------------------ void callees fall through to generic forwarding below: they yield zero
-        //------------------ values, not one nil (see try_emit_native_call for the multi-value case).
+        //------------------ void callees fall through to generic forwarding: they yield zero values, not one nil
         if (!fname.empty() && state.in_function_def && state.void_funcs.count(fname) == 0
             && native_call_eligible(tgt, call_node.as.call_expr.first_arg, call_node.as.call_expr.arg_count)) {
             if (state.current_arena_func != 0xFFFFFFFF)
@@ -1319,8 +1283,7 @@ void CodeEmitter::emitReturnStatement(const ASTNode &node, uint32_t node_idx) {
             return;
         }
 
-        //------------------ builtin intrinsic alias tail call: raw call before generic dispatch;
-        //------------------ below-min-arg calls keep the cfunc/generic path for runtime arity checks
+        //------------------ builtin intrinsic alias tail call: raw call before generic dispatch (arity checks stay in the cfunc)
         if (!is_direct && !fname.empty() && state.reassigned_vars.count(std::string(fname)) == 0
             && state.fast_callables.count(std::string(fname)) == 0) {
             auto _ait = state.intrinsic_aliases.find(std::string(fname));

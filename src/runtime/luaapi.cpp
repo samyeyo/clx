@@ -32,10 +32,7 @@
 #include <sys/wait.h>
 #endif
 
-//---------- One API frame: a deque of frame-rooted values plus the upvalues of the C function that owns it.
-//---------- `roots` registers the frame's live slots with the collector. They must stay rooted across
-//---------- coroutine switches and they outlive the coroutine that pushed them, so they are not RootRange
-//---------- chain nodes (a chain mirrors one coroutine's C stack and only unlinks from its head).
+//------------------ ApiFrame: one API frame — frame-rooted values plus the upvalues of the C function that owns it
 struct ApiFrame {
     std::deque<clx::LValue> stack;
     std::shared_ptr<std::vector<clx::LUpValue>> ups;
@@ -549,7 +546,7 @@ void luaapi_reset_thread_bundle(LState *L, void *bundle) {
 extern "C" const char lua_ident[] = "$LuaVersion: " LUA_COPYRIGHT " $"
                                     "$LuaAuthors: " LUA_AUTHORS " $";
 
-//=========================== state manipulation ===========================
+//------------------ state manipulation
 
 lua_State *lua_newstate(lua_Alloc f, void *ud, unsigned seed) {
     (void)f;
@@ -647,7 +644,7 @@ lua_Number lua_version(lua_State *L) {
     return static_cast<lua_Number>(LUA_VERSION_NUM);
 }
 
-//=========================== stack manipulation ===========================
+//------------------ stack manipulation
 
 int lua_absindex(lua_State *L, int idx) {
     if (idx > 0 || idx <= LUA_REGISTRYINDEX)
@@ -729,7 +726,7 @@ void lua_xmove(lua_State *from, lua_State *to, int n) {
     luaapi_truncate(from, first);
 }
 
-//=========================== access functions ===========================
+//------------------ access functions
 
 int lua_isnumber(lua_State *L, int idx) {
     clx::LValue *v = luaapi_locate(L, idx);
@@ -945,7 +942,7 @@ const void *lua_topointer(lua_State *L, int idx) {
     }
 }
 
-//=========================== comparison and arithmetic ===========================
+//------------------ comparison and arithmetic
 
 void lua_arith(lua_State *L, int op) {
     clx::LState *S = L->L;
@@ -1038,7 +1035,7 @@ int lua_compare(lua_State *L, int idx1, int idx2, int op) {
     }
 }
 
-//=========================== push functions ===========================
+//------------------ push functions
 
 void lua_pushnil(lua_State *L) {
     luaapi_push(L, clx::LValue());
@@ -1201,7 +1198,7 @@ int lua_pushthread(lua_State *L) {
     return (S->main_thread && th == S->main_thread) ? 1 : 0;
 }
 
-//=========================== get functions ===========================
+//------------------ get functions
 
 int lua_getglobal(lua_State *L, const char *name) {
     clx::LState *S = L->L;
@@ -1346,7 +1343,7 @@ int lua_getiuservalue(lua_State *L, int idx, int n) {
     return luaapi_tag(S, r);
 }
 
-//=========================== set functions ===========================
+//------------------ set functions
 
 void lua_setglobal(lua_State *L, const char *name) {
     clx::LState *S = L->L;
@@ -1496,7 +1493,7 @@ int lua_setiuservalue(lua_State *L, int idx, int n) {
     return 1;
 }
 
-//=========================== load and call ===========================
+//------------------ load and call
 
 //---------- luaapi_call: shared body of lua_callk / lua_pcallk
 static int luaapi_call(lua_State *L, int nargs, int nresults, int errfunc, bool protect, bool yieldable) {
@@ -1656,7 +1653,7 @@ int lua_dump(lua_State *L, lua_Writer writer, void *data, int strip) {
     return 1;
 }
 
-//=========================== coroutine functions ===========================
+//------------------ coroutine functions
 
 //---------- lua_yieldk: hand the top nresults values to the resumer and switch back to it
 int lua_yieldk(lua_State *L, int nresults, lua_KContext ctx, lua_KFunction k) {
@@ -1715,9 +1712,7 @@ int lua_resume(lua_State *L, lua_State *from, int narg, int *nres) {
         }
         t->function = fn;
     } else {
-        //------------------ stock resumes inside the coroutine's own stack frame, so the values left
-        //------------------ over from the previous yield are overwritten by the new results; the API
-        //------------------ stack has to drop them explicitly or every resume leaves a stale prefix
+        //------------------ stock resumes inside the coroutine's stack frame and overwrites the previous results; drop them here
         arg_start = sz - na;
         keep = 0;
     }
@@ -1762,7 +1757,7 @@ int lua_isyieldable(lua_State *L) {
     return (L->pcall_depth == 0) ? 1 : 0;
 }
 
-//=========================== warnings ===========================
+//------------------ warnings
 
 void lua_setwarnf(lua_State *L, lua_WarnFunction f, void *ud) {
     L->warnf = f;
@@ -1774,7 +1769,7 @@ void lua_warning(lua_State *L, const char *msg, int tocont) {
         L->warnf(L->warnf_ud, msg, tocont);
 }
 
-//=========================== garbage collection ===========================
+//------------------ garbage collection
 
 int lua_gc(lua_State *L, int what, ...) {
     clx::LState *S = L->L;
@@ -1858,7 +1853,7 @@ int lua_gc(lua_State *L, int what, ...) {
     return res;
 }
 
-//=========================== miscellaneous ===========================
+//------------------ miscellaneous
 
 int lua_error(lua_State *L) {
     ApiFrame &f = luaapi_frame(L);
@@ -1966,7 +1961,7 @@ void lua_closeslot(lua_State *L, int idx) {
     (void)idx;
 }
 
-//=========================== debug interface ===========================
+//------------------ debug interface
 
 int lua_getstack(lua_State *L, int level, lua_Debug *ar) {
     if (level < 0 || !ar)
@@ -2073,7 +2068,7 @@ int lua_gethookcount(lua_State *L) {
     return 0;
 }
 
-//=========================== auxiliary library ===========================
+//------------------ auxiliary library
 
 void luaL_checkversion_(lua_State *L, lua_Number ver, size_t sz) {
     lua_Number v = lua_version(L);
@@ -2515,7 +2510,7 @@ void luaL_openselectedlibs(lua_State *L, int load, int preload) {
     (void)preload;
 }
 
-//=========================== generic buffers ===========================
+//------------------ generic buffers
 
 //---------- luaapi_prepbuff: grow the buffer heap block when the static area is full
 static char *luaapi_prepbuff(luaL_Buffer *B, size_t sz) {
@@ -2598,7 +2593,7 @@ void luaL_pushresultsize(luaL_Buffer *B, size_t sz) {
     luaL_pushresult(B);
 }
 
-//=========================== standard library openers ===========================
+//------------------ standard library openers
 
 int luaopen_base(lua_State *L) {
     luaapi_push(L, clx::LValue(clx::ValueType::Table, L->L->_G));

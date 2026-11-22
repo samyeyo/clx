@@ -45,8 +45,7 @@ static void gc_dispose_swept(LState *L, LHeader *curr) {
     auto &GC_SUB = L->allocated_bytes;
     (void)GC_SUB;
     curr->flags &= ~(LFLAG_REMEMBERED | LFLAG_GC_PIN);
-    //------------------ Old-byte accounting only changes when an OLD object dies (to is always YOUNG
-    //------------------ here); skip the type-switch + size computation for young/survivor garbage.
+    //------------------ old-byte accounting only changes when an OLD object dies: skip the size computation otherwise
     if (curr->age == AGE_OLD)
         L->gc_update_old_bytes(curr, AGE_OLD, AGE_YOUNG);
     if (curr->flags & LFLAG_VM_PROXY) {
@@ -71,8 +70,7 @@ static void gc_dispose_swept(LState *L, LHeader *curr) {
             }
             t->array_size = 0;
             t->array_lim = 0;
-            //------------------ a table can be marked and lose its metatable later; the bit must not ride into
-            //------------------ the recycled table, which was never marked
+            //------------------ a table can lose its metatable, so LFLAG_GC_MARKED must not ride into the recycled table
             t->flags &= ~LFLAG_GC_MARKED;
             if (t->array && t->array != t->small_array) {
                 t->next = L->free_tables_big;
@@ -91,10 +89,7 @@ static void gc_dispose_swept(LState *L, LHeader *curr) {
         f->gc_cells.clear();
         f->next = L->free_functions;
         L->free_functions = f;
-        //------------------ the object keeps its bytes on free_functions, so the charge taken at creation
-        //------------------ has to come off here: leaving it on drifted allocated_bytes up by a closure's
-        //------------------ size per dead closure, which inflated the collection threshold until the
-        //------------------ collector effectively stopped running in closure-heavy code
+        //------------------ the object keeps its bytes on free_functions, so the charge taken at creation comes off here
         if (sizeof(LCFunction) > L->allocated_bytes)
             L->allocated_bytes = 0;
         else
@@ -154,8 +149,7 @@ static void gc_drain_finalizables(LState *L) {
     for (LTable *t = static_cast<LTable *>(L->gc_finalizable); t;) {
         LTable *nx = static_cast<LTable *>(t->next);
         meta_list_remove(L, t);
-        //------------------ a metatable alone does not finalize: only an object marked when a metatable with __gc
-        //------------------ was installed runs its finalizer, as in stock. Unmarked ones are just recycled.
+        //------------------ a metatable alone does not finalize: only an object marked when __gc was installed runs it
         if (t->flags & LFLAG_GC_MARKED)
             L->invoke_gc_finalizer(t, "GC_Finalizer");
         size_t t_bytes = sizeof(LTable) + table_heap_bytes(t);
@@ -328,8 +322,7 @@ static bool weak_clearable(const LValue &v);
 
 static bool gc_trace_table_young(LState *L, LTable *t, LState::GCStack &wl) {
     bool has_nonold = false;
-    //------------------ weak entries are not traced through: the weak pass of the same cycle decides them
-    //------------------ from what the strong graph reached (weak-keyed values are ephemerons)
+    //------------------ weak entries are not traced through: the weak pass decides them from the strong graph
     uint8_t wm = weak_mode_of(L, t);
     for (size_t i = 0; i < t->array_size; ++i) {
         if (t->array_types[i] == Nil || (wm & 2))
@@ -448,8 +441,7 @@ static bool gc_trace_function_young(LState *L, LCFunction *f, LState::GCStack &w
     return has_nonold;
 }
 
-//------------------ LState::is_allocated_userdata — membership check on both GC chains, plus the userdata whose
-//------------------ __gc is running: it was unlinked by the sweep but its block is still alive until the call ends
+//------------------ is_allocated_userdata: membership check on both GC chains, plus the userdata whose __gc is running
 bool LState::is_allocated_userdata(const LHeader *h) const {
     for (const LUserdata *ud : finalizing_ud)
         if (ud == h)
@@ -497,8 +489,7 @@ static void gc_trace_remember_nonold_children(LTable *t) {
 //------------------ LState::gc_minor — young-generation collection (generational mode)
 
 void LState::gc_minor() {
-    //------------------ re-entrancy guard: draining finalizables below runs Lua, which may allocate
-    //------------------ and re-enter through gc_maybe_collect().
+    //------------------ re-entrancy guard: draining finalizables runs Lua, which may allocate and re-enter collection
     if (gc_minor_active)
         return;
     ++gc_stats_minors;
@@ -512,8 +503,7 @@ void LState::gc_minor() {
     for (FuncArena *ar = active_arenas; ar; ar = ar->next_active)
         for (LTable *at = ar->tables; at; at = static_cast<LTable *>(at->next))
             at->marked = 0;
-    //------------------ the main thread is on neither GC chain (it is never swept), so no sweep ever
-    //------------------ clears its mark: a stale one would skip the main frame's stashed root chain
+    //------------------ the main thread is on neither GC chain, so a stale mark would skip its stashed root chain
     if (main_thread)
         main_thread->marked = 0;
 
@@ -554,18 +544,11 @@ void LState::gc_minor() {
     if (registry)
         push_if_needed(LValue(Table, registry));
 
-    //------------------ roots: VM proxy wrappers (VMFunction, VMTableProxy) and bridged clx callables.
-    //------------------ These live outside the slab and are only reachable through the VM's own object
-    //------------------ graph, so without this walk a minor collection frees every live proxy.
+    //------------------ roots: VM proxy wrappers and bridged callables, reachable only through the VM's own object graph
     if (clx_mark_vm_proxies_ptr)
         clx_mark_vm_proxies_ptr(this, wl);
 
-    //------------------ roots: gc_recent. Objects here were allocated since the previous collection and
-    //------------------ are now ordinary objects: normal reachability decides them. Rooting every one of
-    //------------------ them unconditionally promoted each dead object to AGE_SURVIVOR, so it could only be
-    //------------------ freed one cycle later — that lag is what kept dead tables off free_tables and forced
-    //------------------ fresh array growth. Everything reachable from a live object is still marked through
-    //------------------ that object's own trace, so nothing in flight is lost here.
+    //------------------ roots: gc_recent is cleared because plain reachability decides those objects now
 
     gc_recent.clear();
 
@@ -630,11 +613,7 @@ void LState::gc_minor() {
     bool meta_protected = false;
     while (!wl.empty() || !meta_protected) {
         if (wl.empty()) {
-            //------------------ protect metatables of dead finalizable tables. gc_dispose_swept() will push
-            //------------------ those tables onto gc_finalizable, but their metatable (and the __gc closure
-            //------------------ it holds) is only reachable through the dead object, so the sweep below would
-            //------------------ null the closure's func and the drain would throw std::bad_function_call.
-            //------------------ Mirrors the protect_wl pass in collect_garbage_full().
+            //------------------ protect metatables of dead finalizable tables: their __gc closure hangs off the dead object
             meta_protected = true;
             for (LTable *obj = metatabled_tables; obj; obj = obj->ext->meta_next) {
                 if (obj->marked != 0 || (obj->flags & LFLAG_VM_PROXY))
@@ -645,9 +624,7 @@ void LState::gc_minor() {
                 mt->marked = 1;
                 wl.push(mt);
             }
-            //------------------ same for dead finalizable userdata (files): their metatable (+ __gc
-            //------------------ closure) is otherwise swept in-cycle and the drain throws
-            //------------------ std::bad_function_call on the nulled closure.
+            //------------------ same for dead finalizable userdata (files): their metatable and __gc closure would be swept
             for (LUserdata *ud = metatabled_ud; ud; ud = ud->meta_next) {
                 if (ud->marked != 0)
                     continue;
@@ -687,8 +664,7 @@ void LState::gc_minor() {
         }
     }
 
-    //------------------ weak tables: a young key/value this cycle did not reach is dead. Weak-keyed
-    //------------------ tables are ephemerons, so their values are marked from live keys first.
+    //------------------ weak tables: a young key this cycle did not reach is dead; weak-keyed tables are ephemerons
     if (metatabled_tables) {
         auto weak_dead_young = [&](const LValue &v) {
             if (!weak_clearable(v))
@@ -803,8 +779,7 @@ void LState::gc_minor() {
     auto age_and_promote = [&](LHeader *h) {
         uint8_t from = h->age;
         uint8_t to = (from == AGE_YOUNG) ? AGE_SURVIVOR : AGE_OLD;
-        //------------------ Young->survivor promotion never moves old-bytes (both non-old); only
-        //------------------ pay for the size computation on the survivor->old transition.
+        //------------------ young->survivor promotion never moves old-bytes: only survivor->old pays for the size
         if (to == AGE_OLD)
             gc_update_old_bytes(h, from, to);
         h->age = to;
@@ -869,8 +844,7 @@ void LState::gc_minor() {
     while (*link) {
         LHeader *o = *link;
         if (o->age == AGE_OLD) {
-            //------------------ Should not happen (promotions move to old_objects below, majors
-            //------------------ re-partition); kept as a safety net, not a fast path.
+            //------------------ should not happen (promotions move to old_objects); kept as a safety net
             *link = o->next;
             o->next = old_objects;
             old_objects = o;
@@ -880,8 +854,7 @@ void LState::gc_minor() {
             age_and_promote(o);
             o->marked = 0;
             if (o->age == AGE_OLD) {
-                //------------------ Segregate: minors never walk old_objects, killing the per-minor
-                //------------------ re-walk of the long-lived set (2.9M wasted visits in binarytrees).
+                //------------------ segregate: minors never walk old_objects, killing the per-minor re-walk of the long-lived set
                 *link = o->next;
                 o->next = old_objects;
                 old_objects = o;
@@ -894,11 +867,7 @@ void LState::gc_minor() {
             *link = next_obj;
             object_count--;
         } else if (!(o->flags & (LFLAG_GC_PIN | LFLAG_REMEMBERED))) {
-            //------------------ dead young: unreachable at this collection. gc_recent was cleared above and no Lua
-            //------------------ runs between that clear and this walk, so an unmarked young object here is garbage,
-            //------------------ not something in flight. Returning it to free_tables now is what lets the next
-            //------------------ table reuse its array buffer instead of re-growing 8->16->32->64. Pinned objects
-            //------------------ are spared: one freshly taken off the free list may not be rooted yet.
+            //------------------ dead young: unmarked after gc_recent was cleared, so garbage; pinned objects are spared
             LHeader *next_obj = o->next;
             gc_dispose_swept(this, o);
             *link = next_obj;
@@ -909,7 +878,7 @@ void LState::gc_minor() {
     }
     gc_stats_minor_freed += (before_sweep > allocated_bytes) ? (before_sweep - allocated_bytes) : 0;
 
-    //------------------ drop stale remembered entries and pins (mark bits were
+    //------------------ drop stale remembered entries and pins: this sweep cleared their mark bits
 
     {
         size_t w = 0;
@@ -946,11 +915,7 @@ void LState::gc_minor() {
     //------------------ rebuild pacing state
     gc_recent.clear();
 
-    //------------------ drain finalizables. gc_dispose_swept() routes every swept metatabled table onto
-    //------------------ gc_finalizable, but only the incremental major sweep used to drain that list, so
-    //------------------ minors disposed objects whose __gc could then never run (finalizers stalled at 1).
-    //------------------ Runs before gc_minor_active drops so a finalizer that allocates cannot nest a minor
-    //------------------ inside this drain.
+    //------------------ drain finalizables after every minor, not just the incremental major, so __gc never stalls
 
     if (gc_finalizable || gc_finalizable_ud)
         gc_drain_finalizables(this);
@@ -958,11 +923,7 @@ void LState::gc_minor() {
     gc_bytes_at_minor = allocated_bytes;
     gc_minor_active = false;
 
-    //------------------ adaptive minor pacing: next trigger ≈ one current heap-full, clamped.
-    //------------------ Hysteresis on the way down (at most halves per minor): without it the threshold
-    //------------------ collapses to the post-minor live set after every good minor, then oscillates — churn
-    //------------------ workloads like binarytrees re-walk their whole live chain in mark+sweep on each of
-    //------------------ those too-frequent minors. Growth stays immediate via allocated_bytes.
+    //------------------ adaptive minor pacing: next trigger is about one heap-full, with hysteresis on the way down
 
     if (!gc_minor_threshold_env) {
         size_t next = allocated_bytes;
@@ -983,8 +944,7 @@ void LState::gc_minor() {
     wl.clear();
 }
 
-//------------------ LState::gc_step — incremental GC step; 'size' is collectgarbage("step", size)
-//------------------ and scales the work done, zero meaning "finish a whole cycle"
+//------------------ LState::gc_step: incremental step, 'size' scales the work done, zero meaning 'finish a cycle'
 bool LState::gc_step(int64_t size) {
     if (size == 0) {
         if (gc_phase == GCPhase::Sweeping)
@@ -1080,8 +1040,7 @@ bool LState::gc_step(int64_t size) {
             gc_bytes_at_minor = allocated_bytes;
         }
 
-        //------------------ Re-partition: minors walk only allocated_objects, so move every AGE_OLD
-        //------------------ survivor back to old_objects. Single O(heap) pass per completed cycle.
+        //------------------ re-partition: move every AGE_OLD survivor back to old_objects, one O(heap) pass per cycle
         {
             LHeader **link = &allocated_objects;
             while (*link) {
@@ -1110,8 +1069,7 @@ bool LState::gc_step(int64_t size) {
 //------------------ LState::collect_garbage — full mark-sweep collection (entry point)
 
 void LState::collect_garbage() {
-    //------------------ re-entrancy guard: gc_minor() drains finalizables before dropping gc_minor_active,
-    //------------------ so a __gc that calls collectgarbage() must not start a full collection mid-drain.
+    //------------------ re-entrancy guard: a __gc that calls collectgarbage() must not start a full collection mid-drain
     if (gc_minor_active)
         return;
     ++gc_stats_collects;
@@ -1168,9 +1126,7 @@ static bool weak_dead(const LValue &v) {
 void LState::gc_collect_mark() {
     if (gc_draining)
         return;
-    //------------------ Reunite generations: gc_step sweeps a single chain, so splice old_objects
-    //------------------ back onto the young chain before marking (O(old) on a cold path). Partitioned
-    //------------------ again after the sweep below.
+    //------------------ reunite generations before a full mark: gc_step sweeps a single chain (O(old), cold path)
     while (old_objects) {
         LHeader *o = old_objects;
         old_objects = o->next;
@@ -1180,10 +1136,7 @@ void LState::gc_collect_mark() {
     auto &wl = gc_worklist;
     wl.clear();
 
-    //------------------ clear every leftover mark first: a minor interrupted mid-sweep, or a collection
-    //------------------ that returned before its sweep, leaves marks set. gc_mark_value treats a marked
-    //------------------ object as already traced, so a stale mark on _G would skip the whole global table
-    //------------------ and let its reachable values be swept as garbage.
+    //------------------ clear every leftover mark first: a stale mark on _G would skip the whole global table
     for (LHeader *o = allocated_objects; o; o = o->next)
         o->marked = 0;
     for (FuncArena *ar = active_arenas; ar; ar = ar->next_active)
@@ -1261,8 +1214,7 @@ void LState::gc_collect_mark() {
             uint8_t wm = weak_mode_of(this, t);
             if (wm)
                 weak_tables.push_back(t);
-            //------------------ weak values are not traced from the array part; integer keys are always
-            //------------------ alive, so a weak-keys-only table keeps those values strong
+            //------------------ weak values are not traced from the array part: integer keys are always alive
             if (!(wm & 2)) {
                 const uint8_t *types_raw = reinterpret_cast<const uint8_t *>(t->array_types);
                 size_t i = 0;
@@ -1390,9 +1342,7 @@ void LState::gc_collect_mark() {
 
     propagate();
 
-    //------------------ weak-keyed tables are ephemerons: a value is reachable only through its key, so
-    //------------------ values are marked in rounds until nothing new appears (a marked value can expose
-    //------------------ more live keys) and only then are the dead entries dropped
+    //------------------ weak-keyed tables are ephemerons: values are marked in rounds until nothing new appears
     if (!weak_tables.empty()) {
         for (;;) {
             size_t before_size = weak_tables.size();
@@ -1590,11 +1540,7 @@ void LState::gc_collect_mark() {
             }
         }
     }
-    //------------------ A major marks from roots, so LFLAG_REMEMBERED no longer says anything about
-    //------------------ reachability. gc_step() never disposes a remembered object and minors skip AGE_OLD
-    //------------------ entirely, so a dead old table mutated by a write barrier would survive every
-    //------------------ collection. Drop the entries this mark proved dead *before* sweeping, so the sweep
-    //------------------ below can free them and gc_remembered holds no pointer to a soon-freed object.
+    //------------------ a major marks from roots, so remembered entries this mark proved dead are dropped before the sweep
 
     {
         size_t w = 0;

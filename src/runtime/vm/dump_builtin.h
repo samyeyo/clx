@@ -12,9 +12,7 @@
 
 namespace clx {
 
-//------------------ clx_string_dump_dynamic - takes over string.dump when linked with --dynamic:
-//------------------ VM functions dump to stock bytecode strings, native closures come back as
-//------------------ callable VMFunction boxes. Assigned to clx_string_dump_hook at startup.
+//------------------ clx_string_dump_dynamic - string.dump under --dynamic: VM bytecode strings, native closures as boxes
 MultiValue clx_string_dump_dynamic(LState *L, const LValue *args, size_t count);
 
 }

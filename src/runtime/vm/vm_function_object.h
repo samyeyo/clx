@@ -27,7 +27,7 @@ struct VMFunction : public LCFunction {
     MultiValue invoke(LState *clx_L, const LValue *args, size_t nargs);
 };
 
-//------------------ vm_to_clx_function_ - conversion helper (does the
+//------------------ vm_to_clx_function_ - conversion helper: wraps a VM closure on the stack as a clx callable
 LValue vm_to_clx_function_(LState *clx_L, lua_State *L, int stack_idx);
 
 bool vm_pcall_function_(LState *clx_L, int lua_ref, const LValue *args, size_t nargs, MultiValue &out);

@@ -5,11 +5,7 @@
 // │  fulllibs.cpp · Full standard library opener│
 // └─────────────────────────────────────────────┘
 
-//------------------ Separate TU from openlibs.cpp on purpose: archive-member granularity guarantees
-//------------------ minimal links never pull openlibs() (and its references to every luastd_* module)
-//------------------ even on toolchains without function-sections/LTO dead-stripping (MinGW, MSVC w/o /Gy,
-//------------------ --debug builds). Only full-build mains call openlibs(); the driver links all module
-//------------------ archives for those.
+//------------------ separate TU so minimal links never pull openlibs(), even without function-section dead-stripping
 
 #include <clx_runtime.h>
 

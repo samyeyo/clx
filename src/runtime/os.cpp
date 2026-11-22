@@ -48,8 +48,7 @@ MultiValue os_clock(LState *L, const LValue *args, size_t count) {
     return MultiValue(clx::number(static_cast<double>(std::clock()) / CLOCKS_PER_SEC));
 }
 
-//------------------ date_specifier_ok: strftime conversion characters os.date accepts, so an invalid
-//------------------ specifier raises stock's error instead of leaking raw text through strftime
+//------------------ date_specifier_ok: strftime conversions os.date accepts, so an invalid one raises stock's error
 static bool date_specifier_ok(char c) {
     return std::strchr("aAbBcCdDeFgGhHIjmMnprRStTuUVwWxXyYzZ%", c) != nullptr;
 }
@@ -60,9 +59,7 @@ static bool date_modifier_ok(char c, char mod) {
     return std::strchr(set, c) != nullptr;
 }
 
-//------------------ format_date: stock's os.date format walker — plain bytes (embedded NULs included) are
-//------------------ copied verbatim, each conversion is expanded by one strftime call, invalid specifiers
-//------------------ raise "bad argument #1 to 'date' (invalid conversion specifier '...')"
+//------------------ format_date: stock's os.date walker — plain bytes verbatim, one strftime call per conversion
 static MultiValue format_date(LState *L, const char *s, size_t len, struct tm *stm) {
     const char *se = s + len;
     std::string out;
@@ -170,10 +167,7 @@ MultiValue os_exit(LState *L, const LValue *args, size_t count) {
     if (count >= 1 && args[0].type != Nil) {
         code = check_integer(L, args[0]);
     }
-    //------------------ stock's os.exit closes the state by default, which runs every pending __gc; only an
-    //------------------ explicit false skips the finalizers (and the stream flushes that go with them). The state
-    //------------------ itself is left allocated: os.exit may be called from a coroutine, whose stack is the one
-    //------------------ still running, and the process exits immediately after this anyway.
+    //------------------ os.exit closes the state by default (running every __gc); only an explicit false skips the finalizers
     bool do_close = true;
     if (count >= 2 && args[1].type != Nil)
         do_close = !(args[1].type == Boolean && !args[1].as_bool());
@@ -199,8 +193,7 @@ MultiValue os_remove(LState *L, const LValue *args, size_t count) {
     if (count == 0)
         throw_runtime_error(bad_arg_msg(L, 1, "os.remove", "string expected, got no value"));
     const char *path = check_string(L, args[0]);
-    //------------------ std::filesystem::remove() reports a missing file as "not removed" with a clear
-    //------------------ error_code, so stock's nil, "name: reason", errno needs the C library call instead
+    //------------------ std::filesystem::remove() hides errno, so stock's nil, message, errno shape needs the C call
     if (std::remove(path) != 0) {
         int en = errno;
         char buf[384];
@@ -232,8 +225,7 @@ MultiValue os_setlocale(LState *L, const LValue *args, size_t count) {
         const char *cur = std::setlocale(LC_ALL, nullptr);
         return MultiValue(clx::string(L, cur ? cur : "C"));
     }
-    //------------------ stock takes an optional string: nil (or a missing argument) queries the
-    //------------------ current locale for the category instead of being a type error
+    //------------------ stock takes an optional string: nil queries the current locale for the category
     const char *locale = nullptr;
     if (args[0].type != Nil)
         locale = check_string(L, args[0]);
@@ -273,9 +265,7 @@ MultiValue os_time(LState *L, const LValue *args, size_t count) {
     struct tm tm;
     std::memset(&tm, 0, sizeof(tm));
 
-    //------------------ field: stock's getfield — an absent field either takes its default or raises
-    //------------------ "missing in date table", a non-integral one raises "is not an integer", and an
-    //------------------ int whose shifted value leaves int range raises "is out-of-bound"
+    //------------------ field: stock's getfield — absent takes its default, non-integral and out-of-range raise
     auto field = [&](const char *name, bool has_default, int64_t dflt, int64_t delta) -> int {
         LValue p = tbl->gettable(LValue(L->intern_string(name)));
         std::string key(name);

@@ -62,10 +62,7 @@ public:
 
     int bridge_cache_registry_ref() const { return bridge_cache_ref_; }
 
-    //------------------ object_index -- clx table mapping a VM object (a table or closure, as its pointer)
-    //------------------ to the clx value already made from it, weakly held: the collector drops an entry
-    //------------------ when its clx value dies, so an object crossing back finds its own wrapper again
-    //------------------ and a dead one is never handed out
+    //------------------ object_index_get: existing clx wrapper for a VM object, weakly held so a dead one is never handed out
     LValue object_index_get(const void* vm_obj) const;
     void object_index_put(const void* vm_obj, const LValue& value);
 

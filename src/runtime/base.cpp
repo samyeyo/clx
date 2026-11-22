@@ -26,8 +26,7 @@ clx::MultiValue lua_error(clx::LState *L, const clx::LValue *args, size_t count)
         level = static_cast<int>(clx::to_number(args[1], 1.0));
     }
 
-    //------------------ stock adds a position only for level 1 (the frame that called 'error'); deeper
-    //------------------ levels point at C frames, which carry no line information
+    //------------------ stock adds a position only for level 1: deeper levels point at C frames with no line information
     if (err_val.type == clx::String && level == 1) {
         std::string prefix = clx::file_line_prefix(L);
         std::string err_str(err_val.as_string(), err_val.string_len());
@@ -45,16 +44,10 @@ clx::MultiValue lua_pcall(clx::LState *L, const clx::LValue *args, size_t count)
     return clx::pcall_function(L, args[0], args + 1, count - 1);
 }
 
-//------------------ run_message_handler: stock feeds an error raised *by* the handler back into the same
-//------------------ handler, so a chain that keeps erroring ends at LUAI_MAXCCALLS with 'C stack overflow'
+//------------------ run_message_handler: an error raised by the handler goes back into it, ending at 'C stack overflow'
 static constexpr int kMaxMessageHandlerDepth = 200;
 
-//------------------ stack allowance for the handler: stock resets its C-call counter before running a
-//------------------ message handler, so the handler always has room. The pointer guard can be met with the
-//------------------ stack pointer already at its lowest frame (MSVC's unwinder leaves it at the throw
-//------------------ depth), which would refuse the handler's very first call. The top-level handler call
-//------------------ runs with the guard shifted down by a fixed allowance; a handler that overflows inside
-//------------------ that allowance reports LUA_ERRERR the same way stock's exhausted C stack does.
+//------------------ handler stack allowance: the guard may be met with the stack already at its lowest frame (MSVC)
 static constexpr size_t kHandlerStackAllowance = 24 * 1024;
 
 //------------------ HandlerStackAllowance: shifts the guard down for the duration of one handler call
@@ -74,10 +67,7 @@ struct HandlerStackAllowance {
 
 static bool run_message_handler(
     clx::LState *L, clx::LValue handler, clx::LValue err_obj, clx::MultiValue &out, int depth = 0) {
-    //------------------ stock re-enters the handler until its C-call limit, then reports LUA_ERRERR;
-    //------------------ whether the limit's message reads 'C stack overflow' or 'error in error handling'
-    //------------------ depends on where in stock's C stack the limit lands, so clx reports the
-    //------------------ documented LUA_ERRERR message
+    //------------------ stock re-enters the handler until its C-call limit, then reports the documented LUA_ERRERR message
     if (depth >= kMaxMessageHandlerDepth) {
         out = clx::MultiValue(clx::string(L, "error in error handling"));
         return false;
@@ -93,9 +83,7 @@ static bool run_message_handler(
             next = L->close_err;
             L->has_close_err = false;
         }
-        //------------------ stock re-enters the handler only while it can still call; a handler that fails
-        //------------------ with its own stack overflow is already at the C limit, so the nested error is
-        //------------------ reported as 'error in error handling' (LUA_ERRERR) instead of recursing again
+        //------------------ a handler failing with its own stack overflow is at the C limit: report LUA_ERRERR, do not recurse
         if (next.type == clx::ValueType::String) {
             std::string msg(next.as_string(), next.string_len());
             if (msg.find("stack overflow") != std::string::npos) {
@@ -183,9 +171,7 @@ static MultiValue lua_setmetatable(LState *L, const LValue *args, size_t count) 
     return MultiValue(args[0]);
 }
 
-//------------------ clx_print: prints values to stdout (global print function)
-//------------------ print_write — stdout via the io batch when linked (shared ordering with
-//------------------ io.write), direct cout under --minimal where io.o is dropped.
+//------------------ clx_print/print_write: stdout through the io batch when linked, direct cout under --minimal
 static void print_write(const char *p, size_t n) {
     if (clx_io_write_ptr)
         clx_io_write_ptr(stdout, p, n);
@@ -216,8 +202,7 @@ MultiValue collectgarbage(LState *L, const LValue *args, size_t arg_count) {
         opt = std::string_view(args[0].as_string(), args[0].string_len());
     }
     if (opt == "collect") {
-        //------------------ stock answers nil for a re-entrant collection, which is what a __gc that calls
-        //------------------ collectgarbage() gets; it never runs a second collection from inside one
+        //------------------ stock answers nil for a re-entrant collection and never runs a second one from inside one
         if (L->gc_minor_active || L->gc_draining)
             return MultiValue(clx::LValue());
         bool had_recent = !L->gc_recent.empty();
@@ -319,8 +304,7 @@ static MultiValue assert(LState *L, const LValue *args, size_t count) {
         throw_runtime_error(bad_arg_msg(L, 1, "assert", "value expected"));
 
     if (!clx::to_boolean(args[0])) {
-        //------------------ stock assert routes through error(), which prefixes a string message with
-        //------------------ the caller's position (a non-string message is raised untouched)
+        //------------------ stock assert routes through error(), which prefixes a string message with the caller's position
         if (count > 1) {
             const LValue &msg = args[1];
             if (msg.type != ValueType::String)
@@ -372,8 +356,7 @@ static MultiValue tonumber(LState *L, const LValue *args, size_t count) {
         int64_t base = clx::check_integer(L, args[1]);
         if (base < 2 || base > 36)
             clx::error(L, bad_arg_msg(L, 2, "tonumber", "base out of range").c_str());
-        //------------------ stock b_str2int: walk the length-delimited numeral, rejecting any byte
-        //------------------ that is not a digit of the base (so embedded NULs never truncate)
+        //------------------ stock b_str2int: walk the length-delimited numeral, rejecting any byte that is not a base digit
         const char *s = clx::check_string(L, v);
         const size_t len = v.string_len();
         size_t i = 0;
@@ -577,8 +560,7 @@ static MultiValue ipairs_iter(LState *L, const LValue *args, size_t count) {
     //------------------ stock wraps the index on overflow (i.e. maxinteger -> mininteger)
     idx = static_cast<int64_t>(static_cast<uint64_t>(idx) + 1u);
 
-    //------------------ stock uses lua_geti, so an __index metamethod supplies missing keys:
-    //------------------ the raw LTable::gettable would stop the traversal at the first hole
+    //------------------ stock uses lua_geti, so an __index metamethod supplies missing keys instead of stopping at the hole
     LValue val;
     if (idx >= 1 && static_cast<size_t>(idx) <= t->array_size && t->array_types[idx - 1] != clx::ValueType::Nil) {
         val = LValue(t->array[idx - 1], t->array_types[idx - 1]);
@@ -633,9 +615,7 @@ void luastd_base(LState *L) {
     clx::set_field(L, g, "_VERSION", clx::string(L, "Lua 5.5"));
 }
 
-//------------------ Per-function registrars for filtered std startup (see luastd_base_filtered expose
-//------------------ via the driver-emitted open sequence). Each references exactly one base function, so
-//------------------ the linker strips every registrar — and its function — the program never uses.
+//------------------ per-function registrars for filtered std startup: the linker strips every unused registrar and its function
 #define CLX_BASE_REG(name, fn)                                                                                         \
     void luastd_base_##name(LState *L) {                                                                               \
         clx::set_function(L, LValue(Table, L->_G), #name, fn);                                                         \

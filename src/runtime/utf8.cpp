@@ -175,8 +175,7 @@ static MultiValue utf8_char(LState *L, const LValue *args, size_t count) {
 static MultiValue codes_iter(LState *L, const LValue *a, size_t c) {
     if (c < 1)
         return MultiValue();
-    //------------------ the state may be the string itself (stock's iter_aux signature, which callers
-    //------------------ can invoke directly) or the userdata carrying it and the lax flag
+    //------------------ the state may be the string itself or the userdata carrying it and the lax flag
     const char *s = nullptr;
     size_t len = 0;
     bool lax = false;
@@ -192,8 +191,7 @@ static MultiValue codes_iter(LState *L, const LValue *a, size_t c) {
     } else {
         return MultiValue();
     }
-    //------------------ the control is the byte offset of the next character; a negative or huge value
-    //------------------ wraps like stock's unsigned cast and simply ends the iteration
+    //------------------ the control is the byte offset of the next character; a negative or huge value ends the iteration
     uint64_t n = 0;
     if (c >= 2) {
         if (a[1].type == ValueType::Int64)
@@ -238,8 +236,7 @@ static MultiValue utf8_codes(LState *L, const LValue *args, size_t count) {
 static MultiValue utf8_codepoint(LState *L, const LValue *args, size_t count) {
     size_t len;
     const char *s = get_string(L, args, count, len, 1, "utf8.codepoint");
-    //------------------ stock runs both indices through u_posrelat, so a negative end index (-1) counts
-    //------------------ back from the end of the string instead of yielding an empty interval
+    //------------------ stock runs both indices through u_posrelat, so a negative end index counts back from the end
     int64_t posi = u_posrelat((count >= 2 && args[1].type != Nil) ? check_integer(L, args[1]) : 1, len);
     int64_t pose = u_posrelat((count >= 3 && args[2].type != Nil) ? check_integer(L, args[2]) : posi, len);
     bool lax = (count >= 4) ? to_boolean(args[3]) : false;

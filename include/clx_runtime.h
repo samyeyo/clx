@@ -61,11 +61,7 @@ void clx_coro_init(CoroutineContext *ctx, void *stack_top, void *entry);
 #include <ucontext.h>
 #endif
 
-//---------- CLX: CLX_MUSTTAIL - GCC only; clang bans closure->free musttail, MSVC has none.
-//          -O0 (-Og) does not perform tail calls, so musttail is only enabled when optimization is on.
-//          GNU --size uses -O1 (not -Os, Windows and Linux) because GCC 15 rejects [[gnu::musttail]] at -Os.
-//          At -O1 the heuristic tail-call pass is off by default, so size mode also passes
-//          -foptimize-sibling-calls (covers GCC builds without the attribute, e.g. GCC 13).
+//------------------ CLX_MUSTTAIL: GCC only (clang bans closure->free musttail), and only when optimizing since -O0 never tail-calls
 #if defined(__clang__)
 #define CLX_MUSTTAIL
 #elif defined(__GNUC__) && defined(__has_cpp_attribute) && __has_cpp_attribute(gnu::musttail) && !defined(__aarch64__) \
@@ -179,10 +175,7 @@ constexpr auto LightUserData = ValueType::LightUserData;
 static constexpr const char *VALUE_TYPE_NAMES[] = { "nil", "boolean", "integer", "number", "string", "table",
     "function", "userdata", "thread", "userdata" };
 
-//------------------ type_meta_index: slot in LState::type_metatables for a value's type; stock has a
-//------------------ single metatable for all numbers, so integers and floats share one slot. Light userdata
-//------------------ owns the last slot and never fills it: a light userdata has no metatable at all, so every
-//------------------ lookup of that slot reads back nullptr.
+//------------------ type_meta_index: slot in LState::type_metatables for a type; numbers share one, light userdata none
 CLX_INLINE size_t type_meta_index(ValueType t) {
     return static_cast<size_t>(t == ValueType::Double ? ValueType::Int64 : t);
 }
@@ -261,8 +254,7 @@ struct TValue {
     CLX_INLINE_HOT TValue(uint64_t u) { payload.u64 = u; }
 };
 
-//------------------ is_gc_obj_tag: tag-only GC-object test so hot paths (e.g. write barriers fed by raw
-//------------------ TValue/ValueType pairs) need not box a throwaway LValue just to ask the question.
+//------------------ is_gc_obj_tag: tag-only GC-object test, so raw TValue/ValueType pairs need no throwaway LValue
 CLX_INLINE_HOT bool is_gc_obj_tag(ValueType t) {
     uint8_t tt = static_cast<uint8_t>(t);
     return tt >= static_cast<uint8_t>(ValueType::Table) && tt <= static_cast<uint8_t>(ValueType::Thread);
@@ -310,8 +302,7 @@ struct LValue {
         : val()
         , type(ValueType::Nil) { }
 
-    //------------------ light_udata: a value carrying a light userdata — a bare foreign pointer the runtime never
-    //------------------ dereferences, never traces and never gives a metatable
+    //------------------ light_udata: a bare foreign pointer the runtime never dereferences, traces or gives a metatable
     CLX_INLINE_HOT static LValue light_udata(const void *p) {
         LValue v;
         v.val.payload.ptr = const_cast<void *>(p);
@@ -464,8 +455,7 @@ bool ctype_is_c();
 //------------------ refresh_locale_flags: re-reads LC_COLLATE/LC_CTYPE, called after os.setlocale succeeds
 void refresh_locale_flags();
 
-//------------------ locale_generation: bumped whenever the locale changed, so cached locale-dependent tables
-//------------------ ('%a'-style character classes) know when to rebuild
+//------------------ locale_generation: bumped on every locale change, so cached locale tables know when to rebuild
 uint64_t locale_generation();
 
 //------------------ Integer: bare integer operand for hot comparison fast paths (no boxing)
@@ -482,10 +472,7 @@ struct MultiValue {
     size_t count = 0;
     clx::LValue *overflow = nullptr;
     LState *alloc_L = nullptr;
-    //------------------ Raw inline storage: only the first min(count, INLINE_CAP) slots are ever
-    //------------------ constructed (placement-new). LValue is trivially destructible, so unused slots cost
-    //------------------ nothing and no destruction is needed. This removes 3-4 dead LValue()/TValue()
-    //------------------ constructions per MultiValue temporary (the default ctor used to build all four).
+    //------------------ Raw inline storage: only the first min(count, INLINE_CAP) slots are constructed, in place
     alignas(clx::LValue) unsigned char inline_buf[INLINE_CAP * sizeof(clx::LValue)];
 
     CLX_INLINE_HOT clx::LValue *inline_ptr() { return reinterpret_cast<clx::LValue *>(inline_buf); }
@@ -512,8 +499,7 @@ struct MultiValue {
         new (inline_buf + 2 * sizeof(clx::LValue)) clx::LValue(c);
     }
 
-    //------------------ Primitive ctors: construct the LValue in place, skipping the LValue temporary
-    //------------------ + copy that `MultiValue(LValue(int64))` paid at every single-value return.
+    //------------------ Primitive ctors: construct the LValue in place, skipping the temporary of a single-value return
     MultiValue(int64_t i)
         : count(1) {
         new (inline_buf) clx::LValue(i);
@@ -537,10 +523,7 @@ struct MultiValue {
         new (inline_buf + 2 * sizeof(clx::LValue)) clx::LValue(c);
     }
 
-    //------------------ push_back: appends one value, constructing it in place in the inline slots
-    //------------------ (no LValue temporary + vector hop). Overflow beyond INLINE_CAP is bump-allocated;
-    //------------------ the growth path is cold (only 4+ returns take it) and keeps alloc_L-backed data
-    //------------------ safe across the realloc inside alloc_overflow via a snapshot copy.
+    //------------------ push_back: appends in place in the inline slots, overflowing to a bump-allocated block
     CLX_INLINE_HOT void push_back(const clx::LValue &v) { new (push_slot()) clx::LValue(v); }
 
     CLX_INLINE_HOT void push_back(bool b) { new (push_slot()) clx::LValue(b); }
@@ -598,9 +581,7 @@ struct MultiValue {
 
     MultiValue &operator=(MultiValue &&other) noexcept {
         if (this != &other) {
-            //------------------ Slots below old_live are already constructed: assign. Slots at or above
-            //------------------ it are raw: placement-new. (LValue is trivially destructible, so shrinking
-            //------------------ needs no destruction; growing must not assign into raw storage.)
+            //------------------ slots below old_live are constructed (assign), those above are raw (placement-new)
             size_t old_live = (count < INLINE_CAP) ? count : INLINE_CAP;
             count = other.count;
             overflow = other.overflow;
@@ -638,10 +619,7 @@ struct MultiValue {
         return *this;
     }
 
-    //------------------ In-place assign from an array: reuses already-constructed inline slots (assign)
-    //------------------ and placement-news only the growth. Saves one full set of constructions versus
-    //------------------ `m = MultiValue(arr, c, L)` (temp constructs c, then move-assigns c again). Overflow
-    //------------------ beyond INLINE_CAP is freshly bump-allocated; stale bump pointers die at GC reset.
+    //------------------ assign: in-place assign from an array, reusing constructed slots and placement-newing only the growth
     CLX_INLINE_HOT void assign(const clx::LValue *arr, size_t c, LState *L = nullptr) {
         size_t old_live = (count < INLINE_CAP) ? count : INLINE_CAP;
         count = c;
@@ -671,10 +649,7 @@ struct MultiValue {
     void overflow_init(const clx::LValue *arr, size_t c);
 };
 
-//------------------ DynArgs: argument list for a call whose size is only known at run time, because its
-//------------------ last argument expands to every value it returns. Sixteen slots are inline; a longer
-//------------------ expansion (table.unpack of a big array, a vararg pass-through) grows into the heap
-//------------------ instead of writing past a fixed stack buffer.
+//------------------ DynArgs: argument list for a call whose size is only known at run time (a trailing multi-value arg)
 class DynArgs {
 public:
     static constexpr size_t INLINE_CAP = 16;
@@ -748,8 +723,7 @@ CLX_INLINE_HOT LUpValue make_upvalue(const LValue &val) {
     return std::make_shared<LValue>(val);
 }
 
-//------------------ as_cell: accepts a shared upvalue as-is and boxes a plain value; used by closure
-//------------------ create_closure keep-alive lists, whose entries may resolve to either declaration
+//------------------ as_cell: accepts a shared upvalue as-is and boxes a plain value
 CLX_INLINE_HOT LUpValue as_cell(const LUpValue &cell) {
     return cell;
 }
@@ -758,13 +732,7 @@ CLX_INLINE_HOT LUpValue as_cell(const LValue &val) {
     return make_upvalue(val);
 }
 
-//------------------ C function type: single-indirection type erasure over a
-//------------------ shared box. Replaces std::function (which costs ~5 libstdc++
-//------------------ erasure frames per call and per frame unwound per throw) with one
-//------------------ static invoker frame. Copies share the box (a shared_ptr bump),
-//------------------ so captures are never re-copied on closure creation. target<T>()
-//------------------ keeps the two identity queries the runtime needs (CFuncAdapter
-//------------------ for the C API, the raw signature for the direct fast path).
+//------------------ C function type: one static invoker frame over a shared box, replacing std::function's erasure frames
 struct CFunctionType {
     using Sig = MultiValue (*)(LState *, const LValue *, size_t);
     using InvokeFn = MultiValue (*)(void *, LState *, const LValue *, size_t);
@@ -847,8 +815,7 @@ struct LUserdata : public LHeader {
     LTable *metatable;
     size_t size;
     LUserdata *meta_next = nullptr;
-    //------------------ debug library uservalues (one slot, stock's default nuvalue); marked by the
-    //------------------ collector alongside the metatable and released with the block
+    //------------------ uservalue: debug library uservalues (one slot), marked by the collector with the block
     LValue uservalue;
 
     void *data() { return reinterpret_cast<char *>(this) + sizeof(LUserdata); }
@@ -907,19 +874,13 @@ struct LTableExt {
     LTableInlineCache *ic = nullptr;
     LTable *metatable = nullptr;
     LTable *meta_next = nullptr;
-    //------------------ __mode cache: 1 = weak keys, 2 = weak values, valid while the metatable and its
-    //------------------ hash version are unchanged (re-read by the collector otherwise)
+    //------------------ __mode cache: 1 = weak keys, 2 = weak values, valid while the metatable's hash version holds
     uint8_t weak_mode = 0;
     uint32_t weak_stamp = 0;
     LTable *weak_meta = nullptr;
-    //------------------ vm_origin: VM registry reference to the table this copy was made from under
-    //------------------ --dynamic, or -1 when the table did not come from a loaded chunk. It pins the VM
-    //------------------ table for exactly as long as this copy lives, so a value that crosses into clx and
-    //------------------ back is the same VM table again (clx_table_release_ptr drops it on recycle).
+    //------------------ vm_origin: VM registry reference to the table this copy came from, or -1; it pins that VM table
     int vm_origin = -1;
-    //------------------ vm_dirty: set when clx writes into the copy, so the write-back into the VM table
-    //------------------ happens only for a copy clx actually changed. Syncing an untouched copy would push
-    //------------------ the stale snapshot over changes made on the VM side (table.sort, for one).
+    //------------------ vm_dirty: set when clx writes into the copy, so only a changed copy is written back
     uint8_t vm_dirty = 0;
 };
 
@@ -928,8 +889,7 @@ struct LTable : public LHeader {
     ValueType *array_types;
     size_t array_size;
     size_t array_cap;
-    //------------------ Length hint: array[0..array_lim-1] are all non-nil (array_lim <= array_size).
-    //------------------ A stale-low hint only costs a rescan; writers keep it from ever going stale-high.
+    //------------------ array_lim: array[0..array_lim-1] are all non-nil; a stale-low hint only costs a rescan
     size_t array_lim;
     TValue small_array[2];
     ValueType small_array_types[2];
@@ -960,10 +920,7 @@ private:
 
 static_assert(sizeof(LTable) <= 96, "LTable must be compact (~96 bytes)");
 
-//------------------ Length-hint maintenance for a direct array-part write at 0-based idx0 (call only for
-//------------------ slots inside the array part; gap fills above array_size need no update). A nil stored
-//------------------ below the hint pulls it down; a value stored exactly at the hint extends it by one.
-//------------------ Both are O(1); forward progress is recovered by the next length query.
+//------------------ table_hint_on_array_write: O(1) array_lim upkeep for a direct array-part write
 CLX_INLINE_HOT void table_hint_on_array_write(LTable *t, size_t idx0, ValueType vt) {
     size_t h = t->array_lim;
     if (vt == Nil) {
@@ -974,8 +931,7 @@ CLX_INLINE_HOT void table_hint_on_array_write(LTable *t, size_t idx0, ValueType 
     }
 }
 
-//------------------ Scan the array part for the first nil starting at the hint; heals array_lim to the
-//------------------ boundary found (clamped to array_size). Callers probe integer keys above array_size after.
+//------------------ table_array_prefix_len: first nil in the array part from the hint, healing array_lim
 CLX_INLINE_HOT size_t table_array_prefix_len(LTable *t) {
     size_t h = t->array_lim;
     size_t n = t->array_size;
@@ -985,9 +941,7 @@ CLX_INLINE_HOT size_t table_array_prefix_len(LTable *t) {
     return h;
 }
 
-//------------------ Layout note (#4): hot array fields (array, array_types, array_size, array_cap, array_lim)
-//------------------ directly follow the 16-byte LHeader, so header + hot fields occupy the first 64-byte cache
-//------------------ line on the t[i] fast path. (No offsetof assert: LTable is non-standard-layout via LHeader.)
+//------------------ LTable layout: the hot array fields follow the 16-byte LHeader and fill the first cache line
 
 //------------------ Generational write barrier
 
@@ -1005,9 +959,7 @@ CLX_INLINE_HOT void gc_barrier_table(LState *L, const LTable *owner, const LValu
     gc_barrier_header(L, const_cast<LTable *>(owner), newval);
 }
 
-//------------------ Tag-based table barrier for sites that already hold a raw TValue/ValueType pair
-//------------------ (in-place array swap/store fast paths). Skips boxing the pair into a temporary
-//------------------ LValue; the box happens lazily inside the cold slow path only when it fires.
+//------------------ gc_barrier_table: tag-based barrier for sites already holding a raw TValue/ValueType pair
 CLX_INLINE_HOT void gc_barrier_table(LState *L, const LTable *owner, const TValue &v, ValueType t) {
     if (owner->age == AGE_YOUNG || !is_gc_obj_tag(t))
         return;
@@ -1038,10 +990,7 @@ CLX_INLINE void tbl_set_metatable(LTable *t, LTable *m) {
     }
 }
 
-//------------------ Co-allocated array block: one malloc holding TValue[cap] followed by ValueType[cap].
-//------------------ Zeroed memory == initialized (TValue u64=0, Nil=0), so calloc/malloc+memset both work.
-//------------------ The types pointer always derives from the base: types = base + cap*sizeof(TValue).
-//------------------ Freeing is a single free(base); array_types points inside the block and is never freed.
+//------------------ table_array_block_bytes: one block holding TValue[cap] then ValueType[cap], freed in one call
 CLX_INLINE size_t table_array_block_bytes(size_t cap) {
     return cap * sizeof(TValue) + cap * sizeof(ValueType);
 }
@@ -1066,11 +1015,7 @@ CLX_INLINE_HOT void table_free_array(TValue *&arr, ValueType *&types, const TVal
     types = nullptr;
 }
 
-//------------------ Fused hash block: one calloc holding entries[cap] followed by bitmap words.
-//------------------ entries sits at offset 0, so freeing entries frees the whole block; hash_bitmap
-//------------------ points inside and is never freed separately. cap*24 is always 8-byte aligned
-//------------------ (sizeof(HashEntry)==24), so the bitmap needs no padding. Arena-owned tables never
-//------------------ use this: their entries live in the arena with a null bitmap until first resize.
+//------------------ table_hash_block_bytes: one calloc holding entries[cap] then bitmap words, freed in one call
 CLX_INLINE size_t table_hash_block_bytes(size_t cap) {
     return cap * sizeof(HashEntry) + ((cap + 63) / 64) * sizeof(uint64_t);
 }
@@ -1472,8 +1417,7 @@ struct LThread : public LHeader {
     RootRange *top_root = nullptr;
 #if defined(_WIN32)
     LPVOID fiber;
-    //---------- stack_low: this fiber's own stack-overflow threshold, cached because the fiber's limits can
-    //---------- only be read from inside it; a switch installs it in LState for the stack being entered
+    //------------------ stack_low: this fiber's own stack-overflow threshold, installed in LState on a switch
     char *stack_low = nullptr;
 #elif (defined(__APPLE__) || defined(__linux__)) && (defined(__aarch64__) || defined(__x86_64__))
     CoroutineContext ctx;
@@ -1507,34 +1451,25 @@ inline const CallSite *default_call_site() {
 
 struct LState {
     LTable *_G;
-    //------------------ the package table created by the package library: stock's require() reads it
-    //------------------ through a closure upvalue, so rebinding the global `package` does not affect it
+    //------------------ package_table: the table the package library created, which require() reads through an upvalue
     LTable *package_table = nullptr;
     LCFunction *current_func = nullptr;
     LHeader *allocated_objects;
-    //------------------ Old-generation chain: minors promote here and never walk it (see gc_minor sweep),
-    //------------------ so stop-the-world minors skip long-lived objects entirely. Majors reunite both
-    //------------------ chains before sweeping and re-partition after; close/membership walks cover both.
+    //------------------ old_objects: old-generation chain; minors never walk it, majors reunite and re-partition
     LHeader *old_objects = nullptr;
     LTable *free_tables;
-    //------------------ Big-buffer free list: tables retaining a heap array park here so size-unknown
-    //------------------ creations ({}) never inherit a 90KB array they will not use while the table that
-    //------------------ needs it allocates another (linear pool growth wave-over-wave; see create_table).
+    //------------------ free_tables_big: tables retaining a heap array park here, off the size-unknown free list
     LTable *free_tables_big = nullptr;
     LCFunction *free_functions;
     LThread *free_threads = nullptr;
-    //------------------ Close-error slot: a __close raised while an error unwinds replaces the pending
-    //------------------ error for the remaining closers and for the catch site that finally reports it
+    //------------------ close_err: a __close raised while an error unwinds replaces the pending error
     LValue close_err;
     bool has_close_err = false;
     size_t free_fiber_threads = 0;
     LTable *metatabled_tables = nullptr;
-    //------------------ Metatabled-userdata list: files register here so the protect passes can shield
-    //------------------ their metatable (+ __gc closure) when the userdata itself dies in the same cycle.
+    //------------------ metatabled_ud: userdata registering here get their metatable and __gc closure protected
     LUserdata *metatabled_ud = nullptr;
-    //------------------ Userdata whose __gc is running. A finalizable userdata leaves the allocation chains
-    //------------------ when it is swept, before __gc runs, so without this marker is_allocated_userdata()
-    //------------------ would reject it and the C API would hand out the header pointer as light userdata.
+    //------------------ finalizing_ud: userdata whose __gc is running, kept allocated across the sweep
     std::vector<LUserdata *> finalizing_ud;
 
     //------------------ LTable slab arena: bump-allocated object slabs (freed whole at close)
@@ -1551,13 +1486,10 @@ struct LState {
 
     //---------- top_root: head of the running thread's RootRange chain (one frame per generated function)
     RootRange *top_root = nullptr;
-    //---------- capi_roots: C API stack frames registered by the Lua C API bridge. Those frames keep values
-    //---------- alive across coroutine switches and outlive the coroutine whose C stack pushed them, so they
-    //---------- are not RootRange chain nodes; the collector marks their slots through the node callback.
+    //------------------ capi_roots: C API stack frames registered by the bridge, marked through the node callback
     CapiRootNode *capi_roots = nullptr;
 
-    //------------------ Active call site: the descriptor captured at the most recent call/statement, read by
-    //------------------ file_line_prefix and bad_arg_msg for Lua-compatible error context.
+    //------------------ current_site: the descriptor captured at the latest call or statement, for Lua-compatible errors
     const CallSite *current_site = nullptr;
     //------------------ pcall_site: stable descriptor for errors raised directly under pcall (file, no line)
     CallSite pcall_site = { "", 0, false, false };
@@ -1571,13 +1503,9 @@ struct LState {
     void (*luaapi_thread_reset)(LState *, void *) = nullptr;
 
     size_t object_count;
-    //------------------ lowest safe address of the C stack currently executing: a call found below it
-    //------------------ raises "stack overflow"; null disables the check (unknown stack, e.g. a fiber that
-    //------------------ has not started yet)
+    //------------------ stack_low: lowest safe address of the C stack running now; null disables the check
     char *stack_low = nullptr;
-    //------------------ deferred "stack overflow": a fast body returns a sentinel instead of throwing, so
-    //------------------ the recursive lambda stays free of unwind machinery; the site is raised at the
-    //------------------ enclosing _fast_<name> wrapper, the first point where the result re-enters Lua
+    //------------------ stack_overflow_site: a fast body returns a sentinel, so the overflow is raised at the wrapper
     const CallSite *stack_overflow_site = nullptr;
     //------------------ live nesting of coroutine resumes (each one is a real C stack frame)
     size_t resume_depth = 0;
@@ -1629,8 +1557,7 @@ struct LState {
     LValue str_name;
     LValue str_ipairs;
     LTable *string_metatable;
-    //------------------ Type metatables set through debug.setmetatable (indexed by ValueType; the string
-    //------------------ slot is unused, strings keep string_metatable). Marked as roots by the collector.
+    //------------------ type_metatables: metatables set through debug.setmetatable, marked as roots by the collector
     LTable *type_metatables[10] = { nullptr };
     //------------------ debug.getregistry table: a plain table, rooted by the collector
     LTable *registry = nullptr;
@@ -1649,9 +1576,7 @@ struct LState {
         uint64_t h = len <= 8 ? swar_hash_8(str, len) : wyhash_str(str, len);
         size_t before = string_pool.count;
         const char *res = string_pool.intern(str, len, h);
-        //------------------ interned strings live in a permanent arena, so a new one really is new heap:
-        //------------------ account it (collectgarbage("count") stays truthful) and let it pace the
-        //------------------ collector like stock, whose strings are ordinary garbage
+        //------------------ a new interned string is new heap in a permanent arena: account it and pace the collector
         if (string_pool.count != before) {
             allocated_bytes += len + 32;
             gc_maybe_collect();
@@ -1718,8 +1643,7 @@ struct LState {
         }
     }
 
-    //------------------ call_chain_depth: nested __call dispatches being resolved for one call, so a
-    //------------------ chain or a cycle past stock's limit raises instead of recursing away the stack
+    //------------------ call_chain_depth: nested __call dispatches for one call, so a cycle raises instead of recursing
     int call_chain_depth = 0;
 
     enum class GCPhase : uint8_t { Idle, Sweeping };
@@ -1743,10 +1667,7 @@ struct LState {
 
     //------------------ Generational GC state
 
-    //------------------ Adaptive minor pacing: next trigger = one current heap-full, clamped (CLX_GC_MINOR_KB pins it)
-    //------------------ Initial value must be the MIN, not the MAX: the first minor reclaims ~nothing (gc_recent
-    //------------------ roots everything allocated since the previous cycle), so starting at 8MB feeds the adaptive
-    //------------------ clamp a heap still holding garbage and pins it right back at 8MB — leaving no collections at all.
+    //------------------ gc_minor_threshold: adaptive trigger, about one heap-full; it must start at the MIN, not the MAX
     size_t gc_minor_threshold = kMinorThresholdMin;
     bool gc_minor_threshold_env = false;
     static constexpr size_t kMinorThresholdMin = 256 * 1024;
@@ -1806,8 +1727,7 @@ struct LState {
     CLX_INLINE_HOT void gc_maybe_collect() {
         if (!gc_running)
             return;
-        //------------------ a __gc finalizer draining at the end of gc_minor() must not start another
-        //------------------ collection while that minor's sweep state is still live.
+        //------------------ a __gc draining at the end of gc_minor() must not start another collection
         if (gc_minor_active)
             return;
         if (gc_phase == GCPhase::Sweeping) {
@@ -1839,11 +1759,7 @@ struct LState {
     void run_exit_finalizers();
     bool is_allocated_userdata(const LHeader *h) const;
 
-    //------------------ MultiValue overflow slots. Blocks are never moved or shrunk: a live MultiValue's
-    //------------------ overflow pointer must stay valid while a *later* MultiValue allocates from the same
-    //------------------ state (a realloc here used to invalidate every outstanding overflow pointer, so a
-    //------------------ pcall collecting a million unpacked values corrupted them). Each block carries the
-    //------------------ previous block pointer in its header; all blocks are released with the state.
+    //------------------ overflow_heap: MultiValue overflow blocks are never moved, so a live pointer stays valid
     LValue *overflow_heap = nullptr;
     void *overflow_blocks = nullptr;
     size_t overflow_heap_cap = 0;
@@ -1868,16 +1784,11 @@ struct LState {
 
     void register_module(const std::string &name, LValue (*func)(LState *));
     void register_loaded_module(const std::string &name, const LValue &module);
-    //------------------ _layout_reserve: holds sizeof(LState) at its pre-call-site-refactor footprint.
-    //------------------ Shrinking the struct shifts every later heap allocation; that changed table
-    //------------------ inline-cache cache-set aliasing and slowed nbody ~1.7x. The reserve keeps the
-    //------------------ established allocation layout. Re-validate hot table benchmarks before resizing.
+    //------------------ _layout_reserve: holds sizeof(LState) at its pre-refactor footprint; resizing shifts hot layouts
     char _layout_reserve[256] = { };
 };
 
-//------------------ CapiRootNode — one C API stack block registered with the collector. A frame chain mirrors one
-//------------------ coroutine's C stack and only unlinks from its head; C API frames are dropped in arbitrary
-//------------------ order, so registration uses a doubly linked list and unlinks in O(1) from any position.
+//------------------ CapiRootNode: one C API stack block on a doubly linked list, unlinked in O(1) from anywhere
 struct CapiRootNode {
     CapiRootNode *prev = nullptr;
     CapiRootNode *next = nullptr;
@@ -1918,13 +1829,10 @@ struct CapiRootNode {
     CapiRootNode &operator=(const CapiRootNode &) = delete;
 };
 
-//------------------ gc_mark_external_value — mark one value rooted outside the frame chains (a C API stack slot).
-//------------------ During a minor only young objects are marked: the minor sweep never clears an old object's mark.
+//------------------ gc_mark_external_value: mark one value rooted outside the frame chains (a C API stack slot)
 void gc_mark_external_value(LState *L, const LValue &v, LState::GCStack &wl);
 
-//------------------ RootRange — one GC-root frame. The constructor links it into the owning thread's chain, the
-//------------------ destructor unlinks it (RAII, so unwinding unroots without any explicit restore). `base[0..n)` is
-//------------------ marked by value; every `ind[i]` is an alias to a live LValue and marked by dereference.
+//------------------ RootRange: one GC-root frame, linked by the constructor and unlinked by the destructor
 struct RootRange {
     RootRange *prev;
     LState *owner;
@@ -1952,10 +1860,7 @@ struct RootRange {
     RootRange &operator=(const RootRange &) = delete;
 };
 
-//------------------ FrameBase — watermark logic shared by every Frame instantiation. `used` counts live
-//------------------ aliases; blocks save it and restore it, which reuses slots across disjoint blocks.
-//------------------ `compact(base, mid)` folds callee-pushed tail entries down over a discarded base region
-//------------------ (the old multi-assign compaction), handling the empty-tail case the same way.
+//------------------ FrameBase: watermark logic shared by every Frame; blocks save and restore the slot count
 struct FrameBase : RootRange {
     size_t used = 0;
     LValue **_heap = nullptr;
@@ -1977,11 +1882,7 @@ struct FrameBase : RootRange {
         _cap = ncap;
     }
 
-    //------------------ push lives on the base (non-virtual, still inlined at callers) so that fast
-    //------------------ lambdas — which only ever see a FrameBase& — can root their locals in the
-    //------------------ caller's frame. Slots accumulate until the owning function returns, exactly like
-    //------------------ the old shadow stack; a private sub-frame per fast call would defeat C++ tail
-    //------------------ calls (its destructor runs after the recursive call) and overflow the stack.
+    //------------------ push lives on the base so fast lambdas can root their locals in the caller's frame
     CLX_INLINE_HOT void push(const LValue &v) {
         if (used >= _cap)
             grow();
@@ -2019,11 +1920,7 @@ struct FrameBase : RootRange {
     }
 };
 
-//------------------ Frame<N> — the single root frame emitted at the top of every generated function and of the
-//------------------ main chunk. Slots are indirect (each aliases an LValue with a stable address: a local, an
-//------------------ argument array element, an upvalue cell, or a runtime temporary), so a reassigned local is
-//------------------ always seen by the collector. N inline slots cover every realistic function; a heap spill
-//------------------ (transparent to the collector, which only ever reads `ind[0..ind_n)`) covers the rest.
+//------------------ Frame<N>: the root frame emitted at the top of every function; slots alias LValues by address
 template<size_t N> struct Frame : FrameBase {
     LValue *_inline_buf[N];
 
@@ -2037,17 +1934,14 @@ template<size_t N> struct Frame : FrameBase {
     Frame &operator=(const Frame &) = delete;
 };
 
-//------------------ CallAdopt — first result of a call plus the exact integer subtype and shadow a
-//------------------ numeric target needs. Generated code calls adopt_call_result() instead of emitting
-//------------------ an inline push loop and three conditional extractions at every single-value call site.
+//------------------ CallAdopt: first result of a call plus the Int64 subtype and shadow a numeric target needs
 struct CallAdopt {
     LValue value;
     bool is_int;
     int64_t i64;
 };
 
-//------------------ adopt_call_result: roots every result at the caller's frame watermark (as the inline
-//------------------ push loop did) and returns the first slot. The caller still owns the compact(base, mid).
+//------------------ adopt_call_result: roots every result at the caller's watermark and returns the first slot
 template<typename FrameT> CLX_INLINE_HOT CallAdopt adopt_call_result(FrameT &fr, const MultiValue &mv) {
     for (size_t i = 0; i < mv.count; ++i)
         fr.push(mv[i]);
@@ -2076,12 +1970,10 @@ struct FrameGuard {
 //------------------ gc_walk_roots — mark every root in one thread's frame chain
 template<typename F> static void gc_walk_roots(RootRange *head, F &&mark) {
     for (RootRange *r = head; r; r = r->prev) {
-        //------------------ a frame whose destructor was skipped (the VM unwinds with longjmp) or whose
-        //------------------ storage was dropped by an abandoned coroutine is garbage: never dereference it
+        //------------------ a frame whose destructor was skipped (longjmp) or whose storage was dropped is garbage
         if (r->n > (size_t(1) << 24) || r->ind_n > (size_t(1) << 24))
             continue;
-        //------------------ a frame whose storage was dropped by an abandoned coroutine can keep a null
-        //------------------ base/alias: skipping it is right, there is no slot to mark
+        //------------------ a dropped frame can keep a null base: skipping it is right, there is no slot to mark
         if (r->base)
             for (size_t i = 0; i < r->n; ++i)
                 mark(r->base[i]);
@@ -2098,8 +1990,7 @@ template<typename F> static void gc_walk_roots(RootRange *head, F &&mark) {
 //------------------ raise_stack_overflow: raises the error a fast body deferred when it reached stack_low
 [[noreturn]] void raise_stack_overflow(LState *L);
 
-//------------------ stack_probe: current stack pointer, read without an addressable local so the guard
-//------------------ never forces a frame (and a saved frame pointer) into every generated function
+//------------------ stack_probe: current stack pointer, read without an addressable local so no frame is forced
 CLX_INLINE_HOT char *stack_probe() {
 #if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
     return reinterpret_cast<char *>(_AddressOfReturnAddress());
@@ -2117,8 +2008,7 @@ CLX_INLINE_HOT char *stack_probe() {
 #endif
 }
 
-//------------------ windows_stack_low: lowest safe address of the current C stack. The bottom of the region
-//------------------ the running stack belongs to plus a reserve for the deepest frame and unwinding.
+//------------------ windows_stack_low: bottom of the running stack region plus a reserve for the deepest frame
 #if defined(_WIN32)
 CLX_INLINE_HOT char *windows_stack_low(size_t reserve = 64 * 1024) {
     MEMORY_BASIC_INFORMATION mbi;
@@ -2128,19 +2018,13 @@ CLX_INLINE_HOT char *windows_stack_low(size_t reserve = 64 * 1024) {
 }
 #endif
 
-//------------------ stack_check: raises "stack overflow" before the C stack is exhausted. Lua recursion
-//------------------ is native recursion here, so the deepest call frame must be refused while every frame
-//------------------ still has room to unwind. Called only from the call wrappers and native-direct bodies,
-//------------------ which call throwing runtime helpers anyway; fast bodies record a deferred overflow instead.
+//------------------ stack_check: raises "stack overflow" before the C stack is exhausted
 CLX_INLINE_HOT void stack_check(LState *L) {
     if (L->stack_low && stack_probe() < L->stack_low)
         throw_stack_overflow(L);
 }
 
-//------------------ Rooted call wrappers: alias func + args into a RootRange around a call; RAII unlinks it
-//------------------ call_function_rooted/call_direct_rooted forward without their own RootRange:
-//------------------ call_function/call_direct root func+args themselves on entry, so a wrapper
-//------------------ range would double-root the same values on every call.
+//------------------ call_function_rooted/call_direct_rooted: alias func + args into a RootRange around the call
 CLX_INLINE_HOT MultiValue call_function_rooted(
     LState *L, const LValue &func, const LValue *args, size_t count, const CallSite *cs) {
     stack_check(L);
@@ -2153,9 +2037,7 @@ CLX_INLINE_HOT MultiValue call_direct_rooted(
     return call_direct(L, func, args, count, cs);
 }
 
-//------------------ Rooted call wrapper for direct C function pointers (hoisted builtins, direct impls)
-//------------------ call_cfunc_rooted_impl: shared body for the overloads below. Templated so the
-//------------------ raw-pointer overload still skips CFunctionType construction on hot builtin calls.
+//------------------ call_cfunc_rooted_impl: shared body for the direct C function pointer overloads
 template<typename CFunc>
 CLX_INLINE_HOT MultiValue call_cfunc_rooted_impl(
     LState *L, CFunc f, const LValue *args, size_t count, const CallSite *cs) {
@@ -2187,11 +2069,7 @@ CLX_INLINE_HOT MultiValue call_cfunc_direct(
     return f(L, args, count);
 }
 
-//------------------ Unboxed overload: invokes a concrete callable (a codegen lambda)
-//------------------ with no type erasure at all — no box, no indirection frame, and the
-//------------------ call is visible to the C++ compiler for inlining. Exact-match F wins
-//------------------ overload resolution over the CFunctionType conversion, while
-//------------------ CFunctionType arguments still prefer the non-template above.
+//------------------ unboxed overload: invokes a concrete callable with no type erasure, visible to the compiler
 template<typename F>
 CLX_INLINE_HOT MultiValue call_cfunc_direct(
     LState *L, const F &f, const LValue *args, size_t count, const CallSite *cs = default_call_site()) {
@@ -2202,11 +2080,7 @@ CLX_INLINE_HOT MultiValue call_cfunc_direct(
     return f(L, args, count);
 }
 
-//------------------ A metatable carrying __gc marks the object for finalization when it is installed, as stock's
-//------------------ luaC_checkfinalizer does. Every path that installs a metatable goes through the two list-add
-//------------------ helpers below, so the mark cannot be forgotten at an install site. The metamethod is looked up
-//------------------ again when the object dies, so replacing or clearing __gc later decides which finalizer runs,
-//------------------ while adding __gc to an already installed metatable does not mark the objects set before it.
+//------------------ meta_mark_finalizable: a __gc metatable marks the object when installed, as luaC_checkfinalizer does
 CLX_INLINE void meta_mark_finalizable(LState *L, LHeader *h, LTable *mt) {
     if (mt && mt->gettable(L->str_gc).type != ValueType::Nil)
         h->flags |= LFLAG_GC_MARKED;
@@ -2273,8 +2147,7 @@ inline const char *stock_type_name(const LValue &v) {
     return VALUE_TYPE_NAMES[static_cast<size_t>(v.type)];
 }
 
-//------------------ err_func_name: stock luaL_argerror uses the short name when the call site is
-//------------------ resolvable (direct field call or method); otherwise the pushglobalfuncname fallback.
+//------------------ err_func_name: stock luaL_argerror's short name, else the pushglobalfuncname fallback
 inline const char *err_func_name(LState *L, const char *fname) {
     if (L->current_site && (L->current_site->is_method || L->current_site->name_short)) {
         const char *dot = std::strrchr(fname, '.');
@@ -2284,8 +2157,7 @@ inline const char *err_func_name(LState *L, const char *fname) {
     return fname;
 }
 
-//------------------ bad_arg_msg: stock luaL_argerror message shape, incl. method-call index shift and
-//------------------ "calling 'X' on bad self" for the self argument
+//------------------ bad_arg_msg: stock luaL_argerror's message, incl. method index shift and bad-self form
 inline std::string bad_arg_msg(LState *L, int idx, const char *fname, const std::string &expected_got) {
     const char *nm = err_func_name(L, fname);
     int eidx = idx;
@@ -2618,8 +2490,7 @@ public:
     }
 };
 
-//------------------ Unwinding error: error object of the exception in flight, so a <close> guard
-//------------------ destroyed by unwinding hands it to __close the way stock does
+//------------------ clx_unwinding_error: error object of the exception in flight, handed to __close on unwind
 extern thread_local const clx::LValue *clx_unwinding_error;
 
 //------------------ Runtime error exception
@@ -2649,8 +2520,7 @@ const char *intern_error_message(const char *msg, size_t len);
     throw LRuntimeException(LValue(intern_error_message(msg.data(), msg.size())));
 }
 
-//------------------ Raises "attempt to index a nil value" (or the actual type name) like Lua does.
-//------------------ Carries file:line like stock (missing-module indexing under --minimal hits this).
+//------------------ throw_index_error: raises "attempt to index a nil value" (or the type name), with file:line
 [[noreturn]] CLX_INLINE_COLD void throw_index_error(LState *L, const LValue &obj) {
     std::string msg = file_line_prefix(L) + "attempt to index a " + stock_type_name(obj) + " value";
     throw LRuntimeException(LValue(intern_error_message(msg.data(), msg.size())));
@@ -2797,8 +2667,7 @@ CLX_INLINE_HOT LValue arena_create_table(LState *L, FuncArena *a, size_t asize, 
     return LValue(Table, t);
 }
 
-//------------------ close_metamethod: the __close metamethod a value carries (through its own or its
-//------------------ type's metatable), or nil when it has none
+//------------------ close_metamethod: the __close a value carries through its own or its type's metatable
 CLX_INLINE_HOT LValue close_metamethod(LState *L, const LValue &v) {
     LTable *mt = nullptr;
     if (v.type == Table)
@@ -2817,8 +2686,7 @@ struct CloseGuard {
     LState *L;
     LValue val;
 
-    //------------------ stock rejects a non-closable value at the declaration itself (nil and false are
-    //------------------ accepted and simply never closed), so the check belongs before the variable is used
+    //------------------ stock rejects a non-closable value at the declaration itself
     CLX_INLINE_HOT CloseGuard(LState *state, const LValue &v, const char *name)
         : L(state)
         , val(v) {
@@ -2851,16 +2719,13 @@ CLX_INLINE_HOT void set_env_var(LState *L, const LValue &env, const char *name, 
     t->settable(key, val);
 }
 
-//------------------ Keyed environment access: same raw gettable/settable as get/set_env_var but with a
-//------------------ pre-interned (codegen-pooled cstr_) key, so hot global reads/writes skip per-execution interning.
+//------------------ get_env_var_key: env access with a codegen-pooled key, skipping per-execution interning
 CLX_INLINE_HOT LValue get_env_var_key(LState *L, const LValue &env, const LValue &key) {
-    //------------------ a local `_ENV` may hold a non-table (a chunk can bind `local _ENV = 11`), which
-    //------------------ must report the stock indexing error instead of dereferencing the payload
+    //------------------ a local `_ENV` may hold a non-table, which reports the stock indexing error
     if (env.type != ValueType::Table) [[unlikely]]
         throw_index_error(L, env);
     LTable *t = static_cast<LTable *>(env.val.payload.ptr);
-    //------------------ a metatabled _ENV (setmetatable({}, {__index = _G})) resolves through the
-    //------------------ metamethod like any other table access; the plain path skips that check's cost
+    //------------------ a metatabled _ENV resolves through the metamethod like any other table access
     if (t->ext && t->ext->metatable)
         return t->get_value(L, key);
     return t->gettable(key);
@@ -2877,13 +2742,10 @@ CLX_INLINE_HOT void set_env_var_key(LState *L, const LValue &env, const LValue &
     t->settable(key, val);
 }
 
-//------------------ set_env_value: `_ENV = v` — the emitted fast/native lambdas capture the enclosing
-//------------------ _ENV by copy, which makes it const inside a non-mutable operator(), so the write goes
-//------------------ through a const_cast (the closure object itself is never const).
+//------------------ set_env_value: writes `_ENV` through a const_cast, since the emitted lambdas capture it by copy
 CLX_INLINE void set_env_value(LState *L, const LValue &env, const LValue &val) {
     const_cast<LValue &>(env) = val;
-    //------------------ a table _ENV also becomes the running chunk's environment, which is what keeps
-    //------------------ it alive (the C++ local is invisible to the GC) and what nested chunks inherit
+    //------------------ a table _ENV also becomes the running chunk's environment, which keeps it alive
     if (val.type == ValueType::Table && L->current_func)
         L->current_func->env = static_cast<LTable *>(val.as_pointer());
 }
@@ -2931,8 +2793,7 @@ CLX_INLINE_HOT int64_t int_floor_mod(LState *L, int64_t a, int64_t b) {
     return r;
 }
 
-//------------------ Lua integer floor division (//): truncation toward negative infinity, integer result.
-//------------------ b == 0 errors like stock luaV_idiv; b == -1 wraps (mininteger // -1 == mininteger).
+//------------------ int_floor_div: integer floor division, errors on b == 0 and wraps on mininteger // -1
 CLX_INLINE_HOT int64_t int_floor_div(LState *L, int64_t a, int64_t b) {
     if (b == 0)
         throw_runtime_error(file_line_prefix(L) + "attempt to divide by zero");
@@ -2944,8 +2805,7 @@ CLX_INLINE_HOT int64_t int_floor_div(LState *L, int64_t a, int64_t b) {
     return q;
 }
 
-//------------------ Lua integer shift (stock luaV_shiftl): unsigned shifts, out-of-range counts give 0.
-//------------------ shr computes shiftl_int(x, -y) with a wrapping negation (mininteger count -> 0).
+//------------------ shiftl_int: stock luaV_shiftl — unsigned shifts, out-of-range counts give 0
 CLX_INLINE_HOT int64_t shiftl_int(int64_t x, int64_t y) {
     if (y < 0) {
         if (y <= -64)
@@ -2961,9 +2821,7 @@ CLX_INLINE_HOT int64_t shr_int(int64_t x, int64_t y) {
     return shiftl_int(x, static_cast<int64_t>(0 - static_cast<uint64_t>(y)));
 }
 
-//------------------ Lua floor modulo for the floating fast path (%): result takes the sign of the divisor.
-//------------------ fmod first (stock luai_nummod): a - floor(a/b)*b loses every bit of the remainder
-//------------------ once a/b exceeds 2^53, so 2^56 % 3 came out 4 instead of 1.
+//------------------ fmod_floor: stock luai_nummod — fmod first, since a - floor(a/b)*b loses the remainder past 2^53
 CLX_INLINE_HOT double fmod_floor(double a, double b) {
     double m = std::fmod(a, b);
     if ((m > 0) ? (b < 0) : (m < 0 && b > 0))
@@ -2971,9 +2829,7 @@ CLX_INLINE_HOT double fmod_floor(double a, double b) {
     return m;
 }
 
-//------------------ Lua floor division for the floating fast path (//). The emitted code calls this instead of
-//------------------ writing floor(a / b) inline: MSVC rejects a constant division by zero (C2124) even when the
-//------------------ literals come from out-of-range Lua expressions such as 1 // 0.0, which must yield inf
+//------------------ floor_div: a function so MSVC does not reject a constant division by zero (1 // 0.0 yields inf)
 CLX_INLINE_HOT double floor_div(double a, double b) { return std::floor(a / b); }
 
 //------------------ LValue-returning int arithmetic: Lua integer semantics — wrap on overflow, stay Int64
@@ -3031,8 +2887,7 @@ CLX_INLINE_HOT int clx_format_num(char *buf, size_t cap, double v, bool is_int) 
     return clx_format_double(buf, cap, v);
 }
 
-//------------------ to_integer_coerced: exact integer coercion (stock l_str2int). Int64 passes
-//------------------ through; strings parse decimal/hex with wrap-on-hex-overflow; Doubles never coerce
+//------------------ to_integer_coerced: stock l_str2int — Int64 passes, strings parse decimal/hex, doubles never coerce
 CLX_INLINE bool to_integer_coerced(const LValue &v, int64_t &out) {
     if (v.type == ValueType::Int64) {
         out = v.val.payload.i64;
@@ -3146,11 +3001,7 @@ CLX_INLINE_HOT LValue div(LState *L, const LValue &a, const LValue &b) {
     return call_bin_metamethod(L, a, b, L->str_div, "__div");
 }
 
-//------------------ coerce_number: checked conversion to double for native-impl entries and reads.
-//------------------ Numbers pass through (Int64 exactly); strings parse like arithmetic coercion;
-//------------------ anything else throws the same arithmetic error the generic path would raise.
-//------------------ Unlike as_number() (which maps non-numbers to 0.0), this never silences a
-//------------------ type error. Metamethods are not consulted, matching the native_direct bodies.
+//------------------ coerce_number: checked conversion to double for native entries; never silences a type error
 CLX_INLINE_HOT double coerce_number(LState *L, const LValue &v) {
     if (v.type == ValueType::Double) [[likely]]
         return v.val.payload.f64;
@@ -3257,8 +3108,7 @@ CLX_INLINE_HOT LValue eq(LState *L, const LValue &a, const LValue &b) {
                                                       : static_cast<LUserdata *>(a.as_pointer())->metatable;
             LTable *mt_b = (b.type == ValueType::Table) ? tbl_metatable(static_cast<LTable *>(b.as_pointer()))
                                                         : static_cast<LUserdata *>(b.as_pointer())->metatable;
-            //------------------ stock tries the first operand's __eq and falls back to the second's,
-            //------------------ regardless of whether the two metatables are the same object
+            //------------------ stock tries the first operand's __eq and falls back to the second's
             LValue mm;
             if (mt)
                 mm = mt->gettable(L->str_eq);
@@ -3405,8 +3255,7 @@ CLX_INLINE bool forlimit(LState *L, int64_t init, const LValue &lim, int64_t ste
     return (step > 0 ? init > p : init < p);
 }
 
-//------------------ forcount: stock's integer-loop iteration count — computed in unsigned arithmetic so
-//------------------ a wrapping step can never re-enter the loop after the last iteration
+//------------------ forcount: stock's iteration count in unsigned arithmetic, so a wrapped step cannot re-enter
 CLX_INLINE uint64_t forcount(int64_t init, int64_t limit, int64_t step) {
     if (step > 0) {
         uint64_t count = static_cast<uint64_t>(limit) - static_cast<uint64_t>(init);
@@ -3419,9 +3268,7 @@ CLX_INLINE uint64_t forcount(int64_t init, int64_t limit, int64_t step) {
     return count;
 }
 
-//------------------ to_integer_bitwise: stock trygetinteger — Int64 and exact doubles only (F2Ieq).
-//------------------ Strings NEVER coerce for bitwise ops; inexact/out-of-range doubles fail (the
-//------------------ both-numbers miss in call_bin_metamethod reports "number has no integer representation").
+//------------------ to_integer_bitwise: stock trygetinteger — Int64 and exact doubles only; strings never coerce
 CLX_INLINE bool to_integer_bitwise(const LValue &v, int64_t &out) {
     if (v.type == ValueType::Int64) {
         out = v.val.payload.i64;
@@ -3699,9 +3546,7 @@ CLX_INLINE std::string concat_plain_text(const LValue &v) {
 
 //------------------ Multi-value concat (string builder fast path)
 CLX_INLINE_COLD LValue concat_multi(LState *L, const LValue *args, size_t count) {
-    //------------------ stock folds a chain containing a non-plain value right to left: each pair
-    //------------------ either concatenates text or goes through __concat, and the result replaces
-    //------------------ the pair, so the leftmost operand still meets the folded tail
+    //------------------ stock folds a chain containing a non-plain value right to left
     for (size_t i = 0; i < count; ++i) {
         if (concat_plain(args[i]))
             continue;
@@ -3901,8 +3746,7 @@ CLX_INLINE void table_set(LState *L, const LValue &obj, const LValue &key, const
         LTable *t = static_cast<LTable *>(obj.as_pointer());
         if (key.type == ValueType::Int64) {
             int64_t k = key.val.payload.i64;
-            //------------------ stock stores raw only for a key the table already holds: an absent (nil)
-            //------------------ slot must reach __newindex through set_value, which decides by presence
+            //------------------ stock stores raw only for a key the table already holds; an absent slot must reach __newindex
             if (static_cast<uint64_t>(k - 1) < t->array_cap
                 && (t->array_types[k - 1] != Nil || !table_has_newindex(L, t))) {
                 gc_barrier_table(L, t, val);
@@ -3996,8 +3840,7 @@ CLX_INLINE LValue table_get_int(LState *L, const LValue &obj, size_t idx) {
     return LValue();
 }
 
-//------------------ table_has_newindex: the table has a metatable that defines __newindex, so an
-//------------------ absent key must not be stored into the array part directly
+//------------------ table_has_newindex: the metatable defines __newindex, so an absent key must not take the raw store
 CLX_INLINE_HOT bool table_has_newindex(LState *L, const LTable *t) {
     return t->ext && t->ext->metatable && t->ext->metatable->gettable(L->str_newindex).type != ValueType::Nil;
 }
@@ -4008,9 +3851,7 @@ CLX_INLINE void table_set_int(LState *L, const LValue &obj, size_t idx, const LV
 
     if (obj.type == ValueType::Table) {
         LTable *t = static_cast<LTable *>(obj.as_pointer());
-        //------------------ stock fires __newindex for a key the table does not hold, so a table that
-        //------------------ has the metamethod cannot take the raw array-slot store: the slot may be
-        //------------------ an as-yet absent key. Present keys still write directly in set_value.
+        //------------------ stock fires __newindex for a key the table does not hold, so the raw array store is skipped
         if (t->ext && t->ext->metatable) [[unlikely]] {
             LValue newindex = t->ext->metatable->gettable(L->str_newindex);
             if (newindex.type != ValueType::Nil) {
@@ -4146,8 +3987,7 @@ MultiValue str_pack(LState *, const LValue *, size_t);
 MultiValue str_packsize(LState *, const LValue *, size_t);
 MultiValue str_unpack(LState *, const LValue *, size_t);
 
-//------------------ array_key: the array slot a numeric key addresses, or 0 when the key is not a
-//------------------ positive integer (non-integral, non-positive, or too large for a slot index)
+//------------------ array_key: the array slot a numeric key addresses, or 0 when it is not a positive integer
 CLX_INLINE_HOT size_t array_key(double n) {
     if (!(n >= 1.0) || n >= 9007199254740992.0)
         return 0;
@@ -4155,8 +3995,7 @@ CLX_INLINE_HOT size_t array_key(double n) {
     return (static_cast<double>(k) == n) ? k : 0;
 }
 
-//------------------ key_of: the table key a numeric value stands for — an integral value becomes the
-//------------------ integer key, anything else stays the float key
+//------------------ key_of: the table key a numeric value stands for — an integral value becomes the integer key
 CLX_INLINE_HOT LValue key_of(double n) {
     int64_t i = 0;
     if (flt_to_integer(n, i))
@@ -4164,24 +4003,19 @@ CLX_INLINE_HOT LValue key_of(double n) {
     return LValue(n);
 }
 
-//------------------ key_of_native: the table key a numeric value stands for when its integer
-//------------------ subtype is tracked at runtime - an Int64 flag keeps the exact int64 even past
-//------------------ 2^53 where the double view has already rounded
+//------------------ key_of_native: the same, but an Int64 flag keeps the exact int64 past 2^53
 CLX_INLINE_HOT LValue key_of_native(double n, bool is_int, int64_t i) {
     if (is_int)
         return LValue(i);
     return key_of(n);
 }
 
-//------------------ sync_int_view: the double view of an int-flagged local must stay the exact value of
-//------------------ its int64 shadow — dividing the rounded view drifts past 2^53, and a later float
-//------------------ operand (x + 0.0) would then see a number that is off by one
+//------------------ sync_int_view: the double view of an int-flagged local must stay exact past 2^53
 CLX_INLINE_HOT double sync_int_view(double d, int64_t exact, bool flag) {
     return flag ? static_cast<double>(exact) : d;
 }
 
-//------------------ presize_hint: element-count hint from a loop bound; a descending loop's limit is not
-//------------------ an element count, so it presizes to zero, and an absurd bound is capped (hint only)
+//------------------ presize_hint: element count from a loop bound; a descending limit presizes to zero
 CLX_INLINE size_t presize_hint(double n) {
     if (!(n > 0.0))
         return 0;
@@ -4244,8 +4078,7 @@ MultiValue os_time(LState *, const LValue *, size_t);
 MultiValue os_tmpname(LState *, const LValue *, size_t);
 
 void luastd_base(LState *L);
-//------------------ Per-function base registrars (base.cpp): each registers exactly one global so the
-//------------------ linker strips unused base functions. Declared here for driver-emitted open sequences.
+//------------------ luastd_base_*: per-function base registrars, so the linker strips unused base functions
 void luastd_base_print(LState *L);
 void luastd_base_require(LState *L);
 void luastd_base_error(LState *L);
@@ -4277,8 +4110,7 @@ void luastd_utf8(LState *L);
 void luastd_io(LState *L);
 void luastd_debug(LState *L);
 
-//------------------ exec_result: stock luaL_execresult — a wait status decoded into (ok, "exit"|"signal",
-//------------------ code), shared by os.execute and a popen handle's close (separate archives)
+//------------------ exec_result: stock luaL_execresult — wait status decoded into (ok, "exit"|"signal", code)
 MultiValue exec_result(LState *L, int status);
 
 //------------------ Gets a global variable
@@ -4299,8 +4131,7 @@ MultiValue close_thread(LState *L, const LValue &thread);
 
 //------------------ Opens CLX state
 LState *open(int argc = 0, char *argv[] = nullptr);
-//------------------ Opens CLX state without registering any std library (driver-emitted filtered open
-//------------------ sequences register only the referenced base functions afterwards)
+//------------------ open_bare: opens a CLX state without registering any std library
 LState *open_bare(int argc = 0, char *argv[] = nullptr);
 //------------------ Opens all standard libraries
 void openlibs(LState *L);

@@ -20,9 +20,7 @@ static size_t get_array_len(LState *L, LTable *t) {
         LValue mm = mt->gettable(L->str_len);
         if (mm.type != Nil) {
             LValue res = len(L, LValue(t));
-            //------------------ a negative __len is an empty range for every caller (stock's
-            //------------------ aux_getn hands the raw integer to loops that then do not run),
-            //------------------ so it must not be converted to a huge size_t
+            //------------------ a negative __len is an empty range and must not be converted to a huge size_t
             auto clamp_len = [](int64_t v) { return v < 0 ? size_t(0) : static_cast<size_t>(v); };
             if (res.type == Int64)
                 return clamp_len(res.as_integer());
@@ -77,12 +75,10 @@ MultiValue table_concat(LState *L, const LValue *args, size_t count) {
     size_t sep_len = 0;
     if (count >= 2 && args[1].type != Nil) {
         sep = check_string(L, args[1]);
-        //------------------ a separator may contain NUL bytes: only a real string carries its length,
-        //------------------ a converted number was materialised NUL-terminated by check_string
+        //------------------ a separator may contain NUL bytes: only a real string carries its length
         sep_len = (args[1].type == String) ? args[1].string_len() : std::strlen(sep);
     }
-    //------------------ the range stays signed: stock walks it as lua_Integer, so an out-of-range
-    //------------------ index reports the element at that index instead of becoming a huge size_t
+    //------------------ the range stays signed: stock walks it as lua_Integer, so an out-of-range index still reports
     int64_t i = 1;
     if (count >= 3 && args[2].type != Nil)
         i = opt_integer(L, args[2], 1);
@@ -93,8 +89,7 @@ MultiValue table_concat(LState *L, const LValue *args, size_t count) {
     if (i > j)
         return MultiValue(LValue(L->intern_string("", 0)));
 
-    //------------------ stock reads every element with lua_geti, so a metatabled table resolves through
-    //------------------ __index; the raw array fast paths below only apply without a metatable
+    //------------------ stock reads every element with lua_geti, so __index takes part; the raw array paths need no metatable
     if (tbl_metatable(list)) {
         StringBuilder mmsb;
         int64_t k = i;
@@ -177,8 +172,7 @@ MultiValue table_insert(LState *L, const LValue *args, size_t count) {
         throw_runtime_error(file_line_prefix(L) + "wrong number of arguments to 'insert'");
     LTable *list = check_table(L, args[0]);
     size_t len = get_array_len(L, list);
-    //------------------ a metatabled table is indexed through lua_geti/lua_seti: __newindex and __index
-    //------------------ take part, and stock's position arithmetic wraps instead of saturating
+    //------------------ a metatabled table is indexed through lua_geti/lua_seti, and stock's position arithmetic wraps
     if (tbl_metatable(list)) {
         int64_t mlen = static_cast<int64_t>(len);
         int64_t e = static_cast<int64_t>(static_cast<uint64_t>(mlen) + 1u);
@@ -257,8 +251,7 @@ MultiValue table_remove(LState *L, const LValue *args, size_t count) {
         return MultiValue(res);
     }
     size_t pos = len;
-    //------------------ stock validates a given position only when it differs from the length, so
-    //------------------ removing from an empty table (position 0) is legal and removes key 0
+    //------------------ stock validates a position only when it differs from the length, so position 0 on an empty table is legal
     if (count >= 2 && args[1].type != Nil) {
         const int64_t given = check_integer(L, args[1]);
         if (given != static_cast<int64_t>(len)
@@ -301,8 +294,7 @@ MultiValue table_sort(LState *L, const LValue *args, size_t count) {
     size_t len = get_array_len(L, list);
     if (len == 0)
         return MultiValue();
-    //------------------ stock refuses the interval before sizing anything: a huge __len cannot be
-    //------------------ turned into a vector here without running out of memory
+    //------------------ stock refuses the interval before sizing anything: a huge __len cannot become a vector here
     if (len > static_cast<size_t>(INT_MAX))
         throw_runtime_error(bad_arg_msg(L, 1, "table.sort", "array too big"));
 
@@ -319,8 +311,7 @@ MultiValue table_sort(LState *L, const LValue *args, size_t count) {
         }
     }
 
-    //------------------ stock's sort reads and writes through lua_geti/lua_seti, so a metatabled table
-    //------------------ takes its elements from __index and stores them through __newindex
+    //------------------ stock's sort reads and writes through lua_geti/lua_seti, so __index and __newindex take part
     bool mm_sort = tbl_metatable(list) != nullptr;
     auto extract_elems = [&](LTable *t, size_t n) {
         std::vector<LValue> elems;
@@ -355,9 +346,7 @@ MultiValue table_sort(LState *L, const LValue *args, size_t count) {
             ~YieldBlock() { --L->c_yield_blocked; }
         } yb(L);
         std::sort(elems.begin(), elems.end(), cmp);
-        //------------------ stock's partition aborts with "invalid order function for sorting" when the
-        //------------------ comparator contradicts itself; checking the result catches the same class of
-        //------------------ bug (a comparator that never reports "not less") before the table is written
+        //------------------ stock aborts with "invalid order function for sorting" when the comparator contradicts itself
         for (size_t k = 1; k < elems.size(); ++k) {
             if (cmp(elems[k], elems[k - 1]))
                 throw_runtime_error(file_line_prefix(L) + "invalid order function for sorting");
@@ -419,8 +408,7 @@ MultiValue table_unpack(LState *L, const LValue *args, size_t count) {
 
     if (i > j)
         return MultiValue();
-    //------------------ stock bails out on a range it cannot push ("too many results"), it never clamps
-    //------------------ the end of the range to the sequence length
+    //------------------ stock bails out on a range it cannot push ("too many results") instead of clamping
     uint64_t span = static_cast<uint64_t>(j) - static_cast<uint64_t>(i);
     //------------------ stock's lua_checkstack refuses a range that cannot fit LUAI_MAXSTACK slots
     if (span >= static_cast<uint64_t>(INT_MAX) || span + 1 >= 1000000)
@@ -462,9 +450,7 @@ MultiValue table_move(LState *L, const LValue *args, size_t count) {
 
     //------------------ stock's range guards, before any element is touched
     if (e >= f) {
-        //------------------ INT64_MAX + f wraps in stock's lua_Integer arithmetic, and the tests rely on that
-        //------------------ sum (minI + 1 with maxI gives 0, so a range ending at -1 is accepted): compute it
-        //------------------ through an unsigned add so the wrap is defined here too
+        //------------------ INT64_MAX + f wraps in stock's lua_Integer arithmetic, so compute it through an unsigned add
         const int64_t max_plus_f
             = static_cast<int64_t>(static_cast<uint64_t>(INT64_MAX) + static_cast<uint64_t>(f));
         if (!(f > 0 || e < max_plus_f))
@@ -488,15 +474,12 @@ MultiValue table_move(LState *L, const LValue *args, size_t count) {
         return MultiValue(LValue(dst));
     }
 
-    //------------------ stock's direction rule (tmove): copy forward unless the destination starts
-    //------------------ inside the source range, in which case copying backwards preserves the data.
-    //------------------ The rule ignores metatables: they only change how a slot is read or written.
+    //------------------ stock's direction rule (tmove): copy forward unless the destination starts inside the source range
     LTable *src_mt = tbl_metatable(src);
     LTable *dst_mt = tbl_metatable(dst);
     bool meta_read = src_mt && src_mt->gettable(L->str_index).type != Nil;
     bool meta_write = dst_mt && dst_mt->gettable(L->str_newindex).type != Nil;
-    //------------------ both loops count iterations the way stock's tmove does: stepping the key itself past
-    //------------------ an INT64_MAX end would wrap around and never terminate
+    //------------------ both loops count iterations: stepping the key past an INT64_MAX end would wrap and never terminate
     int64_t last = e - f;
     auto move_one = [&](int64_t k, int64_t i) {
         LValue v = meta_read ? table_get(L, LValue(src), LValue(k)) : get_elem(src, static_cast<size_t>(k));

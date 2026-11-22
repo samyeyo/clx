@@ -439,9 +439,7 @@ void CodeEmitter::emit_condition(uint32_t c_idx) {
             bool right_native = yields_number(ctx, state, c.as.bin_op.right, nullptr, state.current_fast_func);
             if (left_native && right_native) {
                 static const char *ops[] = { "", "", "", "", "", " == ", " < ", " > ", " <= ", " >= ", " != " };
-                //------------------ int/float equality must stay exact: the double view rounds past 2^53, so
-                //------------------ math.maxinteger would compare equal to math.maxinteger + 0.0. A float
-                //------------------ literal next to an int-flagged operand goes through the boxed comparison.
+                //------------------ int/float equality stays exact: a float literal next to an int-flagged operand takes the boxed compare
                 auto has_float_literal = [&](auto &self, uint32_t idx, int depth) -> bool {
                     if (depth > 8 || idx == 0xFFFFFFFF || idx >= ctx.nodes.size())
                         return false;
@@ -572,8 +570,7 @@ std::string CodeEmitter::gc_cells_arg(const std::string &exclude) {
         out_list += expr;
     };
     for (auto it = locals.rbegin(); it != locals.rend(); ++it) {
-        //------------------ The emitted name resolves to the innermost declaration of that name, so a
-        //------------------ shadowing local hides the outer one: a name is decided once, innermost first.
+        //------------------ the emitted name resolves to the innermost declaration: a shadowing local hides the outer one
         const std::string nm = it->cpp_name.empty() ? std::string(it->name) : it->cpp_name;
         if (!seen_names.insert(nm).second)
             continue;
@@ -592,8 +589,7 @@ std::string CodeEmitter::gc_cells_arg(const std::string &exclude) {
     return "std::vector<clx::LUpValue>{ " + out_list + " }";
 }
 
-//------------------ builtin_cfunc_target: registry CFunc symbol for a direct module.func call
-//------------------ target, else nullptr (shadowed/reassigned module or written field falls back)
+//------------------ builtin_cfunc_target: registry CFunc symbol for a direct module.func call target, else nullptr
 static const char *builtin_cfunc_target(const ASTContext &ctx, const AnalysisState &state, uint32_t target_idx) {
     if (target_idx >= ctx.nodes.size() || ctx.nodes[target_idx].type != NodeType::TableAccess)
         return nullptr;
@@ -675,10 +671,7 @@ void CodeEmitter::emitCallExpression(const ASTNode &node, uint32_t node_idx) {
         return;
     }
 
-    //------------------ unboxed-direct call: triple-bound overload with every arg double-ready —
-    //------------------ bypasses LValue boxing at the boundary. Excludes self-recursion inside a
-    //------------------ triple body (the wrapper name is unusable there; the native branch below
-    //------------------ routes it through the boxed wrapper instead).
+    //------------------ unboxed-direct call: triple-bound overload with every arg double-ready, skipping LValue boxing
     if (!is_method_call && !is_fast && !fname.empty() && !dbl_self_ref(node.as.call_expr.target)
         && dbl_call_eligible(node.as.call_expr.target, node.as.call_expr.first_arg, node.as.call_expr.arg_count)) {
         if (want_multi)
@@ -689,8 +682,7 @@ void CodeEmitter::emitCallExpression(const ASTNode &node, uint32_t node_idx) {
         return;
     }
 
-    //------------------ native-direct call: the set is exact-1-only, so a
-    //------------------ trailing single-value call contributes exactly one argument.
+    //------------------ native-direct call: the set is exact-1-only, so a trailing single-value call contributes one argument
     bool trailing_single_arg = !is_method_call
         && trailing_single_call(node.as.call_expr.first_arg, node.as.call_expr.arg_count) != 0xFFFFFFFF;
     if (!is_method_call && node.as.call_expr.target < ctx.nodes.size()
@@ -701,10 +693,7 @@ void CodeEmitter::emitCallExpression(const ASTNode &node, uint32_t node_idx) {
         return;
     }
 
-    //------------------ builtin intrinsic alias: a local bound to an intrinsically lowered std
-    //------------------ function lowers to a raw call. Fast/dbl/native/direct conflicts above
-    //------------------ returned already; calls below min_args keep generic dispatch so the
-    //------------------ runtime CFunc validates arity like stock Lua.
+    //------------------ builtin intrinsic alias: a local bound to an intrinsically lowered std function lowers to a raw call
     if (!is_method_call && !is_direct && !fname.empty() && state.reassigned_vars.count(std::string(fname)) == 0) {
         auto _ait = state.intrinsic_aliases.find(std::string(fname));
         if (_ait != state.intrinsic_aliases.end() && _ait->second->intrinsic
@@ -1109,10 +1098,7 @@ bool CodeEmitter::native_call_eligible(
     return true;
 }
 
-//------------------ trailing_single_call: trailing call arg provably yielding exactly 1 value.
-//------------------ Only native-direct callees at exact arity qualify (every return holds exactly
-//------------------ one value, no call-passthrough, no varargs — see pass_callables). The strict
-//------------------ inner check rejects nested trailing calls, so the recursion terminates.
+//------------------ trailing_single_call: trailing arg provably yielding exactly one value (native-direct, exact arity)
 uint32_t CodeEmitter::trailing_single_call(uint32_t first_arg, uint32_t arg_count, int depth) {
     if (depth > 32 || arg_count == 0)
         return 0xFFFFFFFF;
@@ -1140,8 +1126,7 @@ bool CodeEmitter::try_emit_native_call(
     if (!native_call_eligible(target_idx, first_arg, arg_count, allow_trailing_single))
         return false;
     std::string_view fname(ctx.nodes[target_idx].as.ident.name, ctx.nodes[target_idx].as.ident.length);
-    //------------------ void callees yield zero values like stock: discard the impl's trailing nil
-    //------------------ instead of boxing it into a one-element MultiValue.
+    //------------------ void callees yield zero values, so the impl's trailing nil is discarded instead of boxed
     bool is_void = state.void_funcs.count(fname) > 0;
     if (wrap_multi) {
         if (is_void)
@@ -1149,8 +1134,7 @@ bool CodeEmitter::try_emit_native_call(
         else
             out << "clx::MultiValue(";
     }
-    //------------------ inside a triple-bound body, self has the triple signature, so even
-    //------------------ self-recursion routes through the boxed wrapper (rare, always correct).
+    //------------------ inside a triple-bound body, self-recursion routes through the boxed wrapper
     if (state.in_native_impl && !state.in_dbl_impl && fname == state.current_native_func)
         out << "self(self, L";
     else
@@ -1169,9 +1153,7 @@ bool CodeEmitter::try_emit_native_call(
     return true;
 }
 
-//------------------ dbl_call_eligible: triple-bound overload emitted, exact arity, every arg
-//------------------ double-ready with an exact int-flag (see unboxed_arg_ok) — the call passes
-//------------------ (double, int-flag, int-shadow) triples and skips LValue boxing entirely.
+//------------------ dbl_call_eligible: triple-bound overload, exact arity, every arg double-ready — no LValue boxing
 bool CodeEmitter::dbl_call_eligible(uint32_t target_idx, uint32_t first_arg, uint32_t arg_count) {
     if (target_idx >= ctx.nodes.size() || ctx.nodes[target_idx].type != NodeType::Identifier
         || ctx.nodes[target_idx].as.ident.is_global)
@@ -1213,8 +1195,7 @@ bool CodeEmitter::try_emit_dbl_call(uint32_t target_idx, uint32_t first_arg, uin
     return true;
 }
 
-//------------------ multi_call_eligible: exact-arity call to an already-emitted tuple impl.
-//------------------ The multi_emitted gate keeps lexically-earlier bodies on the generic closure.
+//------------------ multi_call_eligible: exact-arity call to an already-emitted tuple impl
 bool CodeEmitter::multi_call_eligible(uint32_t target_idx, uint32_t first_arg, uint32_t arg_count, uint32_t &out_n) {
     if (target_idx >= ctx.nodes.size() || ctx.nodes[target_idx].type != NodeType::Identifier
         || ctx.nodes[target_idx].as.ident.is_global)
@@ -1281,8 +1262,7 @@ void CodeEmitter::emitUnaryOp(const ASTNode &node, uint32_t node_idx) {
                 out << "clx::integer(static_cast<int64_t>(-(" << iv << "ll)))";
             } else {
                 if (clx::is_purely_integer_expr(ctx, state, node.as.unary_op.expr)) {
-                    //------------------ negate the int64 payload: -math.mininteger wraps to itself, while
-                    //------------------ negating the double view saturates to maxinteger
+                    //------------------ negate the int64 payload: -math.mininteger wraps to itself, the double view saturates
                     bool _neg_ok = false;
                     std::string _neg_v = int_value_expr(node.as.unary_op.expr, 1, &_neg_ok);
                     if (_neg_ok) {
@@ -1407,8 +1387,7 @@ bool CodeEmitter::try_emit_array_cmp(int cmp_op, uint32_t l_idx, uint32_t r_idx,
     return true;
 }
 
-//------------------ expr_has_call: true when an expression subtree contains a call, whose side
-//------------------ effects make evaluation order observable (C++ leaves operand order unspecified)
+//------------------ expr_has_call: true when an expression subtree contains a call, making evaluation order observable
 static bool expr_has_call(const ASTContext &ctx, uint32_t idx, int depth = 0) {
     if (depth > 24 || idx == 0xFFFFFFFF || idx >= ctx.nodes.size())
         return false;
@@ -1909,9 +1888,7 @@ void CodeEmitter::emitBinaryOp(const ASTNode &node, uint32_t node_idx) {
             else
                 emit_node(oi);
         };
-        //------------------ operands that call are evaluated left to right: as call arguments C++ leaves the
-        //------------------ order unspecified (MSVC runs right to left), which would read the right operand
-        //------------------ before the left one's side effects
+        //------------------ operands that call are evaluated left to right: as call arguments C++ leaves the order unspecified
         if (expr_has_call(ctx, node.as.bin_op.left) || expr_has_call(ctx, node.as.bin_op.right)) {
             out << "([&](){ clx::LValue _cl" << node_idx << " = ";
             emit_node(ord_l);
@@ -2143,8 +2120,7 @@ void CodeEmitter::emitTableAccess(const ASTNode &node, uint32_t node_idx) {
         emit_native(node.as.table_access.key);
         out << ");";
         if (_hp.empty()) {
-            //------------------ a non-table receiver indexes through the generic path, which honours a
-            //------------------ primitive type metatable (debug.setmetatable) instead of erroring
+            //------------------ a non-table receiver indexes generically, honouring a primitive type metatable instead of erroring
             out << " if (_tb" << node_idx << ".type != clx::ValueType::Table) return clx::table_get_int(L, _tb"
                 << node_idx << ", _k" << node_idx << "); clx::LTable* _t" << node_idx
                 << " = static_cast<clx::LTable*>(_tb" << node_idx << ".as_pointer());";
@@ -2181,8 +2157,7 @@ void CodeEmitter::emitTableAccess(const ASTNode &node, uint32_t node_idx) {
                     out << " clx::LTable* _tc = static_cast<clx::LTable*>(_b.as_pointer());";
                 }
                 for (size_t _i = 0; _i < _cks.size() - 1; ++_i) {
-                    //------------------ the key is only known to be a number: a non-integral or non-positive
-                    //------------------ value must be looked up as its own key, never as a slot index
+                    //------------------ the key is only known to be a number: a non-integral or non-positive value is its own key, no slot
                     out << " double _kd" << _i << " = static_cast<double>(";
                     emit_native(_cks[_i]);
                     out << "); size_t _k" << _i << " = clx::array_key(_kd" << _i << ");";
@@ -2244,8 +2219,7 @@ void CodeEmitter::emitTableAccess(const ASTNode &node, uint32_t node_idx) {
 
 //------------------ emitVararg: handles NodeType::Vararg
 void CodeEmitter::emitVararg(const ASTNode &node, uint32_t node_idx) {
-    //------------------ "function f(...t)" makes `...` expand that table (mutable, with its own `n`)
-    //------------------ instead of the raw argument slice
+    //------------------ "function f(...t)" makes `...` expand that table (mutable, with its own `n`), not the raw arguments
     if (!state.current_vararg_table.empty()) {
         if (state.expect_multivalue)
             out << "clx::vararg_expand(L, l_" << state.current_vararg_table << ")";

@@ -340,9 +340,7 @@ bool local_register_friendly(
     return !res.materialized;
 }
 
-//------------------ count_ident_uses: occurrences of `name` as an Identifier inside a statement subtree, excluding two
-//------------------ known node indices. Returns kIdentUseUnsafe when any unhandled node type is met, so callers can
-//------------------ treat "unknown" as "unsafe" and keep the conservative path.
+//------------------ count_ident_uses: Identifier uses of `name` in a subtree; kIdentUseUnsafe when a node type is unhandled
 
 int count_ident_uses(const ASTContext &ctx, uint32_t idx, std::string_view name, uint32_t skip_a, uint32_t skip_b) {
     if (idx == 0xFFFFFFFF || idx >= ctx.nodes.size())
@@ -672,9 +670,7 @@ std::string cpp_escape(std::string_view s) {
     return r;
 }
 
-//------------------ note_global_ref: records a global read for filtered std registration (see
-//------------------ CodeEmitter::env_cpp - the C++ variable holding the environment in scope; the local
-//------------------ slot follows the same l_/cell naming the other local reads use
+//------------------ env_cpp: the C++ variable holding the environment in scope (a local `_ENV` shadows the implicit one)
 std::string CodeEmitter::env_cpp()
 {
     bool boxed = false;
@@ -686,7 +682,7 @@ std::string CodeEmitter::env_cpp()
     return std::string("_ENV");
 }
 
-//------------------ AnalysisState::referenced_globals). _G/_ENV reads set the dynamic-env fallback instead.
+//------------------ note_global_ref: records a global read for filtered std registration (_G/_ENV force full)
 void CodeEmitter::note_global_ref(std::string_view name) {
     if (name == "_G" || name == "_ENV") {
         state.uses_dynamic_env = true;

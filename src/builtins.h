@@ -13,14 +13,7 @@
 
 namespace clx {
 
-//------------------ BuiltinEntry: statically known std module function (module.name), the single
-//------------------ source of truth for parser intrinsic rewrite, alias registration, direct-call
-//------------------ lowering and hoisted cfunc selection. intrinsic = raw C++ expression name for
-//------------------ unboxed lowering (nullptr when none); cfunc = clx:: runtime symbol (nullptr
-//------------------ when absent from the runtime table); min_args = arity floor for intrinsic
-//------------------ lowering (below it the call keeps generic dispatch so runtime validates);
-//------------------ alias_ok = the module table actually contains this function as a value;
-//------------------ numeric = the call result is always a number (native-double contexts).
+//------------------ BuiltinEntry: statically known std module function and how every lowering path reaches it
 struct BuiltinEntry {
     std::string_view module;
     std::string_view name;
@@ -31,8 +24,7 @@ struct BuiltinEntry {
     bool numeric;
 };
 
-//------------------ BuiltinConst: foldable std module constant field (math.huge etc.); boxed =
-//------------------ full LValue C++ expression, native = raw numeric expression for double contexts.
+//------------------ BuiltinConst: foldable std module constant (boxed LValue expr, native double expr)
 struct BuiltinConst {
     std::string_view module;
     std::string_view name;

@@ -8,8 +8,7 @@
 
     .text
 
-// CoroutineContext struct offsets (SysV ABI: callee-saved = rbx,rbp,r12-r15)
-// rsp points to the return address on the stack — ret resumes the caller.
+//------------------ CoroutineContext offsets (SysV callee-saved); saved rsp points at the return address
 .equ CTX_RBX,    0
 .equ CTX_RBP,    8
 .equ CTX_R12,    16
@@ -20,10 +19,7 @@
 .equ CTX_SIZE,   56
 
 
-//------------------ clx_coro_save(CoroutineContext* ctx)
-// Save all callee-saved registers into *ctx.
-// Returns normally — rsp (pointing at the return address) is saved,
-// so a later switch resumes after the original call.
+//------------------ clx_coro_save(CoroutineContext* ctx): save callee-saved registers, resume after the original call
     .globl clx_coro_save
     .type  clx_coro_save, @function
 clx_coro_save:
@@ -37,13 +33,10 @@ clx_coro_save:
     ret
 
 
-//------------------ clx_coro_switch(CoroutineContext* from, CoroutineContext* to)
-// Save current callee-saved registers to *from, restore from *to,
-// then ret to the restored return address (context switch).
+//------------------ clx_coro_switch(CoroutineContext* from, CoroutineContext* to): save *from, restore *to, ret to it
     .globl clx_coro_switch
     .type  clx_coro_switch, @function
 clx_coro_switch:
-    // Save current context to [rdi]
     movq %rbx, CTX_RBX(%rdi)
     movq %rbp, CTX_RBP(%rdi)
     movq %r12, CTX_R12(%rdi)
@@ -52,7 +45,6 @@ clx_coro_switch:
     movq %r15, CTX_R15(%rdi)
     movq %rsp, CTX_RSP(%rdi)
 
-    // Restore target context from [rsi]
     movq CTX_R15(%rsi), %r15
     movq CTX_R14(%rsi), %r14
     movq CTX_R13(%rsi), %r13
@@ -63,13 +55,10 @@ clx_coro_switch:
     ret
 
 
-//------------------ clx_coro_init(CoroutineContext* ctx, void* stack_top, void* entry)
-// Initialise a fresh context for a new coroutine.
-// Sets rsp so that ret jumps to entry. Zeros all callee-saved slots.
+//------------------ clx_coro_init(CoroutineContext* ctx, void* stack_top, void* entry): fresh context for a new coroutine
     .globl clx_coro_init
     .type  clx_coro_init, @function
 clx_coro_init:
-    // Zero callee-saved registers
     movq $0, CTX_RBX(%rdi)
     movq $0, CTX_RBP(%rdi)
     movq $0, CTX_R12(%rdi)
@@ -77,8 +66,7 @@ clx_coro_init:
     movq $0, CTX_R14(%rdi)
     movq $0, CTX_R15(%rdi)
 
-    // Set up stack: rsp = stack_top - 16, [rsp] = entry
-    // so ret pops entry into rip, leaving rsp = stack_top - 8 (8 mod 16, ABI-correct).
+    //------------------ rsp = stack_top - 16 with [rsp] = entry, so ret enters with rsp = stack_top - 8 (ABI-correct)
     leaq -16(%rsi), %rax
     movq %rdx, (%rax)
     movq %rax, CTX_RSP(%rdi)

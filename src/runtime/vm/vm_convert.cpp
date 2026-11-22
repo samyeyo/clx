@@ -87,9 +87,7 @@ void store_cached_object(LState* clx_L, lua_State* L, LHeader* header)
 
 namespace {
 
-//------------------ s_sync_stack -- converted tables whose contents are being pushed back into the VM
-//------------------ table they came from, so a cycle in the copied graph stops at the origin instead of
-//------------------ recursing forever
+//------------------ s_sync_stack: tables whose contents are being pushed back into the VM table they came from
 thread_local std::vector<LTable*> s_sync_stack;
 
 //------------------ sync_in_progress -- true when this table is already on the write-back stack
@@ -102,8 +100,7 @@ bool sync_in_progress(LTable* t)
     return false;
 }
 
-//------------------ SyncGuard -- keeps the write-back stack balanced when a conversion below throws,
-//------------------ so a table left on it would be skipped by every later crossing
+//------------------ SyncGuard: keeps the write-back stack balanced when a conversion below throws
 struct SyncGuard {
     explicit SyncGuard(LTable* t) { s_sync_stack.push_back(t); }
     ~SyncGuard() { s_sync_stack.pop_back(); }
@@ -111,11 +108,7 @@ struct SyncGuard {
 
 }
 
-//------------------ clx_vm_sync_table_out_ - write a converted table's current entries back into the VM
-//------------------ table it was copied from, so a write made on the clx side reaches the chunk that still
-//------------------ holds the original. Mirrors the bridge's argument write-back: the array tail the copy no
-//------------------ longer has is cleared, keys the copy dropped are left alone (stock's copy semantics),
-//------------------ and the VM metatable is never replaced from here.
+//------------------ clx_vm_sync_table_out_: write a converted table's entries back into the VM table it was copied from
 void clx_vm_sync_table_out_(LState* clx_L, lua_State* L, LTable* tbl, int reg_ref)
 {
     //------------------ a proxy pushed for a nested value can step the collector; keep the table alive
@@ -164,8 +157,7 @@ void clx_to_vm_value_(LState* clx_L, lua_State* L, const LValue& v)
         lua_pushboolean(L, v.as_bool() ? 1 : 0);
         return;
     case Int64: {
-        //------------------ lua_Integer is 64-bit here, so the full clx range crosses losslessly;
-        //------------------ never demote to double or integer-ness (and wrapping) is lost
+        //------------------ lua_Integer is 64-bit here, so the full clx range crosses losslessly
         lua_pushinteger(L, static_cast<lua_Integer>(v.val.payload.i64));
         return;
     }
@@ -187,20 +179,15 @@ void clx_to_vm_value_(LState* clx_L, lua_State* L, const LValue& v)
         if (v.as_pointer()) {
 
             LHeader* h = v.as_pointer();
-            //------------------ a table copied out of the VM goes back as the very table it came from:
-            //------------------ its clx-side writes are synced into that table first, then it is pushed
-            //------------------ again, so a chunk keeps one object across the crossing
+            //------------------ a table copied out of the VM goes back as the very table it came from, after its writes are synced
             if (!(h->flags & LFLAG_VM_PROXY) && h->type == static_cast<uint8_t>(Table)) {
                 LTable* origin_tbl = static_cast<LTable*>(h);
                 if (origin_tbl->ext && origin_tbl->ext->vm_origin >= 0) {
                     int origin = origin_tbl->ext->vm_origin;
-                    //------------------ only a copy clx changed is written back: an untouched copy is a
-                    //------------------ snapshot, and pushing it over the VM table would undo whatever the
-                    //------------------ VM did to its own table since the copy was made
+                    //------------------ only a copy clx changed is written back: an untouched copy is a snapshot
                     if (origin_tbl->ext->vm_dirty && !sync_in_progress(origin_tbl)) {
                         {
-                            //------------------ one write-back per table per crossing: the stack doubles as
-                            //------------------ the visited set, so a shared or cyclic graph costs O(nodes)
+                            //------------------ one write-back per table per crossing: the stack doubles as the visited set
                             SyncGuard guard(origin_tbl);
                             clx_vm_sync_table_out_(clx_L, L, origin_tbl, origin);
                         }
@@ -373,9 +360,7 @@ LValue vm_to_clx_value_(LState* clx_L, lua_State* L, int idx)
         lua_pushvalue(L, idx);
         int abs_idx = lua_gettop(L);
 
-        //------------------ a table clx already holds a copy for maps back to that copy, so a value that
-        //------------------ crosses again does not fork into a second clx table. The index holds copies
-        //------------------ weakly, so its entries disappear with them and a dead one is never returned.
+        //------------------ a table clx already holds a copy for maps back to that copy, so a value that crosses again does not fork
         if (tbl_key) {
             if (DynamicVM* vm = DynamicVM::find(clx_L)) {
                 LValue existing = vm->object_index_get(tbl_key);
@@ -396,8 +381,7 @@ LValue vm_to_clx_value_(LState* clx_L, lua_State* L, int idx)
 
         clx::RootRange t_rr(clx_L, &t, 1);
 
-        //------------------ pin the VM table this copy was made from: pushing the copy back to the VM
-        //------------------ returns that same table, so identity survives a round trip through clx
+        //------------------ pin the VM table this copy was made from, so its identity survives a round trip through clx
         if (tbl->ext == nullptr || tbl->ext->vm_origin < 0) {
             const size_t hb_ext = table_heap_bytes(tbl);
             lua_pushvalue(L, abs_idx);
@@ -456,8 +440,7 @@ LValue vm_to_clx_value_(LState* clx_L, lua_State* L, int idx)
 
         lua_pop(L, 1);
 
-        //------------------ filling the copy goes through settable, so drop the write mark: the copy now
-        //------------------ matches its origin and has nothing of clx's own to push back yet
+        //------------------ filling the copy goes through settable, so the write mark is dropped
         if (tbl->ext)
             tbl->ext->vm_dirty = 0;
 
@@ -558,9 +541,7 @@ LValue clx_vm_capture_error_(LState* clx_L, lua_State* L)
     return v;
 }
 
-//------------------ clx_vm_require - a loaded chunk's require: the VM's own package.loaded answers first,
-//------------------ so `require"debug"` reaches the VM's real library instead of the compiled-code stub,
-//------------------ and everything else falls through to clx's require (shared path/loaded state)
+//------------------ clx_vm_require: the VM's own package.loaded answers first, everything else falls through to clx
 extern "C" int clx_vm_require(lua_State* L)
 {
     int vm_loaded_ref = static_cast<int>(lua_tointeger(L, lua_upvalueindex(1)));
@@ -614,9 +595,7 @@ extern "C" int clx_vm_env_newindex(lua_State* L)
     if (!clx_L || !tbl)
         return 0;
 
-    //------------------ the default environment keeps every chunk-written global in clx and none in the VM
-    //------------------ table: a name stored in the VM table would be assigned there directly next time and
-    //------------------ never reach __newindex, leaving compiled code with the first value it mirrored
+    //------------------ the default environment keeps every chunk-written global in clx, none in the VM table
     if (lua_tointeger(L, lua_upvalueindex(4)) == 1) {
         if (!lua_isnoneornil(L, lua_upvalueindex(5))) {
             lua_pushvalue(L, lua_upvalueindex(5));
@@ -651,9 +630,7 @@ extern "C" int clx_vm_env_pairs(lua_State* L)
     lua_pushlightuserdata(L, static_cast<void*>(tbl));
     lua_pushcclosure(L, clx_vm_env_pairs_iter, 2);
 
-    //------------------ the environment itself is the iterator's state, so each step can prefer the value
-    //------------------ the VM table holds; stock's pairs hands out a nil control value, so the first
-    //------------------ next() call starts the walk
+    //------------------ the environment is the iterator's state, so each step prefers the value the VM table holds
     lua_pushvalue(L, 1);
     lua_pushnil(L);
     return 3;
@@ -666,16 +643,14 @@ extern "C" int clx_vm_env_pairs_iter(lua_State* L)
     if (!clx_L || !tbl)
         return 0;
 
-    //------------------ walk the whole clx table (array and hash) the way stock pairs does; the state
-    //------------------ passed by the for loop is the environment table itself
+    //------------------ walk the whole clx table (array and hash) the way stock pairs does
     clx::LValue t(clx::Table, tbl);
     clx::LValue k = clx::vm_to_clx_value_(clx_L, L, 2);
     clx::MultiValue res = clx::next(clx_L, t, k);
     if (res.count == 0 || res[0].type == clx::Nil)
         return 0;
     clx_to_vm_value_(clx_L, L, res[0]);
-    //------------------ a name the VM table itself holds is handed back as the VM holds it, so a walk of
-    //------------------ the environment yields the same value a read of that name does
+    //------------------ a name the VM table itself holds is handed back as the VM holds it
     if (lua_type(L, 1) == LUA_TTABLE) {
         lua_pushvalue(L, 1);
         lua_pushvalue(L, -2);
@@ -884,10 +859,7 @@ extern "C" int clx_vm_rawset(lua_State* L)
     return 1;
 }
 
-//------------------ env_clx_table_of - the clx table behind a chunk environment written by clx, or null for
-//------------------ any other table. Such an environment keeps every chunk-written name in clx and none in
-//------------------ the VM table, so next() has to walk the clx table or a global a chunk assigned is
-//------------------ invisible to the walk (nextvar.lua walks _G looking for the names it just wrote)
+//------------------ env_clx_table_of: the clx table behind a chunk environment written by clx, else null
 static clx::LTable* env_clx_table_of(lua_State* L, int idx)
 {
     if (!lua_getmetatable(L, idx))
@@ -925,8 +897,7 @@ extern "C" int clx_vm_next(lua_State* L)
             return 1;
         }
         clx::clx_to_vm_value_(clx_L, L, res[0]);
-        //------------------ a name the environment's own table holds keeps the value a read of that name
-        //------------------ yields, so a walk and a lookup agree on identity
+        //------------------ a name the environment's own table holds keeps the value a read of that name yields
         if (env) {
             lua_pushvalue(L, 1);
             lua_pushvalue(L, -2);
@@ -975,12 +946,9 @@ extern "C" int clx_vm_proxy_call(lua_State* L)
         return 0;
     clx::LTable* tbl = static_cast<clx::LTable*>(h);
     clx::LTable* mt = tbl_metatable(tbl);
-    //------------------ lua_error() unwinds with longjmp, so the root frame opened below never runs its
-    //------------------ destructor: the chain must be cut back to the head we entered with, or it keeps
-    //------------------ pointing into this abandoned stack frame and a later mark walks garbage
+    //------------------ lua_error() unwinds with longjmp, so the root chain is cut back to the head we entered with
     clx::RootRange* saved_top_root = clx_L->top_root;
-    //------------------ the proxy metatable carries a __call entry, so the VM gets here for every table
-    //------------------ call; without a real __call that call must fail like stock, not return nothing
+    //------------------ the proxy metatable carries a __call entry; without a real __call the call must fail like stock
     if (!mt)
         return luaL_error(L, "attempt to call a table value");
     clx::LValue call_func = mt->gettable(clx_L->str_call);

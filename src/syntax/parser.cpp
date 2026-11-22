@@ -20,8 +20,7 @@ static constexpr const char *std_libs[] = { "print", "require", "error", "assert
     "rawequal", "collectgarbage", "load", "loadfile", "_G", "_VERSION", "warn", "math", "table", "string", "os",
     "coroutine", "package", "debug", "io", "utf8" };
 
-//------------------ parser_parse_numeral: Lua numeral -> int64, false when the text is not an integer constant
-//------------------ (hex wraps modulo 2^64 as in l_str2int, decimal overflows fall through to a float)
+//------------------ parser_parse_numeral: Lua numeral -> int64, false when not an integer constant (hex wraps mod 2^64)
 static bool parser_parse_numeral(std::string_view text, int64_t &out) {
     size_t i = 0;
     if (i < text.size() && (text[i] == '-' || text[i] == '+'))
@@ -302,9 +301,7 @@ uint32_t Parser::parse_primary() {
 //------------------ PARSER: parse_postfix_expression - parses method calls, index access, function calls
 uint32_t Parser::parse_postfix_expression() {
     uint32_t expr = parse_primary();
-    //------------------ stock's suffixedexp only extends a NAME or a parenthesized expression: `{}.x` and
-    //------------------ `function() end()` are syntax errors, and a constructor followed by `(` on the next
-    //------------------ line starts a new statement instead of calling the constructor
+    //------------------ stock's suffixedexp only extends a NAME or a parenthesized expression: `{}.x` is a syntax error
     if (expr < ctx.nodes.size()) {
         NodeType base_type = ctx.nodes[expr].type;
         if (base_type != NodeType::Identifier && base_type != NodeType::ParenExpression) {
@@ -353,8 +350,7 @@ uint32_t Parser::parse_postfix_expression() {
             for (uint32_t arg : args)
                 ctx.block_statements.push_back(arg);
 
-            //------------------ direct module intrinsic rewrite: registry entry on a non-shadowed
-            //------------------ global table with enough args keeps generic dispatch below min_args
+            //------------------ direct module intrinsic rewrite: registry entry on a non-shadowed global table, holding below min_args
             const char *intrinsic_cname = nullptr;
             if (ctx.nodes[expr].type == NodeType::TableAccess) {
                 uint32_t t_idx = ctx.nodes[expr].as.table_access.table;
@@ -869,9 +865,7 @@ uint32_t Parser::parse_statement() {
             implicit_globals.back() = ImplicitGlobalMode::None;
 
             std::vector<uint32_t> idents;
-            //------------------ the names enter scope only after the initializer is parsed (stock
-            //------------------ globalnames bumps nactvar afterwards), so `global a = a` reads the
-            //------------------ enclosing binding for the right-hand side
+            //------------------ the names enter scope only after the initializer is parsed, so `global a = a` reads the enclosing binding
             std::vector<std::pair<std::string_view, SymbolType>> pending_symbols;
             std::vector<uint32_t> pending_nodes;
             do {

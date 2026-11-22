@@ -61,8 +61,7 @@ static clx::MultiValue coroutine_isyieldable(LState *L, const LValue *args, size
         LThread *t = static_cast<LThread *>(args[0].as_pointer());
         return MultiValue(boolean(!t->is_main));
     }
-    //------------------ stock's isyieldable is false across a C call with no continuation (a sort
-    //------------------ comparator, a gsub replacement), not just outside a coroutine
+    //------------------ stock's isyieldable is false across a C call with no continuation, not just outside a coroutine
     return MultiValue(boolean(!L->running_thread->is_main && L->c_yield_blocked == 0));
 }
 
@@ -72,8 +71,7 @@ static clx::MultiValue coroutine_wrap(clx::LState *L, const clx::LValue *args, s
         clx::error(L, "bad argument #1 to 'wrap' (function expected)");
     }
     clx::LValue thread = clx::create_thread(L, args[0]);
-    // A C++ lambda capture is invisible to the GC, so the thread also lives in a traced gc_cells entry
-    // (as generated closures do). Root it meanwhile: create_closure() allocates.
+    //------------------ a C++ lambda capture is invisible to the GC, so the thread also lives in a traced gc_cells entry
     clx::RootRange thread_root(L, &thread, 1);
     auto cell = std::make_shared<clx::LValue>(thread);
     return clx::MultiValue(
@@ -82,8 +80,7 @@ static clx::MultiValue coroutine_wrap(clx::LState *L, const clx::LValue *args, s
             LThread *t = static_cast<LThread *>(thread.as_pointer());
             if (t->status == THREAD_DEAD)
                 clx::error(L2, "cannot resume dead coroutine");
-            //------------------ stock refuses to resume a coroutine that is running (possibly itself) or that
-            //------------------ resumed another one: the caller must not switch onto a live stack
+            //------------------ stock refuses to resume a coroutine that is running or that resumed another one
             if (t == L2->running_thread || t->status == THREAD_RUNNING || t->status == THREAD_NORMAL)
                 clx::error(L2, "cannot resume non-suspended coroutine");
             clx::MultiValue result = clx::resume(L2, thread, call_args, call_arg_count);

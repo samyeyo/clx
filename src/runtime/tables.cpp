@@ -84,8 +84,7 @@ LValue table_get_slow(LState *L, const LValue &obj, const LValue &key) {
             throw_index_error(L, obj);
     }
 
-    //------------------ stock follows a chain of __index tables at most MAXTAGLOOP times and reports
-    //------------------ a loop instead of recursing without bound
+    //------------------ stock follows a chain of __index tables at most MAXTAGLOOP times and reports a loop
     LValue cur = obj;
     for (int loop = 0; loop < 2000; ++loop) {
         if (!mt)
@@ -174,10 +173,7 @@ void LTable::resize_hash(size_t new_size) {
     ex->hash_size = new_size;
     ex->hash_tombs = 0;
     ex->hash_bitmap = new_bitmap;
-    //------------------ Sole structural invalidator of the inline cache: rehashing relocates entries.
-    //------------------ Plain inserts/deletes never move entries, and key-payload + ktype checks reject
-    //------------------ stale slots, so they intentionally leave the version alone (hot reads survive
-    //------------------ interleaved cold writes).
+    //------------------ sole structural invalidator of the inline cache: rehashing relocates entries
     ex->hash_version++;
     if (clx_current_L)
         clx_current_L->account_delta(hb_before, table_heap_bytes(this));
@@ -240,8 +236,7 @@ LValue LTable::gettable(const LValue &key) {
     }
 }
 
-//------------------ store_error_prefix: the caller's file:line prefix for a rejected table key, empty when
-//------------------ no position is active
+//------------------ store_error_prefix: the caller's file:line prefix for a rejected table key, empty when none
 static std::string store_error_prefix() {
     return clx_current_L ? file_line_prefix(clx_current_L) : std::string();
 }
@@ -251,8 +246,7 @@ void LTable::settable(const LValue &key, const LValue &val) {
     //------------------ mark a table copied out of the VM so pushing it back writes clx's changes into it
     if (ext && ext->vm_origin >= 0)
         ext->vm_dirty = 1;
-    //------------------ stock luaV_finishset rejects a NaN key; without this it silently created an
-    //------------------ unreachable entry (NaN never equals itself, so the lookup could never find it)
+    //------------------ stock luaV_finishset rejects a NaN key; otherwise it would create an unreachable entry
     if (key.type == Double && std::isnan(key.val.payload.f64))
         throw_runtime_error(store_error_prefix() + "table index is NaN");
     //------------------ a nil key is refused the same way stock refuses it
@@ -652,8 +646,7 @@ void LTable::op_direct(LState *L, const LValue &obj, const LValue &key, double a
 
 //------------------ LTable::get_value — get with metamethod fallback
 LValue LTable::get_value(LState *L, const LValue &key) {
-    //------------------ the __index chain is walked iteratively; stock bounds it with MAXTAGLOOP and
-    //------------------ reports a loop instead of overflowing the C stack (a.__index = a)
+    //------------------ the __index chain is walked iteratively, bounded by MAXTAGLOOP (a.__index = a reports a loop)
     LTable *cur = this;
     for (int loop = 0;; ++loop) {
         if (loop >= 2000)
@@ -683,8 +676,7 @@ LValue LTable::get_value(LState *L, const LValue &key) {
 
 //------------------ LTable::set_value — set with metamethod fallback
 void LTable::set_value(LState *L, const LValue &key, const LValue &val) {
-    //------------------ a chain of __newindex tables is followed at most MAXTAGLOOP times; stock
-    //------------------ reports a loop instead of recursing without bound (a.__newindex = a)
+    //------------------ a chain of __newindex tables is followed at most MAXTAGLOOP times
     LTable *cur = this;
     for (int loop = 0;; ++loop) {
         if (loop >= 2000)

@@ -64,12 +64,9 @@ static inline void root_load(LState *L, LThread *t) {
     t->top_root = nullptr;
 }
 
-//---------- coro_switch_to: the single site for the platform context switch (fiber end, resume
-//---------- and yield each had their own copy). Conditions preserved exactly: the two middle
-//---------- branches had identical bodies, so they are OR-ed, nothing else changes.
+//------------------ coro_switch_to: the single site for the platform context switch (fiber end, resume and yield)
 static inline void coro_switch_to(LThread *from, LThread *to) {
-    //------------------ the stack-limit check follows the stack being entered: a recycled fiber keeps its
-    //------------------ own "stack overflow" threshold, and the caller's is restored on the way back
+    //------------------ the stack-limit check follows the stack being entered; the caller's threshold is restored on the way back
     LState *Ls = to->state;
     char *saved_low = Ls->stack_low;
 #if defined(_WIN32)
@@ -111,8 +108,7 @@ static void fiber_entry_impl(LThread *t) {
             t->closing = false;
             t->status = THREAD_DEAD;
         } catch (const LRuntimeException &e) {
-            //------------------ a __close that raised while unwinding replaced the error (stock reports the
-            //------------------ last one to the resumer)
+            //------------------ a __close that raised while unwinding replaced the error (stock reports the last one to the resumer)
             LValue err = e.error_obj;
             if (L->has_close_err) {
                 err = L->close_err;
@@ -147,9 +143,7 @@ static void fiber_entry_impl(LThread *t) {
     }
 
     LThread *caller = t->caller;
-    //------------------ the fiber is finished, so every frame on its stack is gone: any chain left over
-    //------------------ belongs to already-unwound frames and must never be walked again (the stack memory
-    //------------------ is recycled). A suspended fiber keeps its live chain via yield's root_stash.
+    //------------------ the fiber is finished, so its frames are gone: the chain left over must never be walked again
     t->top_root = nullptr;
     root_load(L, caller);
     L->running_thread = caller;
@@ -221,10 +215,7 @@ LValue create_thread(LState *L, const LValue &func, double stack_size) {
         if (t->fiber) {
             L->free_fiber_threads--;
             t->pre_unwind = pooled_suspended;
-            //------------------ a suspended fiber resumes its old body where it yielded, and that body may
-            //------------------ yield again or run arbitrary code; requesting a close makes its next yield
-            //------------------ unwind it, so the new function starts from a known point instead of the old
-            //------------------ body's values leaking out as this coroutine's yield
+            //------------------ a pooled suspended fiber resumes its old body, so a close is requested to unwind it to a known point
             if (pooled_suspended)
                 t->close_requested = true;
         } else {
@@ -263,18 +254,15 @@ LValue create_thread(LState *L, const LValue &func, double stack_size) {
 //------------------ resume: resumes a suspended coroutine (public API)
 MultiValue resume(LState *L, const LValue &thread, const LValue *args, size_t count) {
     LThread *t = static_cast<LThread *>(thread.as_pointer());
-    //------------------ every nested resume is a real C stack frame: refuse past stock's LUAI_MAXCCALLS
-    //------------------ depth instead of overflowing the process stack
+    //------------------ every nested resume is a real C stack frame: refuse past stock's LUAI_MAXCCALLS depth
     if (L->resume_depth >= 200)
         throw LRuntimeException(LValue(L->intern_string(file_line_prefix(L) + "C stack overflow")));
-    //------------------ assign() reuses the thread's already-constructed inline slots: no temp
-    //------------------ MultiValue + move-assign copy chain on every resume.
+    //------------------ assign() reuses the thread's already-constructed inline slots, avoiding a temp MultiValue per resume
     t->resume_args.assign(args, count, L);
     t->has_error = false;
     t->close_error = false;
 #if !defined(_WIN32)
-    // fiber_trampoline() reads g_starting_thread on the thread's first entry. create_thread() also sets it,
-    // but with several coroutines created before the first resume it would point at the last one created.
+    //------------------ fiber_trampoline() reads g_starting_thread on first entry; set it here for the thread being resumed
     if (!t->started) g_starting_thread = t;
 #endif
     t->started = true;
@@ -298,9 +286,7 @@ MultiValue resume(LState *L, const LValue &thread, const LValue *args, size_t co
 
     coro_switch_to(t->caller, t);
 
-    //------------------ Build (ok, yield_args...) directly in the return slot: one placement-new per
-    //------------------ value, no temp buffer + re-copy (was: fill buf[total], then MultiValue(buf)
-    //------------------ copied every slot a second time, plus dead default-ctors for the inline buf).
+    //------------------ build (ok, yield_args...) directly in the return slot: one placement-new per value, no temp buffer
     size_t total = 1 + t->yield_args.count;
     MultiValue ret;
     ret.count = total;
@@ -325,12 +311,10 @@ MultiValue yield(LState *L, const LValue *args, size_t count) {
     LThread *t = L->running_thread;
     if (t->is_main)
         clx::error(L, "attempt to yield from outside a coroutine");
-    //------------------ stock cannot resume a coroutine across a C frame that has no continuation
-    //------------------ (a sort comparator, a gsub replacement): the C stack below would be unwound
+    //------------------ stock cannot resume across a C frame with no continuation (a sort comparator, a gsub replacement)
     if (L->c_yield_blocked > 0)
         clx::error(L, "attempt to yield across a C-call boundary");
-    //------------------ a __close that runs while the coroutine is being closed sits under the close's own
-    //------------------ C frame: stock refuses the yield there
+    //------------------ a __close running while the coroutine is closed sits under the close's own C frame: no yield
     if (t->closing || t->self_close)
         clx::error(L, "attempt to yield across a C-call boundary");
     t->yield_args.assign(args, count, L);
@@ -339,8 +323,7 @@ MultiValue yield(LState *L, const LValue *args, size_t count) {
             gc_barrier_header(L, t, t->yield_args[i]);
     }
     t->status = THREAD_SUSPENDED;
-    // The coroutine may have stored young objects in its frame slots since the last minor GC scanned it.
-    // An old suspended thread is only rescanned if remembered, so remember it whenever it suspends.
+    //------------------ an old suspended thread is only rescanned if remembered, so remember it whenever it suspends
     if (L->gc_mode == LState::GCMode::Generational && t->age == AGE_OLD)
         L->gc_remember(t);
 

@@ -364,9 +364,7 @@ void pass_struct_locals(const ASTContext &ctx, AnalysisState &state, PassScratch
         if (!ok)
             continue;
 
-        //------------------ phantom reads: a read of a field that is neither in the ctor nor ever
-        //------------------ written would miss every codegen hook and fall into the generic table path
-        //------------------ with a native struct value (C++ type error); reject back to a plain table
+        //------------------ phantom reads: a read of a field never constructed or written would hit the generic table path; reject
         for (auto &rf : c.read_fields) {
             if (!all_seen.count(rf)) {
                 ok = false;
@@ -406,7 +404,6 @@ void pass_struct_locals(const ASTContext &ctx, AnalysisState &state, PassScratch
         return;
 
     //------------------ late-field read presence: a write earlier in the same or an enclosing block proves it
-    //------------------ (must precede the fixpoint: field_kind gates on presence for late reads)
     auto find_stmt_index = [&](uint32_t block, uint32_t stmt) -> uint32_t {
         const auto &b = ctx.nodes[block].as.block;
         for (uint32_t i = 0; i < b.count; ++i) {
@@ -570,8 +567,7 @@ void pass_struct_locals(const ASTContext &ctx, AnalysisState &state, PassScratch
         }
     }
 
-    //------------------ Phase B: validate writes; a write value that is still Unknown is deferred (another
-    //------------------ candidate may commit a kind it depends on), only stable mismatches reject
+    //------------------ Phase B: validate writes; a still-Unknown value is deferred, only stable mismatches reject
     std::vector<uint8_t> pending(cands.size(), 0);
     iter = 0;
     changed = true;
@@ -629,9 +625,7 @@ void pass_struct_locals(const ASTContext &ctx, AnalysisState &state, PassScratch
         }
     }
 
-    //------------------ re-validate against the final state: a kind may have been committed from a
-    //------------------ candidate that was rejected afterwards, so re-derive every value kind and
-    //------------------ reject on any change (kinds are only trusted while their source is alive)
+    //------------------ re-validate against the final state: a kind may come from a candidate rejected afterwards
     iter = 0;
     changed = true;
     while (changed && iter++ < cap) {

@@ -28,9 +28,7 @@ static void register_loaded_builtins(LState *L) {
     lt->settable(LValue(L->intern_string("_G")), LValue(ValueType::Table, L->_G));
 }
 
-//------------------ openlibs_minimal: registers whatever is open (--minimal links base + package;
-//------------------ every other std module arrives via --modules <name>, whose luastd_* call the driver
-//------------------ emits into main before this. base + package come from LState::open unconditionally.)
+//------------------ openlibs_minimal: registers base + package; other std modules arrive via --modules <name>
 void openlibs_minimal(LState *L) {
     register_loaded_builtins(L);
 }

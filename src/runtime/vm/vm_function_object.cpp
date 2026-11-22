@@ -31,8 +31,7 @@ VMFunction::~VMFunction() {
     }
 }
 
-//------------------ VMFunction::wrap - push aside Lua stack and ref. A closure clx already wraps maps back
-//------------------ to that wrapper, so the same VM function compares equal across the boundary
+//------------------ VMFunction::wrap: push aside the Lua stack value, reusing the wrapper a closure already has
 LValue VMFunction::wrap(LState *clx_L, lua_State *L, int idx) {
     DynamicVM *vm = DynamicVM::acquire(clx_L);
     const void *key = lua_topointer(L, idx);
@@ -96,17 +95,14 @@ bool vm_pcall_function_(LState *clx_L, int lua_ref, const LValue *args, size_t n
     for (size_t i = 0; i < nargs; ++i)
         clx_to_vm_value_(clx_L, L, args[i]);
 
-    //------------------ the VM unwinds errors with longjmp, so clx root frames opened inside the call never
-    //------------------ run their destructors: cutting the chain back to the head we entered with drops them
-    //------------------ all, without scanning (and dereferencing) their already-dead stack storage
+    //------------------ the VM unwinds with longjmp, so clx root frames opened inside the call never run their destructors
     RootRange *saved_top_root = clx_L->top_root;
     int rc = lua_pcallk(L, static_cast<int>(nargs), LUA_MULTRET, 0, 0, nullptr);
     clx_L->top_root = saved_top_root;
     if (rc != LUA_OK) {
 
         LValue err = clx_vm_capture_error_(clx_L, L);
-        //------------------ the call is over, so give the slots it used back: a stack that is never cut back
-        //------------------ only ever grows, and the VM can shed a grown stack only above its top
+        //------------------ give the slots back: a stack that is never cut back only ever grows
         lua_settop(L, base - 1);
         out = MultiValue(err);
         return false;

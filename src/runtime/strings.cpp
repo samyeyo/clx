@@ -136,9 +136,7 @@ MultiValue str_reverse(LState *L, const LValue *args, size_t count) {
     return result;
 }
 
-//------------------ fold_high_bytes — outside the C locale the host's case tables also cover bytes above
-//------------------ ASCII, which the ASCII fast fold leaves alone; stock asks tolower/toupper per byte so
-//------------------ those bytes follow the host's tables too
+//------------------ fold_high_bytes: outside the C locale the host's case tables also cover bytes above ASCII
 static void fold_high_bytes(char *dst, size_t len, int to_lower) {
     if (ctype_is_c())
         return;
@@ -187,8 +185,7 @@ MultiValue str_upper(LState *L, const LValue *args, size_t count) {
     return result;
 }
 
-//------------------ str_rep — string.rep: repeat string N times with optional separator
-//------------------ (stock requires arg 2; only an explicit nil falls back to the default 1)
+//------------------ str_rep: string.rep, N repetitions with an optional separator (only an explicit nil means 1)
 MultiValue str_rep(LState *L, const LValue *args, size_t count) {
     size_t len;
     const char *s = get_string(L, args, count, len, 1, "string.rep");
@@ -290,9 +287,7 @@ MultiValue str_char(LState *L, const LValue *args, size_t count) {
     return result;
 }
 
-//------------------ str_dump — string.dump: VM-backed when linked with --dynamic (see
-//------------------ dump_builtin.cpp); in bare builds no bytecode exists, so a function dumps to
-//------------------ itself as its own callable snapshot
+//------------------ str_dump: VM-backed under --dynamic; in bare builds a function dumps to its own callable snapshot
 MultiValue str_dump(LState *L, const LValue *args, size_t count) {
     if (clx_string_dump_hook)
         return clx_string_dump_hook(L, args, count);
@@ -441,9 +436,7 @@ MultiValue str_format(LState *L, const LValue *args, size_t count) {
         }
         case 'p': {
             checkformat(form, "-", false);
-            //------------------ stock formats lua_topointer, which is non-NULL for every garbage
-            //------------------ collected value: tables, functions, threads, userdata and strings all
-            //------------------ carry their object address in the payload, so report that instead of null
+            //------------------ stock formats lua_topointer, non-NULL for every GC value: report the object address, not null
             const void *ptr = nullptr;
             switch (args[arg - 1].type) {
             case ValueType::Table:
@@ -470,8 +463,7 @@ MultiValue str_format(LState *L, const LValue *args, size_t count) {
             if (form[2] != '\0')
                 throw_runtime_error("specifier '%q' cannot have modifiers");
             const LValue &qv = (arg <= count) ? args[arg - 1] : LValue();
-            //------------------ stock addliteral: numbers get a Lua numeral, nil/boolean their keyword,
-            //------------------ everything else has no literal form
+            //------------------ stock addliteral: numbers get a Lua numeral, nil/boolean their keyword, nothing else has one
             if (qv.type == ValueType::Int64 || qv.type == ValueType::Double) {
                 char lit[64];
                 int nw;
@@ -664,14 +656,11 @@ struct MatchClassTable {
     }
 };
 
-//------------------ g_match_class: class bits for the locale it was built in. stock asks the C library per
-//------------------ character, so '%a' and friends follow the host's tables; the table is rebuilt when
-//------------------ os.setlocale bumps the locale generation
+//------------------ g_match_class: class bits for the locale it was built in, rebuilt when os.setlocale bumps the generation
 static MatchClassTable g_match_class;
 static uint64_t g_match_class_generation = 0;
 
-//------------------ sync_match_class: called once per pattern operation, never per character, so that a
-//------------------ locale change between two matches is picked up without paying for it inside the scan
+//------------------ sync_match_class: called once per pattern operation, never per character
 static void sync_match_class() {
     uint64_t gen = locale_generation();
     if (gen != g_match_class_generation) {
@@ -1194,8 +1183,7 @@ MultiValue str_gsub(LState *L, const LValue *args, size_t count) {
     const char *src = get_string(L, args, count, srcl, 1, "string.gsub");
     const char *p = get_string(L, args, count, lp, 2, "string.gsub");
 
-    //------------------ stock's luaL_argexpected reports "no value" for an absent third argument:
-    //------------------ reading args[2] unconditionally walked off the caller's argument array
+    //------------------ stock's luaL_argexpected reports "no value" for an absent third argument
     if (count < 3)
         throw_runtime_error(bad_arg_msg(L, 3, "string.gsub", "string/function/table expected, got no value"));
     ValueType tr_type = args[2].type;
@@ -1303,8 +1291,7 @@ MultiValue str_gsub(LState *L, const LValue *args, size_t count) {
                 ptrdiff_t capl = get_onecapture(&ms, 0, src_pos, e, &cap);
                 LValue key = (capl == CAP_POSITION) ? LValue(static_cast<int64_t>((cap - src) + 1))
                                                     : LValue(L->intern_string(cap, (size_t)capl));
-                //------------------ stock indexes the replacement table with lua_gettable, so an
-                //------------------ __index metamethod (even a function) supplies the value
+                //------------------ stock indexes the replacement table with lua_gettable, so __index (even a function) supplies the value
                 LValue val = table_get(L, args[2], key);
                 if (val.type == Nil || (val.type == Boolean && !val.as_bool())) {
                     size_t ml = e - src_pos;

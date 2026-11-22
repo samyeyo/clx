@@ -19,8 +19,7 @@
 
 namespace clx {
 
-//------------------ kMaxCallChain: stock resolves a '__call' chain iteratively and refuses more than 15
-//------------------ metamethod levels, which clx mirrors because its chain is a native recursion
+//------------------ kMaxCallChain: stock resolves a '__call' chain iteratively and refuses more than 15 levels
 static constexpr int kMaxCallChain = 15;
 
 //------------------ CallChainScope: one '__call' dispatch, popped again when the nested call returns
@@ -36,7 +35,6 @@ struct CallChainScope {
 };
 
 //------------------ ChainReset: a real function ends the chain, so its body starts dispatching at zero
-//------------------ (stock resolves the whole chain before the function runs)
 struct ChainReset {
     int &depth;
     int saved;
@@ -90,8 +88,7 @@ MultiValue call_function(LState *L, const LValue &func, const LValue *args, size
                     new_args = new LValue[nargs];
                 else
                     new_args = reinterpret_cast<LValue *>(stack_buf);
-                //------------------ Placement-new only the slots used (was: 16 default ctors + assigns).
-                //------------------ Heap path keeps default-new (cold; delete[] needs live objects).
+                //------------------ placement-new only the slots used; the heap path keeps default-new (delete[] needs live objects)
                 if (heap) {
                     new_args[0] = func;
                     for (size_t i = 0; i < count; ++i)
@@ -121,16 +118,10 @@ MultiValue call_function(LState *L, const LValue &func, const LValue *args, size
 
 //------------------ pcall_function — protected call
 MultiValue pcall_function(LState *L, const LValue &func, const LValue *args, size_t count) {
-    //------------------ every root frame opened inside the call dies with it, but MSVC skips the cleanup of a
-    //------------------ few of them while the error unwinds (a root frame left behind points at a returned C
-    //------------------ frame, and marking through it reads dead stack): the handler restores the chain the call
-    //------------------ found, dropping every entry the unwind should have removed
+    //------------------ the handler restores the root chain the call found: MSVC can skip cleanup while the error unwinds
     RootRange *root_mark = L->top_root;
     try {
-        //------------------ stock luaL_where sees the C pcall frame for its callers: no line, so errors
-        //------------------ raised directly under pcall carry no file:line prefix (keep the source name).
-        //------------------ The callee is passed as a value (not a field/method access at this call site), so
-        //------------------ clear the name/method flags: a forwarded call falls back to the full function name.
+        //------------------ stock luaL_where sees a C pcall frame, so errors raised under pcall carry no file:line prefix
         L->pcall_site.file = L->current_site ? L->current_site->file : "";
         L->pcall_site.line = 0;
         L->pcall_site.is_method = false;
@@ -140,9 +131,7 @@ MultiValue pcall_function(LState *L, const LValue &func, const LValue *args, siz
             return MultiValue(true);
         if (ret.count == 1)
             return MultiValue(true, ret[0]);
-        //------------------ one allocation for the whole result: push_back grows the shared overflow heap
-        //------------------ quadratically (each step copies every earlier slot), which is unusable when a
-        //------------------ protected call returns hundreds of thousands of values
+        //------------------ one allocation for the whole result: push_back would grow the shared overflow heap quadratically
         std::vector<LValue> vals;
         vals.reserve(ret.count + 1);
         vals.push_back(LValue(true));
@@ -151,15 +140,13 @@ MultiValue pcall_function(LState *L, const LValue &func, const LValue *args, siz
         return MultiValue(vals, L);
     } catch (const LRuntimeException &e) {
         L->top_root = root_mark;
-        //------------------ a __close that raised while this error unwound replaced it (stock rethrows the
-        //------------------ last close error), so report that one and drop the pending slot
+        //------------------ a __close that raised while this error unwound replaced it, so report that one
         LValue err_obj = e.error_obj;
         if (L->has_close_err) {
             err_obj = L->close_err;
             L->has_close_err = false;
         }
-        //------------------ stock's pcall returns whatever error object was raised (a table, a number, ...),
-        //------------------ not a rendered message; a nil object becomes the 'no error object' placeholder
+        //------------------ pcall returns the raw error object, not a rendered message; nil becomes the placeholder
         if (err_obj.type == ValueType::Nil)
             return MultiValue(false, LValue(L->intern_string("<no error object>")));
         return MultiValue(false, err_obj);
@@ -167,8 +154,7 @@ MultiValue pcall_function(LState *L, const LValue &func, const LValue *args, siz
         L->top_root = root_mark;
         return MultiValue(false, LValue(L->intern_string(e.what())));
     } catch (...) {
-        //------------------ a coroutine close or C-frame return unwinds the same way: restore the chain before
-        //------------------ the exception continues past this call
+        //------------------ a coroutine close or C-frame return unwinds the same way: restore the chain before rethrowing
         L->top_root = root_mark;
         throw;
     }

@@ -317,9 +317,7 @@ CLX_INLINE_HOT void clx_reverse_bytes(char* dst, const char* src, size_t n)
         __m128i out = _mm_shuffle_epi8(v, rev);
         _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + i), out);
     }
-    //------------------ scalar middle + head: dst[i..n) mirrors src[0..n-i); the old
-    //------------------ j/i two-pointer form stopped early on odd remainders, leaving the
-    //------------------ tail (and the middle byte) unwritten
+    //------------------ scalar middle + head: dst[i..n) mirrors src[0..n-i), odd remainders included
     for (size_t m = n - i, k = 0; k < m; ++k)
         dst[i + k] = src[m - 1 - k];
 #elif defined(CLX_HAS_NEON)

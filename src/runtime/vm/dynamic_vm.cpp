@@ -37,9 +37,7 @@ void clx_mark_vm_proxies_(LState* clx_L, LState::GCStack& wl);
 //------------------ clx_register_vm_proxy - link a VM proxy into clx GC
 void clx_register_vm_proxy(LState* clx_L, LHeader* proxy, size_t bytes)
 {
-    //------------------ a wrapper is often the only thing a crossing allocates, so it has to drive the
-    //------------------ pacing itself: charging the bytes without ever asking for a collection makes a long
-    //------------------ run of crossings pile up every wrapper and with it every VM reference it pins
+    //------------------ a wrapper is often the only allocation a crossing makes, so it drives the GC pacing itself
     clx_L->gc_maybe_collect();
     proxy->next = clx_L->allocated_objects;
     clx_L->allocated_objects = proxy;
@@ -64,8 +62,7 @@ static void clx_free_vm_proxy_(LState* clx_L, LHeader* proxy)
     }
 }
 
-//------------------ clx_table_release_ - drop a converted table's VM registry reference as the table is
-//------------------ recycled, so the VM table it was copied from is collectable once no clx copy pins it
+//------------------ clx_table_release_: drop a converted table's VM registry reference as the table is recycled
 static void clx_table_release_(LState* clx_L, LTable* t)
 {
     if (!t->ext || t->ext->vm_origin < 0)
@@ -98,8 +95,7 @@ DynamicVM::DynamicVM(LState* clx_L)
     lua_gc(L_, LUA_GCRESTART);
     lua_gc(L_, LUA_GCGEN);
     opened_libs_ = true;
-    //------------------ registered before the environment is built: pushing a clx table into the VM
-    //------------------ allocates a proxy through acquire(), which must find this VM, not build another
+    //------------------ registered before the environment is built: a pushed clx table must find this VM, not build another
     g_dynamic_vms_[clx_L] = this;
     try {
         build_parking_lot();
@@ -146,8 +142,7 @@ void DynamicVM::build_parking_lot()
     registry_root_ = luaL_ref(L_, LUA_REGISTRYINDEX);
 }
 
-//------------------ DynamicVM::build_default_env - the VM's own globals, so chunks see one real table:
-//------------------ _G is itself, raw globals stay stock, and only missing names reach clx's globals
+//------------------ DynamicVM::build_default_env: the VM's own globals — _G is itself, missing names reach clx's globals
 int DynamicVM::build_default_env()
 {
     lua_pushglobaltable(L_);
@@ -180,17 +175,14 @@ int DynamicVM::build_default_env()
     lua_pushcclosure(L_, clx_vm_env_newindex, 5);
     lua_setfield(L_, mt_idx, "__newindex");
 
-    //------------------ pairs walks the clx globals, where __newindex keeps every chunk-written name, so a
-    //------------------ walk of _G sees the same names a read does
+    //------------------ pairs walks the clx globals, where __newindex keeps every chunk-written name
     lua_pushlightuserdata(L_, static_cast<void*>(clx_L_));
     lua_pushlightuserdata(L_, static_cast<void*>(clx_L_->_G));
     lua_pushinteger(L_, 0);
     lua_pushcclosure(L_, clx_vm_env_pairs, 3);
     lua_setfield(L_, mt_idx, "__pairs");
 
-    //------------------ a chunk that asks for the environment's metatable gets a stand-in: stock's _G has
-    //------------------ none, so a test clearing __index on it (errors.lua, to mimic the 'strict' module)
-    //------------------ must not unplug the fallback that reaches clx's globals
+    //------------------ a chunk asking for the environment's metatable gets a stand-in, so clearing __index keeps the fallback
     lua_newtable(L_);
     lua_setfield(L_, mt_idx, "__metatable");
 
@@ -217,8 +209,7 @@ int DynamicVM::build_default_env()
         lua_rawset(L_, -3);
     }
 
-    //------------------ a chunk's collectgarbage must drive both collectors; keep the stock one for the
-    //------------------ forwarded call, since overwriting the global makes lua_getglobal find the shim
+    //------------------ a chunk's collectgarbage must drive both collectors; the stock global is kept for the forwarded call
     {
         lua_getglobal(L_, "collectgarbage");
         gc_fn_ref_ = luaL_ref(L_, LUA_REGISTRYINDEX);
@@ -229,19 +220,13 @@ int DynamicVM::build_default_env()
         lua_rawset(L_, -3);
     }
 
-    //------------------ modules load through clx: chunks get clx's require and clx's package table, so
-    //------------------ package.path/loaded are one state and a chunk that stores package.loaded[...]
-    //------------------ itself is visible to the require() that is running it
+    //------------------ modules load through clx: chunks get clx's require and package table (one shared path/loaded state)
     {
-        //------------------ the VM's own package.loaded, captured before the shared table replaces it: a
-        //------------------ chunk's require must still reach the VM's real standard libraries, notably
-        //------------------ debug, whose introspection the compiled-code stub cannot serve
+        //------------------ the VM's own package.loaded is captured before the shared table replaces it, for the real std libraries
         lua_getfield(L_, LUA_REGISTRYINDEX, LUA_LOADED_TABLE);
         int vm_loaded_ref = luaL_ref(L_, LUA_REGISTRYINDEX);
 
-        //------------------ LUA_LOADED_TABLE stays the VM's own table: the VM's internal name lookup
-        //------------------ (pushglobalfuncname) walks it with lua_next, and a clx-table proxy there
-        //------------------ crashes; modules resolve through the require shim below instead
+        //------------------ LUA_LOADED_TABLE stays the VM's own table: pushglobalfuncname walks it with lua_next
         LValue pack = get_global(clx_L_, "package");
         lua_pushglobaltable(L_);
         if (pack.type == Table) {
@@ -266,8 +251,7 @@ int DynamicVM::build_default_env()
 int DynamicVM::build_env_table(const LValue& preferred)
 {
     if (preferred.type == Table && preferred.as_pointer()) {
-        //------------------ a VM table is already a usable environment; wrapping it would hide its own
-        //------------------ metatable (__index/__newindex) from the chunk
+        //------------------ a VM table is already a usable environment; wrapping it would hide its own __index/__newindex
         LHeader* h = preferred.as_pointer();
         if (h->flags & LFLAG_VM_PROXY) {
             lua_rawgeti(L_, LUA_REGISTRYINDEX, static_cast<VMTableProxy*>(h)->registry_ref);
@@ -344,8 +328,7 @@ int DynamicVM::build_env_table(const LValue& preferred)
     return luaL_ref(L_, LUA_REGISTRYINDEX);
 }
 
-//------------------ DynamicVM::build_object_index - create the weak-valued VM-object -> clx-wrapper index
-//------------------ and root it, so an object that crosses back keeps the wrapper clx already made for it
+//------------------ DynamicVM::build_object_index: the weak-valued VM-object -> clx-wrapper index, rooted
 void DynamicVM::build_object_index()
 {
     LValue index = clx_L_->create_table();
@@ -356,8 +339,7 @@ void DynamicVM::build_object_index()
         LValue(clx_L_->intern_string("__mode")), LValue::istr("v", 1));
     LTable* index_tbl = static_cast<LTable*>(index.as_pointer());
     tbl_set_metatable(index_tbl, static_cast<LTable*>(weak.as_pointer()));
-    //------------------ the collector only runs the weak pass over tables on its metatabled list, so the
-    //------------------ index has to join it or every entry it ever holds would keep its wrapper alive
+    //------------------ the collector only runs the weak pass over tables on its metatabled list, so the index joins it
     meta_list_add(clx_L_, index_tbl);
     gc_barrier(clx_L_, index_tbl, weak);
     clx_L_->root_value(index);
@@ -384,8 +366,7 @@ void DynamicVM::object_index_put(const void* vm_obj, const LValue& value)
     index->settable(LValue(key), value);
 }
 
-//------------------ DynamicVM::build_bridge_cache - weak-valued table keyed by clx callable address,
-//------------------ so the same clx function always maps to the same VM closure (identity and %p)
+//------------------ DynamicVM::build_bridge_cache: weak-valued by clx callable address, so one function maps to one closure
 void DynamicVM::build_bridge_cache()
 {
     lua_newtable(L_);
@@ -411,9 +392,7 @@ bool DynamicVM::load_buffer(const char* src, size_t len, const char* name, const
     }
     if (env_ref != LUA_NOREF) {
         lua_rawgeti(L_, LUA_REGISTRYINDEX, env_ref);
-        //------------------ lua_setupvalue only pops when upvalue #1 exists; a chunk with no
-        //------------------ upvalues (e.g. a dumped function body referencing no globals) must not
-        //------------------ leave the env table behind for luaL_ref to capture instead of the function
+        //------------------ lua_setupvalue only pops when upvalue #1 exists; a chunk with no upvalues must not leave env behind
         if (!lua_setupvalue(L_, -2, 1))
             lua_pop(L_, 1);
     }
@@ -475,8 +454,7 @@ void DynamicVM::release(LState* clx_L)
     if (it->second->object_index_.is_gc_obj())
         clx_L->unroot_value(it->second->object_index_);
 
-    //------------------ every registry reference dies with this VM: clear the origin of each live table so
-    //------------------ a later VM cannot be handed a reference that belongs to the closed one
+    //------------------ every registry reference dies with this VM: clear each live table's origin so no later VM gets it
     for (int pass = 0; pass < 2; ++pass) {
         for (LHeader* h = (pass == 0) ? clx_L->allocated_objects : clx_L->old_objects; h; h = h->next) {
             if (h->type == static_cast<uint8_t>(Table) && !(h->flags & LFLAG_VM_PROXY)) {
@@ -581,10 +559,7 @@ void DynamicVM::unlink_bridge(BridgeNode* node)
     node->next = nullptr;
 }
 
-//------------------ DynamicVM::mark_proxy_roots - walk list into clx GC worklist. A proxied table is
-//------------------ only a VMTableProxy when it carries LFLAG_VM_PROXY: clx tables handed to the VM
-//------------------ (the _G environment wrapper, for one) are wrapped as plain LTables, so casting
-//------------------ those to VMTableProxy reads past the object and marks a garbage clx_underlying.
+//------------------ DynamicVM::mark_proxy_roots: only an LFLAG_VM_PROXY table is a VMTableProxy; LTables stay plain
 void DynamicVM::mark_proxy_roots(LState::GCStack& wl)
 {
     for (BridgeNode* b = bridge_head_; b; b = b->next) {
@@ -625,9 +600,7 @@ void clx_mark_vm_proxies_(LState* clx_L, LState::GCStack& wl)
     vm->mark_proxy_roots(wl);
 }
 
-//------------------ gc_option_index - the option tables of luaB_collectgarbage (src/lbaselib.c), kept here
-//------------------ so a bad option is reported by the shim itself: raised inside the forwarded call it
-//------------------ would lose both the 'collectgarbage' name and the caller's line to the extra C frame
+//------------------ gc_option_index: the option tables of luaB_collectgarbage, so a bad option is reported by the shim
 static int gc_option_index(const char* name, bool param)
 {
     static const char* const opts[] = { "stop", "restart", "collect", "count", "step", "isrunning",
@@ -641,8 +614,7 @@ static int gc_option_index(const char* name, bool param)
     return -1;
 }
 
-//------------------ clx_vm_env_collectgarbage - forwards to the VM's collectgarbage so every option keeps
-//------------------ stock semantics (isrunning, step, count, mode, param), then drives the clx collector too
+//------------------ clx_vm_env_collectgarbage: forwards to the VM's collectgarbage, then drives the clx collector
 extern "C" int clx_vm_env_collectgarbage(lua_State* L)
 {
     clx::LState* clx_L = static_cast<clx::LState*>(lua_touserdata(L, lua_upvalueindex(1)));

@@ -111,9 +111,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
         }
     }
 
-    //------------------ single_adopt: one target fed by one trailing call. Its result is adopted by
-    //------------------ the shared runtime helper instead of an inline push loop plus three
-    //------------------ conditional extractions at the site.
+    //------------------ single_adopt: one target fed by one trailing call, adopted by the shared runtime helper
     bool single_adopt = t_count == 1 && v_count == 1 && last_is_call && tuple_fill_n == 0
         && ctx.nodes[ctx.block_statements[first_v]].type == NodeType::CallExpression;
 
@@ -165,8 +163,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
         uint32_t t_idx = ctx.block_statements[first_t];
         if (ctx.nodes[t_idx].type == NodeType::Identifier && !ctx.nodes[t_idx].as.ident.is_global) {
             single_name = std::string_view(ctx.nodes[t_idx].as.ident.name, ctx.nodes[t_idx].as.ident.length);
-            //------------------ _ENV stays a boxed LValue: global access goes through the value, and a
-            //------------------ native slot could not be indexed
+            //------------------ _ENV stays a boxed LValue: global access goes through it and a native slot cannot be indexed
             bool in_native = single_name != "_ENV"
                 && std::find(state.native_numbers.begin(), state.native_numbers.end(), single_name)
                     != state.native_numbers.end();
@@ -265,8 +262,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
                 out << "_rhs_" << node_idx;
             } else if (v_count > 0) {
                 uint32_t v_idx = ctx.block_statements[first_v];
-                //------------------ an integer local takes the exact int64 form: emit_native gives the
-                //------------------ double view of a shift/bitwise result, which rounds past 2^53
+                //------------------ an integer local takes the exact int64 form: the double view rounds past 2^53
                 bool exact_int = false;
                 std::string exact_v = is_int_single ? int_value_expr(v_idx, 1, &exact_int) : std::string();
                 if (exact_int)
@@ -393,8 +389,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
         if (t_node.type == NodeType::Identifier) {
             std::string_view name(t_node.as.ident.name, t_node.as.ident.length);
             bool is_boxed = false;
-            //------------------ a `global` declaration shadows an in-scope local of the same name:
-            //------------------ its target always binds to _ENV, never to the C++ local slot
+            //------------------ a `global` declaration shadows a local of that name and always binds to _ENV
             bool is_loc = is_global ? false : this->is_local(name, is_boxed);
 
             if (is_local) {
@@ -509,8 +504,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
                         const auto &tc = ctx.nodes[v_idx].as.table_cons;
                         bool int_array = state.int_numeric_arrays.count(std::string(name)) > 0;
                         if (state.table_presize.count(v_idx)) {
-                            //------------------ a descending loop's limit is not an element count: a negative
-                            //------------------ hint must fall back to an empty vector, never a huge size
+                            //------------------ a descending loop's limit is not an element count: a negative hint presizes to an empty vector
                             out << (int_array ? "std::vector<int64_t> l_" : "std::vector<double> l_") << name
                                 << "(clx::presize_hint(static_cast<double>(";
                             emit_native(state.table_presize[v_idx]);
@@ -1156,8 +1150,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
                         emit_node(ctx.block_statements[first_v]);
                     else
                         out << "clx::LValue()";
-                    //------------------ the key is only known to be a number here: a non-integral,
-                    //------------------ non-positive, or huge value must take the generic store, never a slot
+                    //------------------ the key is only known to be a number: a non-integral, non-positive or huge value takes the generic store
                     out << "; double _kd" << t_idx << " = static_cast<double>(";
                     emit_native(t_node.as.table_access.key);
                     out << "); size_t _k" << t_idx << " = clx::array_key(_kd" << t_idx << "); if (_k" << t_idx
@@ -1195,8 +1188,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
                         out << "; if (_b.type != clx::ValueType::Table) clx::throw_index_error(L, _b);";
                         out << " clx::LTable* _t = static_cast<clx::LTable*>(_b.as_pointer());";
                     }
-                    //------------------ the key is only known to be a number here: a non-integral,
-                    //------------------ non-positive, or huge value must take the generic store, never a slot
+                    //------------------ the key is only known to be a number: a non-integral, non-positive or huge value takes the generic store
                     out << " double _kd = static_cast<double>(";
                     emit_native(k_idx);
                     out << "); size_t _k = clx::array_key(_kd); if (_k != 0 && !clx::table_has_newindex(L, _t) && _k - 1 < _t->array_size) { clx::LValue _sv = ";
@@ -1454,8 +1446,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
 
                 const auto &lcnode = ctx.nodes[v_idx];
                 bool lc_native = false;
-                //------------------ unboxed trailing call: triple overload with double-ready args
-                //------------------ bypasses boxing before the generic/native paths below are tried.
+                //------------------ unboxed trailing call: a triple overload with double-ready args bypasses boxing
                 if (lcnode.type == NodeType::CallExpression && !dbl_self_ref(lcnode.as.call_expr.target)
                     && dbl_call_eligible(
                         lcnode.as.call_expr.target, lcnode.as.call_expr.first_arg, lcnode.as.call_expr.arg_count)) {
@@ -1501,8 +1492,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
                     }
                 }
 
-                //------------------ a local later reassigned to a non-number must stay boxed: its
-                //------------------ numeric initializer alone cannot justify a native slot
+                //------------------ a local later reassigned to a non-number must stay boxed
                 if (v_is_n && !decl_target.empty()
                     && var_reassigned_non_number(decl_target, state.current_func_body, v_idx))
                     v_is_n = false;
@@ -1527,10 +1517,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
                     if (is_int_tmp) {
                         tmp_is_integer[i] = true;
                         out << "int64_t _tmp_" << node_idx << "_" << i << " = ";
-                        //------------------ a value the int flag proves integer (an Integer literal, a
-                        //------------------ constant like math.maxinteger) cannot be narrowed through
-                        //------------------ the double slot: 2^63 does not fit and wraps, so emit its
-                        //------------------ exact int64 form instead of the native double expression
+                        //------------------ a value the int flag proves integer takes its exact int64 form: 2^63 wraps through the double slot
                         bool exact = false;
                         std::string exact_v = int_flag_expr(v_idx, 1) == "true" ? int_value_expr(v_idx, 1, &exact) : "";
                         if (exact)
@@ -1553,9 +1540,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
         out << "size_t _rg_mid_" << node_idx << " = _fr.mark();\n";
     }
 
-    //------------------ conflicting multiple assignment (`a[i], a, i = j, i, i`): stock evaluates every
-    //------------------ LHS table and key before the first store, so a target whose table or key reads a
-    //------------------ name this statement also assigns must be snapshotted up front
+    //------------------ conflicting multiple assignment: a target reading a name this statement assigns is snapshotted first
     std::map<size_t, std::pair<std::string, std::string>> conflict_temps;
     if (!is_local && !is_global && t_count > 1) {
         std::set<std::string_view> earlier_names;
@@ -1607,8 +1592,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
             bool in_native = std::find(state.native_numbers.begin(), state.native_numbers.end(), name)
                 != state.native_numbers.end();
             bool val_is_native = (i < v_count && tmp_is_native[i]);
-            //------------------ _ENV stays a boxed LValue: global access goes through the value, and a
-            //------------------ native slot could not be indexed
+            //------------------ _ENV stays a boxed LValue: global access goes through it and a native slot cannot be indexed
             bool is_n = name != "_ENV"
                 && (in_native || val_is_native
                     || (tuple_fill_n > 0 && i + 1 >= v_count && i + 1 < v_count + tuple_fill_n));
@@ -1713,10 +1697,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
         if (tuple_here) {
         } else if (i < v_count) {
             if (i == v_count - 1 && last_is_call) {
-                //------------------ A trailing call may return 0 values (e.g. a dead coroutine.wrap
-                //------------------ falling off its end): guard the first-slot read so the target gets
-                //------------------ nil instead of a stale slot. Raw inline storage (no nil defaults)
-                //------------------ makes the unguarded read observable; the branch predicts perfectly.
+                //------------------ a trailing call may return 0 values, so the first-slot read is guarded to give nil, not a stale slot
                 if (single_adopt) {
                     val_str = "_ad_" + std::to_string(node_idx) + ".value";
                     num_str = val_str + ".as_number()";
@@ -1751,8 +1732,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
         uint32_t t_idx = ctx.block_statements[first_t + i];
         const auto &t_node = ctx.nodes[t_idx];
 
-        //------------------ integer locals take the Int64 payload: the .as_number() form rounds every
-        //------------------ magnitude above 2^53, so an exact integer value must use .as_integer()
+        //------------------ integer locals take the Int64 payload: .as_number() rounds magnitudes above 2^53
         auto int_form = [](const std::string &num) {
             static const std::string k_num = ".as_number()";
             static const std::string k_int = ".as_integer()";
@@ -1914,8 +1894,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
                         << t_idx << "); clx::LTable* _t" << t_idx << " = static_cast<clx::LTable*>(_tb" << t_idx
                         << ".as_pointer());";
                 }
-                //------------------ a negative key must not wrap into a slot index: it takes the
-                //------------------ generic store with its own integer value as the key
+                //------------------ a negative key must not wrap into a slot index: it takes the generic store of its own integer key
                 out << " int64_t _ki" << t_idx << " = static_cast<int64_t>(";
                 emit_native(t_node.as.table_access.key);
                 out << "); size_t _k" << t_idx << " = (_ki" << t_idx << " >= 1) ? static_cast<size_t>(_ki" << t_idx
@@ -1948,8 +1927,7 @@ void CodeEmitter::emitAssignmentLike(const ASTNode &node, uint32_t node_idx) {
                         out << "; if (_b.type != clx::ValueType::Table) clx::throw_index_error(L, _b);";
                         out << " clx::LTable* _t = static_cast<clx::LTable*>(_b.as_pointer());";
                     }
-                    //------------------ the key is only known to be a number here: see the note above on
-                    //------------------ non-integral and non-positive keys
+                    //------------------ the key is only known to be a number: see the non-integral and non-positive note above
                     out << " double _kdw = static_cast<double>(";
                     emit_native(k_idx);
                     out << "); size_t _k = clx::array_key(_kdw); if (_k != 0 && !clx::table_has_newindex(L, _t) && _k - 1 < _t->array_size) [[likely]] { clx::LValue _svw = "
@@ -2074,8 +2052,7 @@ void CodeEmitter::emitTableConstructor(const ASTNode &node, uint32_t node_idx) {
         out << "L->create_table(";
     }
     if (presize_ok) {
-        //------------------ a descending loop's limit is not an element count: a negative hint presizes to
-        //------------------ zero instead of asking for an enormous array
+        //------------------ a descending loop's limit is not an element count: a negative hint presizes to zero
         out << "clx::presize_hint(static_cast<double>(";
         emit_native(state.table_presize[node_idx]);
         out << "))";

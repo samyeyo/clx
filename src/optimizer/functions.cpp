@@ -79,8 +79,7 @@ void pass_callables(const ASTContext &ctx, AnalysisState &state, PassScratch &sk
         traverse_node(ctx, ctx.nodes[fdef.second].as.func_def.body_block, cb);
     }
 
-    //------------------ math.type reports "integer"/"float": a native double parameter would answer
-    //------------------ for the caller, so every parameter it inspects must stay a boxed LValue
+    //------------------ math.type reports "integer"/"float", so every parameter it inspects stays a boxed LValue
     for (const auto &fdef : func_defs) {
         auto &native_vec = state.func_param_native[fdef.first];
         const auto &fn = ctx.nodes[fdef.second].as.func_def;
@@ -396,9 +395,7 @@ void pass_callables(const ASTContext &ctx, AnalysisState &state, PassScratch &sk
             t_idx = ctx.block_statements[ldnode.as.local_decl.first_ident];
             v_idx = ctx.block_statements[ldnode.as.local_decl.first_value];
         } else if (ldnode.type == NodeType::Assignment) {
-            //------------------ assignment-defined functions (e.g. mutually recursive `expr`)
-            //------------------ qualify with the same checks; forward references degrade to the
-            //------------------ generic cell path via native_emitted gating at codegen time.
+            //------------------ assignment-defined functions qualify under the same checks; forward references fall back to the cell path
             if (ldnode.as.assign.target_count != 1 || ldnode.as.assign.value_count != 1)
                 continue;
             t_idx = ctx.block_statements[ldnode.as.assign.first_target];
@@ -429,9 +426,7 @@ void pass_callables(const ASTContext &ctx, AnalysisState &state, PassScratch &sk
                         return;
                     }
                     if (n.type == NodeType::Identifier) {
-                        //------------------ globals resolve through _G exactly like locals (chunk
-                        //------------------ locals are _G-registered), so only nested closures are
-                        //------------------ unsound here: their cells would freeze by-value impl params.
+                        //------------------ globals resolve through _G like locals; only nested closures are unsound (cells freeze by-value params)
                         return;
                     }
                     if (n.type == NodeType::Vararg) {
@@ -526,9 +521,7 @@ void pass_callables(const ASTContext &ctx, AnalysisState &state, PassScratch &sk
                 };
                 nd_scan(nd_scan, fn.as.func_def.body_block);
 
-                //------------------ void functions (no ReturnStatement owned by the body) skip the
-                //------------------ all-paths-return proof: every path falls through to the impl's
-                //------------------ trailing nil return, which is exactly stock's zero-value result.
+                //------------------ void functions skip the all-paths-return proof: every path falls through to the trailing nil return
                 bool has_return = false;
                 for (uint32_t oi = 0; oi < ctx.nodes.size(); ++oi) {
                     auto oit = state.node_func_owner.find(oi);
@@ -596,9 +589,7 @@ void pass_callables(const ASTContext &ctx, AnalysisState &state, PassScratch &sk
                         if (!nd_exact || nidx == 0xFFFFFFFF || nidx >= ctx.nodes.size())
                             return;
                         const auto &n = ctx.nodes[nidx];
-                        //------------------ the native impl forms are self-recursive lambdas: the name has no
-                        //------------------ local slot there, so a bare reference to it (e.g. passing the
-                        //------------------ function as a value) must keep the ordinary closure body
+                        //------------------ the native impls are self-recursive lambdas without a name slot, so a bare value reference stays boxed
                         if (n.type == NodeType::Identifier && !n.as.ident.is_global
                             && std::string_view(n.as.ident.name, n.as.ident.length) == fname) {
                             nd_exact = false;
@@ -652,9 +643,7 @@ void pass_callables(const ASTContext &ctx, AnalysisState &state, PassScratch &sk
                         } else if (n.type == NodeType::UnaryOp) {
                             self(self, n.as.unary_op.expr);
                         } else if (n.type == NodeType::CallExpression) {
-                            //------------------ a plain Identifier target is the call itself, not a value use:
-                            //------------------ walking it would trip the bare-reference rule below and
-                            //------------------ disqualify every self-recursive function
+                            //------------------ a plain Identifier target is the call itself, not a value use (else every self-recursive fn is disqualified)
                             if (ctx.nodes[n.as.call_expr.target].type != NodeType::Identifier)
                                 self(self, n.as.call_expr.target);
                             for (uint32_t i = 0; i < n.as.call_expr.arg_count; ++i)
@@ -783,10 +772,7 @@ void pass_callables(const ASTContext &ctx, AnalysisState &state, PassScratch &sk
     }
 }
 
-//------------------ tuple_value_ok: a multi-return value position that the tuple impl can emit.
-//------------------ Arithmetic (and unary minus) coerce their operands at runtime exactly like the
-//------------------ native_direct bodies do, so they need no proof; bare reads/calls keep their value
-//------------------ uncoerced on the generic path and therefore require a yields_number proof.
+//------------------ tuple_value_ok: a multi-return value position the tuple impl can emit (coercing ops need no proof)
 static bool tuple_value_ok(const ASTContext &ctx, const AnalysisState &state, uint32_t node_idx,
     const std::set<std::string_view> *known_numbers, std::string_view self_name,
     const std::set<std::string_view> *param_numbers) {
@@ -810,10 +796,7 @@ static bool tuple_value_ok(const ASTContext &ctx, const AnalysisState &state, ui
     return yields_number(ctx, state, nidx, known_numbers, self_name, param_numbers);
 }
 
-//------------------ pass_multi_native: functions returning 2-4 native doubles via a tuple struct.
-//------------------ A function qualifies when every return holds the same N in [2,4] tuple-emittable
-//------------------ values (or forwards a single call to an already-qualified tuple callee of the
-//------------------ same N), with no globals, no varargs, no nested closures and no self-recursion.
+//------------------ pass_multi_native: functions returning 2-4 native doubles through a tuple struct
 void pass_multi_native(const ASTContext &ctx, AnalysisState &state, PassScratch &sk, uint32_t root_node) {
     (void)root_node;
     auto &func_defs = sk.func_defs;

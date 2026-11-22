@@ -68,8 +68,7 @@ struct AnalysisState {
 
     //------------------ Per-function analysis data
     std::map<std::pair<uint32_t, std::string_view>, std::set<std::string_view>> numeric_table_fields;
-    //------------------ struct promotion: locals compiled to native structs instead of LTable
-    //------------------ (key owns its name: candidate vectors are destroyed after the pass)
+    //------------------ struct_locals: locals compiled to native structs instead of LTable (key owns its name)
     std::map<std::pair<uint32_t, std::string>, StructLocal> struct_locals;
     //------------------ goto_crossed_locals: locals whose initializer can be skipped by a goto (from pass_local_hygiene)
     std::set<std::string_view> goto_crossed_locals;
@@ -84,45 +83,32 @@ struct AnalysisState {
     std::set<std::string_view> direct_callables;
     std::set<std::string_view> fast_callables;
     std::set<std::string_view> native_direct_funcs;
-    //------------------ void_funcs: native-direct callees with no ReturnStatement at all. Their impl
-    //------------------ falls through to the trailing nil return (stock: zero values). Single-value call
-    //------------------ sites use the impl directly; multi-value sites discard it via the comma operator.
+    //------------------ void_funcs: native-direct callees with no return; call sites get the trailing nil
     std::set<std::string_view> void_funcs;
     std::map<std::string, uint32_t, std::less<>> multi_native_return_counts;
     std::set<std::string, std::less<>> numeric_builtin_aliases;
     std::map<std::string_view, uint32_t> func_param_counts;
     std::map<std::string_view, std::vector<bool>> func_param_native;
-    //------------------ func_param_body: snapshot of func_param_native before call-site argument
-    //------------------ proofs disqualify params; identifies functions whose bodies can use a fast variant.
+    //------------------ func_param_body: func_param_native snapshot taken before call sites disqualify params
     std::map<std::string_view, std::vector<bool>> func_param_body;
     //------------------ fast_body_funcs: functions eligible for a native-double fast variant.
     std::set<std::string_view> fast_body_funcs;
-    //------------------ fast_call_sites: CallExpression nodes whose args are proven numeric, so a
-    //------------------ mixed function (fast variant + generic closure) can take the fast path here.
+    //------------------ fast_call_sites: CallExpression nodes whose args are proven numeric
     std::set<uint32_t> fast_call_sites;
-    //------------------ slow_call_funcs: fast-body functions with at least one unproven call site;
-    //------------------ they emit both the fast variant and a fully generic closure body.
+    //------------------ slow_call_funcs: fast-body functions with an unproven call site, so they also emit a generic body
     std::set<std::string_view> slow_call_funcs;
-    //------------------ generic_body_func: FunctionDef whose body is currently emitted as the generic
-    //------------------ closure of a mixed function; params stay LValue and fast calls are suppressed.
+    //------------------ generic_body_func: FunctionDef whose body is emitted as the generic closure of a mixed function
     uint32_t generic_body_func = 0xFFFFFFFF;
     std::set<std::string_view> reassigned_vars;
     std::set<std::string_view> assigned_targets;
-    //------------------ nogc_locals: (owner scope, local name) proven to never hold a GC-managed
-    //------------------ value (only numbers, booleans, nil, strings — none traced by the collector).
-    //------------------ Codegen skips their frame slot entirely. Owner is the FunctionDef node
-    //------------------ index, or 0xFFFFFFFF for file scope. Filled by pass_nogc_locals.
+    //------------------ nogc_locals: (owner scope, local) proven to never hold a GC-managed value, so codegen skips its frame slot
     std::set<std::pair<uint32_t, std::string_view>> nogc_locals;
     std::set<std::string_view> int_numeric_arrays;
     //------------------ for_counter_names: numeric-for loop counter identifiers. Codegen emits
     std::set<std::string_view> for_counter_names;
-    //------------------ referenced_globals: global names read by generated code, filled by codegen
-    //------------------ identifier emission. The driver unions them across modules to emit filtered
-    //------------------ std registration (only referenced base functions get linked). Owning strings:
-    //------------------ the per-file AST backing string_views dies before main is emitted.
+    //------------------ referenced_globals: global names read by generated code, driving filtered std registration
     std::set<std::string> referenced_globals;
-    //------------------ uses_dynamic_env: user code reads _G/_ENV as a value (dynamic global access
-    //------------------ invisible to referenced_globals). Forces full std registration.
+    //------------------ uses_dynamic_env: user code reads _G/_ENV as a value, forcing full std registration
     bool uses_dynamic_env = false;
     std::set<std::string_view> constant_upvalues;
     std::set<std::string_view> string_builders;
@@ -133,14 +119,11 @@ struct AnalysisState {
     std::unordered_map<uint32_t, std::string> hoisted_lookups;
     std::unordered_map<std::string, std::string> hoisted_cfuncs;
     std::unordered_map<std::string, std::string> builtin_aliases;
-    //------------------ intrinsic_aliases: local bound to an intrinsically lowered std function
-    //------------------ (alias name -> registry entry); call sites lower to raw C++ calls.
+    //------------------ intrinsic_aliases: local bound to an intrinsically lowered std function (alias -> registry entry)
     std::map<std::string, const BuiltinEntry *, std::less<>> intrinsic_aliases;
-    //------------------ builtin_field_writes: "module.field" keys written somewhere in this
-    //------------------ module's own code, disqualifying static lowering for that key.
+    //------------------ builtin_field_writes: "module.field" keys written here, disqualifying static lowering for that key
     std::set<std::string, std::less<>> builtin_field_writes;
-    //------------------ builtin_module_writes: std module globals reassigned wholesale ("math = {}"
-    //------------------ or a dynamic-key write), disqualifying every lowering that reads that module.
+    //------------------ builtin_module_writes: std module globals reassigned wholesale, disqualifying every read of that module
     std::set<std::string, std::less<>> builtin_module_writes;
     std::vector<std::string> const_snapshot_cells;
 
@@ -152,13 +135,10 @@ struct AnalysisState {
     bool in_function_def = false;
     bool in_fast_function = false;
     //------------------ current_vararg_table: cpp name of the enclosing function's named vararg table
-    //------------------ ("function f(...t)"); `...` then expands that table instead of the raw arguments
     std::string current_vararg_table;
     bool expect_multivalue = false;
     bool in_native_impl = false;
-    //------------------ dbl-overload emission state: emit_dbl_impl selects the triple-bound
-    //------------------ prologue while emitting a FunctionDef body; in_dbl_impl marks calls/returns
-    //------------------ inside a triple-bound body (returns take the native path, self-calls stay boxed).
+    //------------------ emit_dbl_impl/in_dbl_impl: triple-bound body emission state (returns native, self-calls boxed)
     bool emit_dbl_impl = false;
     bool in_dbl_impl = false;
     bool emit_multi_impl = false;
@@ -167,8 +147,7 @@ struct AnalysisState {
     std::string_view current_multi_func;
     std::string_view current_native_func;
     std::set<std::string_view> native_emitted;
-    //------------------ native_dbl_emitted: native-direct callees with a triple-bound (double,
-    //------------------ int-flag, int-shadow) overload emitted; scoped exactly like native_emitted.
+    //------------------ native_dbl_emitted: native-direct callees whose triple-bound overload was emitted
     std::set<std::string_view> native_dbl_emitted;
     std::set<std::string_view> multi_emitted;
     std::unordered_map<std::string_view, std::string> hoisted_tables;
@@ -264,8 +243,7 @@ inline bool is_purely_integer_expr(const ASTContext &ctx, const AnalysisState &s
     if (n.type == NodeType::ParenExpression)
         return is_purely_integer_expr(ctx, state, n.as.paren_expr.expr);
     if (n.type == NodeType::TableAccess) {
-        //------------------ math.maxinteger/mininteger are Int64 constants in stock Lua: reading them
-        //------------------ never yields a float, so no int-array or struct proof is needed
+        //------------------ math.maxinteger/mininteger are Int64 constants, so reading them never yields a float
         if (ctx.nodes[n.as.table_access.table].type == NodeType::Identifier
             && ctx.nodes[n.as.table_access.table].as.ident.is_global
             && ctx.nodes[n.as.table_access.key].type == NodeType::String) {

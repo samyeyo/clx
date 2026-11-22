@@ -47,20 +47,17 @@ static MultiValue pkg_searcher_luafile_vm(LState *L, const LValue *args, size_t 
     int ref = LUA_NOREF;
     std::string err;
     if (!vm->load_file(filename.c_str(), "bt", vm->default_env_registry_ref(), &ref, &err)) {
-        //------------------ a file that exists but does not compile raises the stock "error loading
-        //------------------ module" error instead of being reported as a missing module
+        //------------------ a file that exists but does not compile raises stock's "error loading module" error
         std::string msg = "error loading module '";
         msg.append(args[0].as_string(), args[0].string_len());
         msg += "' from file '" + filename + "':\n\t" + err;
         throw LRuntimeException(LValue(L->intern_string(msg.data(), msg.size())));
     }
-    //------------------ stock's loader searcher returns the resolved file name as the loader's extra
-    //------------------ value, which require hands to the chunk as its second vararg
+    //------------------ stock's loader searcher returns the resolved file name as the loader's extra value
     return MultiValue(VMFunction::from_ref(L, ref), LValue(L->intern_string(filename.data(), filename.size())));
 }
 
-//------------------ pkg_searcher_c - package.searchers[3]: lists the tried cpath files, then reports that C
-//------------------ modules must be linked statically at compile time (see --modules)
+//------------------ pkg_searcher_c: searchers[3] lists the tried cpath files, then reports that C modules link statically
 static MultiValue pkg_searcher_c(LState *L, const LValue *args, size_t count) {
     if (count < 1 || args[0].type != String)
         return MultiValue(LValue(), LValue());
@@ -101,9 +98,7 @@ static MultiValue clx_load(LState *L, const LValue *args, size_t count) {
     size_t len = 0;
     bool from_reader = false;
     if (count > 0 && args[0].type == Function) {
-        //------------------ stock load() also takes a reader: call it until it returns nil.
-        //------------------ A reader error is a load error (nil, message), not a raised error:
-        //------------------ in stock it happens inside the protected parser.
+        //------------------ stock load() also takes a reader: call it until it returns nil; a reader error is a load error
         static constexpr CallSite reader_site = { __FILE__, __LINE__, false, false };
         try {
             for (;;) {
@@ -240,8 +235,7 @@ static bool vm_debug_upvalue(clx::LState *L, clx::LHeader *fn, int64_t n, clx::L
     return true;
 }
 
-//------------------ vm_debug_getinfo - debug.getinfo for a VM closure, described by the Lua debug API and
-//------------------ handed back as a stock-shaped table (the '>' option pops the function it inspects)
+//------------------ vm_debug_getinfo: debug.getinfo for a VM closure, handed back as a stock-shaped table
 static bool vm_debug_getinfo(clx::LState *L, const clx::LValue &fn, const char *what, clx::LValue &out) {
     using namespace clx;
     if (fn.type != Function || fn.as_pointer() == nullptr)
@@ -299,8 +293,7 @@ extern "C" void clx_register_load_builtins(clx::LState *L) {
     LValue loadfile_fn = L->create_closure(clx_loadfile);
     LValue dofile_fn = L->create_closure(clx_dofile);
 
-    //------------------ --dynamic builds give string.dump a VM backing: bytecode strings
-    //------------------ for VM functions, callable VM boxes for native closures (see dump_builtin.cpp)
+    //------------------ --dynamic gives string.dump a VM backing: bytecode strings and callable boxes (see dump_builtin.cpp)
     clx_string_dump_hook = clx_string_dump_dynamic;
     clx_vm_debug_upvalue_hook = vm_debug_upvalue;
     clx_vm_debug_getinfo_hook = vm_debug_getinfo;

@@ -41,9 +41,7 @@ namespace fs = std::filesystem;
 
 std::vector<std::string> precompiled_modules;
 
-//------------------ Std Lua modules shipped as per-module archives (libclx_<name>.a / clx_<name>.lib
-//------------------ in <libdir>/clx or the build tree). --minimal links base + package only; the rest come
-//------------------ in via --modules <name>. base/package are always linked: LState::open() opens them.
+//------------------ kStdModules: std modules shipped as per-module archives; base and package are always linked
 static const char *kStdModules[] = { "base", "package", "string", "table", "math", "io", "os", "utf8", "coroutine", "debug" };
 std::vector<std::string> std_modules;
 
@@ -681,8 +679,7 @@ int main(int argc, char* argv[])
             resolved.empty() ? fs::path(mod + exts[0]) : resolved, mod);
     }
 
-    //------------------ Referenced globals, unioned across input modules: drives the filtered std open
-    //------------------ sequence in main (only referenced base functions get registered — and linked).
+    //------------------ all_referenced_globals: unioned across input modules, driving the filtered std open sequence
     std::set<std::string> all_referenced_globals;
     bool any_dynamic_env = false;
 
@@ -776,10 +773,7 @@ int main(int argc, char* argv[])
         if (dynamic_loading_enabled)
             appender << "extern \"C\" void clx_register_load_builtins(clx::LState *L);\n";
         appender << "int main(int argc, char* argv[]) {\n";
-        //------------------ Filtered std startup: register only referenced base functions so the linker
-        //------------------ strips the rest (per-function registrars in base.cpp). Falls back to the legacy
-        //------------------ full open when module code can touch anything: precompiled/C modules, --dynamic,
-        //------------------ dynamic _G/_ENV access, or require/package (loaded modules may use any base fn).
+        //------------------ filtered std startup: register only referenced base functions, else fall back to the full open
         static const char* kBaseFns[] = { "print", "require", "error", "assert", "tostring", "tonumber",
             "rawequal", "rawget", "rawset", "rawlen", "setmetatable", "getmetatable", "collectgarbage",
             "type", "pcall", "xpcall", "warn", "next", "pairs", "ipairs", "select", nullptr };
@@ -792,7 +786,7 @@ int main(int argc, char* argv[])
                     need_base.insert(*f);
             }
             if (need_base.count("pairs"))
-                need_base.insert("next"); //------------------ pairs() returns the global next iterator
+                need_base.insert("next");
         }
         if (need_full) {
             appender << "    clx::LState* L = clx::open(argc, argv);\n";
@@ -984,9 +978,7 @@ int main(int argc, char* argv[])
         }
     }
 
-    //------------------ Std module archives: base + package always (LState::open needs them), everything
-    //------------------ else for full builds or --modules <name>. Resolved next to the runtime lib
-    //------------------ (<dir>/clx/<file>, <dir>/<file>) so in-tree and installed layouts match on POSIX/Windows.
+    //------------------ std module archives: base + package always, the rest for full builds or --modules <name>
     {
         std::vector<std::string> want = { "base", "package" };
         if (!minimal_active) {

@@ -80,7 +80,7 @@ LState::LState()
     str_name = LValue(intern_string("__name"));
     str_ipairs = LValue(intern_string("__ipairs"));
 
-    //------------------ GC work-vector pre-sizing (callgrind: vector growth is
+    //------------------ GC work-vector pre-sizing: callgrind showed vector growth dominating a minor
 
     gc_worklist.reserve(1 << 18);
     gc_recent.reserve(1 << 18);
@@ -110,8 +110,7 @@ LState::LState()
     stack_low = main_stack_low();
 }
 
-//------------------ main_stack_low: lowest address the process main stack may reach, plus a reserve for
-//------------------ the deepest frame's own locals and for unwinding
+//------------------ main_stack_low: lowest address the process main stack may reach, plus a reserve for the deepest frame
 char *main_stack_low() {
 #if defined(_WIN32)
     return windows_stack_low();
@@ -221,10 +220,7 @@ struct FinalizingUdGuard {
 void LState::invoke_gc_finalizer(LUserdata *ud, const char *tag) {
     if (!ud->metatable)
         return;
-    //------------------ any non-nil __gc is called, as in stock: a table or userdata with __call finalizes the
-    //------------------ object, and a value that cannot be called raises the usual error. Like stock, that error
-    //------------------ is swallowed: luaE_warnerror only reaches a host warning function, and the default host
-    //------------------ has none, so a failing __gc never stops the collection or prints anything
+    //------------------ any non-nil __gc is called, as in stock; a failing finalizer's error is swallowed like luaE_warnerror
     LValue gc_func = ud->metatable->gettable(this->str_gc);
     if (gc_func.type == Nil)
         return;
@@ -238,9 +234,7 @@ void LState::invoke_gc_finalizer(LUserdata *ud, const char *tag) {
     }
 }
 
-//------------------ LState::invoke_gc_finalizer — call __gc metamethod on a table. The table is rooted for the
-//------------------ duration of the call: a finalizer that allocates may trigger a collection, and an unrooted
-//------------------ object would then be swept out from under its own finalizer.
+//------------------ LState::invoke_gc_finalizer: call __gc on a table, rooted because the finalizer may trigger a collection
 void LState::invoke_gc_finalizer(LTable *t, const char *tag) {
     if (!t)
         return;
@@ -259,10 +253,7 @@ void LState::invoke_gc_finalizer(LTable *t, const char *tag) {
     }
 }
 
-//------------------ LState::run_exit_finalizers — run the __gc of every marked table and userdata still alive,
-//------------------ the way stock's lua_close does: an object is marked when a metatable carrying __gc is
-//------------------ installed, so a later __gc assignment cannot mark it retroactively. The candidates are pinned
-//------------------ first so a finalizer that allocates cannot sweep (and recycle) one before its own __gc runs.
+//------------------ LState::run_exit_finalizers: run the __gc of every marked table and userdata still alive, like lua_close
 void LState::run_exit_finalizers() {
     std::vector<LHeader *> dying;
     for (int pass = 0; pass < 2; ++pass) {
@@ -288,9 +279,7 @@ MultiValue (*clx_string_dump_hook)(LState *L, const LValue *args, size_t count) 
 bool (*clx_vm_debug_upvalue_hook)(LState *L, LHeader *fn, int64_t n, LValue &name, LValue &value) = nullptr;
 bool (*clx_vm_debug_getinfo_hook)(LState *L, const LValue &fn, const char *what, LValue &out) = nullptr;
 
-//------------------ exec_result: stock luaL_execresult — a wait status decoded into (ok, "exit"|"signal",
-//------------------ code). Core-resident so a popen handle's close reports the same triple as os.execute
-//------------------ without the io archive depending on the os archive (--minimal --modules io links alone)
+//------------------ exec_result: stock luaL_execresult — wait status decoded into (ok, "exit"|"signal", code)
 MultiValue exec_result(LState *L, int status) {
     if (status == -1) {
         int en = errno;
@@ -412,17 +401,14 @@ LState::~LState() {
     gc_recent.free();
     gc_pinned.free();
 
-    //------------------ the main thread is on neither GC chain, so it is released here: last, because
-    //------------------ run_exit_finalizers can run a collection (and the finalizer's own calls) that still
-    //------------------ consult it
+    //------------------ the main thread is on neither GC chain, so it is released here, last (finalizers may still consult it)
     delete main_thread;
     main_thread = nullptr;
 }
 
 //------------------ CloseGuard::~CloseGuard — close guard destructor
 CloseGuard::~CloseGuard() noexcept(false) {
-    //------------------ <close> accepts any value carrying a __close metamethod: tables and userdata
-    //------------------ (a file handle is userdata, so restricting this to tables left files open)
+    //------------------ <close> accepts any value carrying __close: tables and userdata (a file handle is userdata)
     LTable *mt = nullptr;
     if (val.type == Table)
         mt = tbl_metatable(static_cast<LTable *>(val.as_pointer()));
@@ -439,9 +425,7 @@ CloseGuard::~CloseGuard() noexcept(false) {
     LThread *th = L->running_thread;
     bool unwinding = std::uncaught_exceptions() > 0;
     bool self_closing = th && (th->closing || th->self_close);
-    //------------------ stock hands __close the error being unwound, or the one an earlier __close of the
-    //------------------ same unwind raised; normal exits and clean closes get the object alone, with no
-    //------------------ second argument at all (not a nil one)
+    //------------------ stock hands __close the error being unwound, or the one an earlier __close of the unwind raised
     if (th && th->closing) {
         if (th->close_error && th->yield_args.count > 0) {
             args[1] = th->yield_args[0];
@@ -469,8 +453,7 @@ CloseGuard::~CloseGuard() noexcept(false) {
             t->yield_args = MultiValue(e.error_obj);
             t->close_error = true;
         } else if (unwinding) {
-            //------------------ stock replaces the pending error: the remaining closers and the catch site
-            //------------------ that reports it see this one instead
+            //------------------ stock replaces the pending error: the remaining closers and the catch site see this one
             L->close_err = e.error_obj;
             L->has_close_err = true;
         } else {
@@ -514,10 +497,7 @@ LValue LState::create_table(size_t asize, size_t hsize) {
     gc_maybe_collect();
 
     LTable *t;
-    //------------------ Size-segregated pool pop: a sized creation reuses a big-buffer table (same-shape
-    //------------------ waves land head-first), while a size-unknown creation ({}) takes a small one — a
-    //------------------ 90KB array must never park, counted, on a table that will never use it while its
-    //------------------ rightful user allocates another (linear pool growth wave-over-wave).
+    //------------------ size-segregated pool pop: a sized creation reuses a big-buffer table, a size-unknown one takes a small
     bool want_big = (asize > 0);
     LTable **pool = want_big ? &free_tables_big : &free_tables;
     if (!*pool)
@@ -531,8 +511,7 @@ LValue LState::create_table(size_t asize, size_t hsize) {
         if (clx_table_release_ptr && t->ext && t->ext->vm_origin >= 0)
             clx_table_release_ptr(this, t);
         if (!want_big && t->array && t->array != t->small_array) {
-            //------------------ small creation drew big (small list drained): free the array it will never
-            //------------------ use instead of parking it. No accounting: dispose already subtracted it.
+            //------------------ small creation drew big (small list drained): free the array it will never use instead of parking it
             table_free_array(t->array, t->array_types, t->small_array);
             t->array_cap = 0;
         }
@@ -686,9 +665,7 @@ void set_global(LState *L, const char *name, const LValue &val) {
 extern thread_local LState *clx_current_L;
 thread_local LState *clx_current_L = nullptr;
 
-//------------------ open_bare — create Lua state without registering any std library. Generated
-//------------------ executables use this plus a filtered registration sequence so the linker strips
-//------------------ unreferenced base functions; open() below preserves the legacy all-registered behavior.
+//------------------ open_bare: create a Lua state without registering any std library, for filtered registration
 LState *open_bare(int argc, char *argv[]) {
     LState *L = new LState();
     clx_current_L = L;

@@ -67,8 +67,7 @@ static MultiValue debug_setmetatable(LState *L, const LValue *args, size_t count
     case ValueType::Table: {
         LTable *t = static_cast<LTable *>(v.as_pointer());
         tbl_set_metatable(t, mt);
-        //------------------ registered after the install, so the list add sees the metatable that is now in
-        //------------------ place (it is what decides whether the table is marked finalizable)
+        //------------------ registered after the install so the list add sees the metatable now in place (it decides finalizability)
         if (mt)
             meta_list_add(L, t);
         else
@@ -141,11 +140,7 @@ static MultiValue debug_setuservalue(LState *L, const LValue *args, size_t count
     return MultiValue(args[0]);
 }
 
-//------------------ upvalue_slot: the n-th upvalue cell of a function, or nullptr when out of range.
-//------------------ One index model for get/set/id/join: the runtime's cell order, numbered from 1,
-//------------------ exactly as the Lua C API adapter numbers them (luaapi_upvalue_cell). A compiled
-//------------------ closure keeps its captures inside the emitted C++ lambda, so the cells here are the
-//------------------ in-scope capture cells the closure was created with, and their names are not recorded.
+//------------------ upvalue_slot: the n-th (1-based) upvalue cell of a function, or nullptr when out of range
 static LUpValue *upvalue_slot(LValue &func, int64_t n) {
     if (func.type != ValueType::Function || n < 1)
         return nullptr;
@@ -195,9 +190,7 @@ static MultiValue debug_setupvalue(LState *L, const LValue *args, size_t count) 
     return MultiValue(LValue(L->intern_string(std::string())));
 }
 
-//------------------ debug_upvalueid: stable identity for one upvalue cell, shaped like stock's
-//------------------ light userdata; a heap userdata would be collected and reused, and the runtime has
-//------------------ no light-userdata value type, so the address is interned as text.
+//------------------ debug_upvalueid: stable identity for one upvalue cell, interned as text (no light userdata type)
 static MultiValue debug_upvalueid(LState *L, const LValue *args, size_t count) {
     if (count < 2 || args[0].type != ValueType::Function)
         error(L, bad_arg_msg(L, 1, "debug.upvalueid", "function expected").c_str());
@@ -213,15 +206,12 @@ static MultiValue debug_upvalueid(LState *L, const LValue *args, size_t count) {
     return MultiValue(LValue(L->intern_string(buf)));
 }
 
-//------------------ stub_error: raises a "not available in compiled code" message behind the call site's
-//------------------ file:line prefix, so an uncaught failure points at the statement that made the call
+//------------------ stub_error: raises "not available in compiled code" behind the call site's file:line prefix
 [[noreturn]] static void stub_error(LState *L, const char *msg) {
     error(L, (file_line_prefix(L) + msg).c_str());
 }
 
-//------------------ debug_upvaluejoin: refused for compiled code. A compiled closure reads its captures
-//------------------ through the C++ lambda it was emitted as, so replacing the recorded cell would change
-//------------------ what debug.getupvalue reports without changing what the function reads.
+//------------------ debug_upvaluejoin: refused for compiled code, whose captures live in the emitted C++ lambda
 static MultiValue debug_upvaluejoin(LState *L, const LValue *args, size_t count) {
     (void)args;
     (void)count;
@@ -249,8 +239,7 @@ static MultiValue debug_traceback(LState *L, const LValue *args, size_t count) {
     return MultiValue(LValue(L->intern_string(text)));
 }
 
-//------------------ debug_getinfo: a run-time loaded chunk is described by the embedded VM; an AOT closure
-//------------------ has no line/frame table, so only that case reports the entry as unavailable
+//------------------ debug_getinfo: a run-time loaded chunk is described by the embedded VM; AOT closures report unavailable
 static MultiValue debug_getinfo(LState *L, const LValue *args, size_t count) {
     std::string_view what = "flnSu";
     if (count >= 2 && args[1].type == ValueType::String)

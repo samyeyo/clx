@@ -77,19 +77,13 @@ class State;
 struct Nil;
 struct PResult;
 
-//------------------ Customization point: specialize to teach the API about your own types
-//------------------     template<> struct clx::lua::Convert<Vec2> {
-//------------------         static LValue to_lua(LState* L, const Vec2& v);
-//------------------         static Vec2   from_lua(LState* L, const LValue& v, int argn);
-//------------------     };
+//------------------ Convert<T>: customize how the API maps a C++ type to Lua (specialize with to_lua/from_lua)
 template<class T> struct Convert;
 
 //------------------ Error type thrown by the runtime (catch this around calls into Lua)
 using Error = clx::LRuntimeException;
 
-//=====================================================================================================
-//  Nil / Boolean
-//=====================================================================================================
+//------------------ Nil / Boolean
 
 //------------------ Nil tag: `v = lua::nil;`, `f(lua::nil)`
 struct Nil {
@@ -117,9 +111,7 @@ private:
     bool b_ = false;
 };
 
-//=====================================================================================================
-//  Number: Lua 5.4 number (int64 | double) with exact Lua arithmetic/comparison semantics, constexpr
-//=====================================================================================================
+//------------------ Number: Lua 5.4 number (int64 | double) with exact Lua arithmetic/comparison semantics, constexpr
 class Number {
 public:
     constexpr Number() noexcept
@@ -348,9 +340,7 @@ private:
     bool is_int_;
 };
 
-//=====================================================================================================
-//  Conversion machinery (C++ <-> Lua)
-//=====================================================================================================
+//------------------ Conversion machinery (C++ <-> Lua)
 namespace detail {
 
     //------------------ Per-thread "current state": lets objects be built without passing LState*
@@ -495,7 +485,7 @@ namespace detail {
             };
     }
 
-} // namespace detail
+}
 
 //------------------ Concepts
 template<class T>
@@ -531,8 +521,7 @@ private:
 
 namespace detail {
 
-    //------------------ The per-state registry table, created on first use: the runtime defers it to
-    //------------------ debug.getregistry(), so a fresh state that never touches the debug library has none
+    //------------------ registry: the per-state registry table, created on first use (as debug.getregistry() does)
     inline LTable* registry(LState* L) {
         if (!L->registry) {
             LValue r = L->create_table(0, 4);
@@ -560,11 +549,9 @@ namespace detail {
         }
     };
 
-} // namespace detail
+}
 
-//=====================================================================================================
-//  Value: any Lua value
-//=====================================================================================================
+//------------------ Value: any Lua value
 class Value {
 public:
     //------------------ nil
@@ -604,8 +591,7 @@ public:
 
     ~Value() { unroot(); }
 
-    //------------------ Implicit construction from anything convertible (bool, ints, floats, strings, tables-from-ranges,
-    //------------------ C++ callables, optional<T>, ...). Uses the current State where one is needed.
+    //------------------ implicit construction from anything convertible; uses the current State where one is needed
     template<class T>
         requires(!std::derived_from<std::decay_t<T>, Value> && ToLua<T>)
     Value(T&& x)
@@ -688,8 +674,7 @@ public:
 
     template<class T> T as() const { return from_lvalue<std::remove_cv_t<T>>(state(), v_, 0); }
 
-    //------------------ Implicit *checked* conversion to the Lua object classes: `lua::Table t = f(...);`
-    //------------------ (raises a Lua error if the dynamic type does not match; never converts to C++ scalars)
+    //------------------ implicit checked conversion to the Lua object classes: a mismatch raises a Lua error
     template<class T>
         requires(std::derived_from<T, Value> && !std::same_as<T, Value>)
     operator T() const {
@@ -729,8 +714,7 @@ public:
     //------------------ Raw (metamethod-free) identity comparison
     bool raw_equal(const Value& o) const noexcept { return clx::rawequal(v_, o.v_); }
 
-    //------------------ Calls ---------------------------------------------------------------------
-    //------------------ f(args...) -> first result (nil if none)
+    //------------------ operator(): f(args...) yields the first result, nil when there is none
     template<class... A>
         requires(ToLua<A> && ...)
     Value operator()(A&&... a) const {
@@ -848,9 +832,7 @@ protected:
     friend class Results;
 };
 
-//=====================================================================================================
-//  Proxy: the lvalue returned by operator[]; reads lazily, assigns through
-//=====================================================================================================
+//------------------ Proxy: the lvalue returned by operator[]; reads lazily, assigns through
 class Proxy {
 public:
     Proxy(Value obj, Value key)
@@ -952,9 +934,7 @@ Proxy Value::operator[](K&& key) const {
     return Proxy(*this, Value::make(L, std::forward<K>(key)));
 }
 
-//=====================================================================================================
-//  Results / PResult: multiple return values
-//=====================================================================================================
+//------------------ Results / PResult: multiple return values
 class Results {
 public:
     Results() = default;
@@ -1076,9 +1056,7 @@ PResult Proxy::pcall(A&&... a) const {
     return get().pcall(std::forward<A>(a)...);
 }
 
-//=====================================================================================================
-//  Operators on Value / Proxy (and mixed with C++ values)
-//=====================================================================================================
+//------------------ Operators on Value / Proxy (and mixed with C++ values)
 namespace detail {
 
     template<class A, class B> LState* op_state(const A& a, const B& b) {
@@ -1102,7 +1080,7 @@ namespace detail {
     template<class S>
     concept StringLike = std::convertible_to<const S&, std::string_view> && !std::derived_from<S, Value>;
 
-} // namespace detail
+}
 
 #define CLX_LUA_ARITH(OP, FN)                                                                                          \
     template<class A, class B>                                                                                         \
@@ -1229,9 +1207,7 @@ std::partial_ordering operator<=>(A&& a, B&& b) {
     return std::partial_ordering::unordered;
 }
 
-//=====================================================================================================
-//  GMatchRange: `for (auto m : s.gmatch(pattern))`
-//=====================================================================================================
+//------------------ GMatchRange: `for (auto m : s.gmatch(pattern))`
 class GMatchRange {
 public:
     class iterator {
@@ -1275,9 +1251,7 @@ private:
     Value fn_;
 };
 
-//=====================================================================================================
-//  Function
-//=====================================================================================================
+//------------------ Function
 namespace detail {
 
     template<class T> struct fn_traits;
@@ -1366,7 +1340,7 @@ namespace detail {
         }
     }
 
-} // namespace detail
+}
 
 class Function : public Value {
 public:
@@ -1396,9 +1370,7 @@ private:
         : Value(L, v) { }
 };
 
-//=====================================================================================================
-//  String
-//=====================================================================================================
+//------------------ String
 namespace detail {
 
     //------------------ Run a builtin library function (str_* / table_*) with `self` as first argument
@@ -1409,7 +1381,7 @@ namespace detail {
         return fn(L, args.a, args.n);
     }
 
-} // namespace detail
+}
 
 class String : public Value {
 public:
@@ -1464,7 +1436,8 @@ public:
         return *this;
     }
 
-    //======================== string module as methods ==========================================
+    //------------------ string module as methods
+
     //------------------ s:sub(i [, j])
     String sub(int64_t i, int64_t j = -1) const {
         MultiValue mv = detail::builtin(clx::str_sub, state(), *this, i, j);
@@ -1576,9 +1549,7 @@ auto operator+(A&& a, B&& b) {
         return Value::from_raw(L, clx::add(L, av.raw(), bv.raw()));
 }
 
-//=====================================================================================================
-//  Table
-//=====================================================================================================
+//------------------ Table
 class Table : public Value {
 public:
     //------------------ One element of a brace initializer: positional value OR {key, value}
@@ -1828,7 +1799,8 @@ public:
         return t;
     }
 
-    //======================== table module as methods ===========================================
+    //------------------ table module as methods
+
     //------------------ table.insert(t, v) / table.insert(t, pos, v)
     template<class V>
         requires ToLua<V>
@@ -1913,9 +1885,7 @@ private:
     }
 };
 
-//=====================================================================================================
-//  UserData / Class<T>: expose C++ objects to Lua
-//=====================================================================================================
+//------------------ UserData / Class<T>: expose C++ objects to Lua
 namespace detail {
 
     //------------------ Per-type metatable stored in the registry (created on first use)
@@ -1924,8 +1894,7 @@ namespace detail {
         LValue reg(ValueType::Table, registry(L));
         LValue found = clx::raw_get(L, reg, key.c_str());
         if (found.type == ValueType::Table) {
-            //------------------ the metatable may have been created earlier by a UserData, so a name
-            //------------------ given later to Class<T> must still take effect
+            //------------------ the metatable may already exist from a UserData, so a name given later still takes effect
             if (!display_name.empty())
                 clx::raw_set(L, found, "__name", LValue(L->intern_string(display_name.data(), display_name.size())));
             return Value::from_raw(L, found);
@@ -1947,7 +1916,7 @@ namespace detail {
         return mt;
     }
 
-} // namespace detail
+}
 
 class UserData : public Value {
 public:
@@ -2003,11 +1972,7 @@ private:
         : Value(L, v) { }
 };
 
-//------------------ Class<T>: describe how T looks from Lua
-//------------------     lua::Class<Counter>("Counter")
-//------------------         .method("inc", &Counter::inc)
-//------------------         .method("get", &Counter::get)
-//------------------         .constructor<int>(L.globals(), "new");
+//------------------ Class<T>: describes how T looks from Lua (name, methods, constructors)
 template<class T> class Class {
 public:
     explicit Class(std::string_view name = {})
@@ -2049,9 +2014,7 @@ private:
     Table mt_;
 };
 
-//=====================================================================================================
-//  Thread (coroutine)
-//=====================================================================================================
+//------------------ Thread (coroutine)
 class Thread : public Value {
 public:
     //------------------ New suspended coroutine running `fn`
@@ -2111,9 +2074,7 @@ private:
     }
 };
 
-//=====================================================================================================
-//  State: owns (or wraps) an LState and makes it the current one
-//=====================================================================================================
+//------------------ State: owns (or wraps) an LState and makes it the current one
 class State {
 public:
     //------------------ Open a fresh clx state with the standard libraries
@@ -2181,9 +2142,7 @@ private:
     LState* prev_;
 };
 
-//=====================================================================================================
-//  Raising errors from C++
-//=====================================================================================================
+//------------------ Raising errors from C++
 [[noreturn]] inline void error(std::string_view msg) {
     std::string s(msg);
     clx::error(detail::current(), s.c_str());
@@ -2194,9 +2153,7 @@ inline void check(bool cond, std::string_view msg) {
         error(msg);
 }
 
-//=====================================================================================================
-//  Conversions: definitions
-//=====================================================================================================
+//------------------ Conversions: definitions
 namespace detail {
 
     //------------------ Fill a new Lua table from a C++ range (array) or range of pairs (map)
@@ -2220,7 +2177,7 @@ namespace detail {
         return t;
     }
 
-} // namespace detail
+}
 
 template<class T> LValue to_lvalue(LState* L, T&& x) {
     using U = std::decay_t<T>;
@@ -2335,9 +2292,7 @@ template<class T> T from_lvalue(LState* L, const LValue& v, int argn) {
         return Convert<U>::from_lua(L, v, argn);
 }
 
-//=====================================================================================================
-//  Streams, formatting, literals
-//=====================================================================================================
+//------------------ Streams, formatting, literals
 template<class T>
     requires ValueLike<T>
 std::ostream& operator<<(std::ostream& os, const T& v) {
@@ -2360,9 +2315,9 @@ namespace literals {
     //------------------ "text"_s -> lua::String in the current state
     inline String operator""_s(const char* s, size_t n) { return String(detail::current(), std::string_view(s, n)); }
 
-} // namespace literals
+}
 
-} // namespace clx::lua
+}
 
 #if defined(__cpp_lib_format)
 //------------------ std::format support: std::format("{}", table)

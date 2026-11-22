@@ -157,9 +157,7 @@ extern "C" int clx_vm_native_bridge_call(lua_State *L) {
     }
     LState *clx_L = nb->vm->clx_L();
 
-    //------------------ lua_error() unwinds with longjmp, so the root frames opened below never run their
-    //------------------ destructors: the chain has to be cut back to the head we entered with, or it keeps
-    //------------------ pointing into this abandoned stack frame and a later mark walks garbage
+    //------------------ lua_error() unwinds with longjmp, so the root chain is cut back to the head we entered with
     RootRange *saved_top_root = clx_L->top_root;
 
     int nargs = lua_gettop(L);
@@ -194,12 +192,10 @@ extern "C" int clx_vm_native_bridge_call(lua_State *L) {
         }
     }
 
-    //------------------ report the calling chunk's position and call shape, so a library error in a
-    //------------------ dynamic chunk reads like stock's ("[string ...]:1: ...", "calling 'x' on bad self")
+    //------------------ report the calling chunk's position and call shape, so a dynamic chunk error reads like stock's
     CallSite bridge_site = { "", 0, false, false };
     {
-        //------------------ level 0 is this C function, so its "n" info says how the call was written
-        //------------------ (method vs plain); level 1 supplies the chunk name and line
+        //------------------ level 0 is this C function (method vs plain), level 1 supplies the chunk name and line
         lua_Debug ar0;
         if (lua_getstack(L, 0, &ar0) && lua_getinfo(L, "n", &ar0)) {
             bridge_site.is_method = ar0.namewhat != nullptr && std::strcmp(ar0.namewhat, "method") == 0;

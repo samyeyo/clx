@@ -54,8 +54,7 @@ const char *LRuntimeException::what() const noexcept {
 
 //------------------ LValue::to_string — convert value to string
 std::string LValue::to_string(LState *L) const {
-    //------------------ light userdata carries a foreign pointer: only a GC-allocated block may be
-    //------------------ dereferenced for a metatable, exactly as the C API's lua_touserdata decides
+    //------------------ light userdata carries a foreign pointer: only a GC-allocated block may be dereferenced for a metatable
     LUserdata *ud = nullptr;
     if (L && type == UserData && L->is_allocated_userdata(as_pointer()))
         ud = static_cast<LUserdata *>(as_pointer());
@@ -72,8 +71,7 @@ std::string LValue::to_string(LState *L) const {
                 static constexpr CallSite meta_site = { __FILE__, __LINE__, false, false };
                 MultiValue ret = call_function_rooted(L, meta_func, args, 1, &meta_site);
 
-                //------------------ stock's luaL_tolstring refuses a __tostring result that is not a
-                //------------------ string instead of falling back to the default representation
+                //------------------ stock's luaL_tolstring refuses a __tostring result that is not a string
                 if (ret.count < 1 || ret[0].type != String)
                     throw LRuntimeException(LValue(L->intern_string(
                         file_line_prefix(L) + "'__tostring' must return a string")));
@@ -154,9 +152,7 @@ LValue LValue::slow_eq(const LValue &other) const {
     return LValue(false);
 }
 
-//------------------ g_collate_is_c, g_ctype_is_c: true while LC_COLLATE/LC_CTYPE are the C locale, where string
-//------------------ ordering is a byte comparison and case folding only covers ASCII. os.setlocale refreshes
-//------------------ them; outside the C locale stock defers to strcoll and to the host's character tables
+//------------------ g_collate_is_c/g_ctype_is_c: true while the locale is C, where ordering is bytes and folding is ASCII
 static bool g_collate_is_c = true;
 static bool g_ctype_is_c = true;
 static uint64_t g_locale_generation = 0;
@@ -179,8 +175,7 @@ void refresh_locale_flags() {
     g_locale_generation++;
 }
 
-//------------------ collate_strcmp: stock's l_strcmp - strcoll segment by segment, so strings that share a
-//------------------ prefix up to an embedded zero are still ordered the way stock orders them
+//------------------ collate_strcmp: stock's l_strcmp - strcoll segment by segment, so embedded zeros keep stock's order
 static int collate_strcmp(std::string_view l, std::string_view r) {
     for (;;) {
         std::string lz(l);

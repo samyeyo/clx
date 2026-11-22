@@ -551,8 +551,7 @@ CLX_INLINE MultiValue next(LState* L, const LValue& table, const LValue& key)
         }
     } else if (key.type == ValueType::Double || key.type == ValueType::Int64) {
         int64_t idx = key.type == ValueType::Int64 ? key.as_integer() : static_cast<int64_t>(key.as_number());
-        //------------------ only an integral numeric key lives in the array part: a fractional one
-        //------------------ (1.1) is a hash key, and truncating it would restart the scan at slot 0
+        //------------------ only an integral numeric key lives in the array part: a fractional one is a hash key
         bool array_key = key.type == ValueType::Int64 || key.as_number() == static_cast<double>(idx);
         if (array_key && idx >= 1 && static_cast<size_t>(idx) <= t->array_size) {
             size_t found = clx_find_first_nonnil(

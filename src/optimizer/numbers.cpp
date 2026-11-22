@@ -81,10 +81,7 @@ void pass_constants_and_bounds(const ASTContext &ctx, AnalysisState &state, Pass
         }
     }
 
-    //------------------ alias shadow names: any parameter or loop variable binding whose name would
-    //------------------ shadow a local std-builtin alias; a use could bind to it instead, so the
-    //------------------ name is disqualified program-wide (params live in block_statements, the
-    //------------------ named vararg ident is a direct node index).
+    //------------------ alias_shadow_names: params and loop vars that would shadow a local std-builtin alias
     std::set<std::string, std::less<>> alias_shadow_names;
     for (const auto &node : ctx.nodes) {
         if (node.type == NodeType::FunctionDef) {
@@ -109,8 +106,7 @@ void pass_constants_and_bounds(const ASTContext &ctx, AnalysisState &state, Pass
         }
     }
 
-    //------------------ std module field/module writes: any assignment that can replace a builtin
-    //------------------ value or the module table itself disables static lowering for that key.
+    //------------------ builtin_field_writes/builtin_module_writes: assignments that disable static lowering for a key
     state.builtin_field_writes.clear();
     state.builtin_module_writes.clear();
     for (const auto &node : ctx.nodes) {
@@ -194,8 +190,7 @@ void pass_constants_and_bounds(const ASTContext &ctx, AnalysisState &state, Pass
         }
     }
 
-    //------------------ alias registration: local targets bound to registry std functions gain
-    //------------------ intrinsic/cfunc/numeric lowering; multi-name declarations pair index-wise.
+    //------------------ alias registration: locals bound to registry std functions gain intrinsic/cfunc/numeric lowering
     state.numeric_builtin_aliases.clear();
     state.intrinsic_aliases.clear();
     state.builtin_aliases.clear();
@@ -554,11 +549,7 @@ void pass_numeric_params(const ASTContext &ctx, AnalysisState &state, PassScratc
         }
     }
 
-    //------------------ parameters handed to a callee that does not prove them numeric keep their
-    //------------------ runtime type: lowering them to a native double would coerce a string to 0
-    //------------------ A metamethod receives the raw operands, which may be tables carrying their own
-    //------------------ metamethods (__le doing `a - b`), so its parameters must keep the runtime type.
-    //------------------ Collect functions that are the value of a __-prefixed table field.
+    //------------------ metamethod_funcs: functions used as a __-prefixed table field; their parameters keep the runtime type
     std::set<uint32_t> metamethod_funcs;
     auto is_meta_key = [&](uint32_t kidx) {
         if (kidx >= ctx.nodes.size())
@@ -601,8 +592,7 @@ void pass_numeric_params(const ASTContext &ctx, AnalysisState &state, PassScratc
             if (fparams.empty() || metamethod_funcs.count(ni))
                 continue;
 
-            //------------------ a parameter read for its truthiness (or/and/not/nil test) can be nil
-            //------------------ at run time: a native double would turn that nil into 0, which is truthy
+            //------------------ a parameter read for truthiness can be nil, which a native double would turn into the truthy 0
             auto block_param = [&](uint32_t idx) {
                 if (idx >= ctx.nodes.size() || ctx.nodes[idx].type != NodeType::Identifier)
                     return;
@@ -702,8 +692,7 @@ void pass_numeric_params(const ASTContext &ctx, AnalysisState &state, PassScratc
                                 for (auto &fp : fparams) {
                                     if (fp != nm)
                                         continue;
-                                    //------------------ a bitwise operand may be a string coerced by its
-                                    //------------------ metatable, so it cannot become a native double
+                                    //------------------ a bitwise operand may be a string coerced by its metatable, so it cannot become a native double
                                     if (is_bitwise) {
                                         block_param(idx);
                                         return;
@@ -724,8 +713,7 @@ void pass_numeric_params(const ASTContext &ctx, AnalysisState &state, PassScratc
                     for (uint32_t ai = 0; ai < nn.as.call_expr.arg_count; ++ai)
                         stack.push_back(ctx.block_statements[nn.as.call_expr.first_arg + ai]);
                     uint32_t tgt = nn.as.call_expr.target;
-                    //------------------ builtins that observe the runtime type (or truthiness) of their
-                    //------------------ argument cannot receive a parameter lowered to a native double
+                    //------------------ type-observing builtins (type, tostring, print) cannot receive a parameter lowered to a native double
                     static const std::set<std::string_view> kTypeObservers = { "type", "tostring", "print", "rawlen",
                         "select", "assert", "error" };
                     bool observes_type = false;
@@ -736,8 +724,7 @@ void pass_numeric_params(const ASTContext &ctx, AnalysisState &state, PassScratc
                                             std::string_view(ctx.nodes[tgt].as.ident.name, ctx.nodes[tgt].as.ident.length))
                             > 0;
                     } else if (tgt < ctx.nodes.size() && ctx.nodes[tgt].type == NodeType::TableAccess) {
-                        //------------------ math.type reports "integer"/"float", so a native double argument
-                        //------------------ would answer for the caller: the parameter must keep its subtype
+                        //------------------ math.type reports "integer"/"float", so a native double argument would answer for the caller
                         const auto &ta = ctx.nodes[tgt].as.table_access;
                         if (ta.table < ctx.nodes.size() && ctx.nodes[ta.table].type == NodeType::Identifier
                             && ta.key < ctx.nodes.size() && ctx.nodes[ta.key].type == NodeType::String) {
@@ -1129,7 +1116,7 @@ void pass_int_returns_masks(const ASTContext &ctx, AnalysisState &state, PassScr
                 state.int_returning_funcs.insert(it->second);
         }
 
-        //------------------ int_preserving_masks: for each fast-eligible function, compute (fixed
+        //------------------ int_preserving_masks: per fast-eligible function, which params keep their int flag
 
         {
             auto param_ident = [&](uint32_t fdef_idx, size_t p) -> uint32_t {
@@ -1336,7 +1323,6 @@ void pass_int_returns_masks(const ASTContext &ctx, AnalysisState &state, PassScr
 }
 
 //------------------ nogc_is_expanding: true if a value expression can expand to multiple values
-//------------------ (uncaptured call or vararg, ignoring parenthesis truncation which disables it).
 static bool nogc_is_expanding(const ASTContext &ctx, uint32_t node_idx) {
     uint32_t nidx = node_idx;
     while (nidx < ctx.nodes.size() && ctx.nodes[nidx].type == NodeType::ParenExpression)
@@ -1346,13 +1332,7 @@ static bool nogc_is_expanding(const ASTContext &ctx, uint32_t node_idx) {
     return ctx.nodes[nidx].type == NodeType::CallExpression || ctx.nodes[nidx].type == NodeType::Vararg;
 }
 
-//------------------ nogc_rhs_ok: true if a value expression can only produce numbers, booleans,
-//------------------ nil or strings. The collector traces only Table/Thread/Function/UserData
-//------------------ (gc_push_for_trace) and never touches strings, so such values need no frame
-//------------------ slot. Soundness-critical: unknown node types default to false. In clx (unlike
-//------------------ stock Lua) binary/unary operators on non-table/userdata operands never consult
-//------------------ metamethods (find_bin_metamethod checks Table/UserData only), so arithmetic,
-//------------------ bitwise, concat and comparisons of non-GC operands yield plain values or throw.
+//------------------ nogc_rhs_ok: true if a value expression can only produce numbers, booleans, nil or strings
 static bool nogc_rhs_ok(const ASTContext &ctx, const AnalysisState &state, const std::set<std::string_view> &cands,
     uint32_t node_idx, int depth) {
     if (depth > 64 || node_idx == 0xFFFFFFFF || node_idx >= ctx.nodes.size())
@@ -1418,11 +1398,7 @@ static bool nogc_rhs_ok(const ASTContext &ctx, const AnalysisState &state, const
     }
 }
 
-//------------------ pass_nogc_locals: block locals proven to never hold a GC-managed value.
-//------------------ A candidate survives only if every reaching assignment (declaration values
-//------------------ and later stores, with Lua multi-value adjustment) is nogc-clean. Captured
-//------------------ locals, parameters and unknown RHS kinds stay rooted. Runs last so that
-//------------------ yields_number, native/int-returning funcs and builtin aliases are final.
+//------------------ pass_nogc_locals: block locals proven to never hold a GC-managed value, so their frame slot is skipped
 void pass_nogc_locals(const ASTContext &ctx, AnalysisState &state, PassScratch &sk, uint32_t root_node) {
     (void)root_node;
     (void)sk;

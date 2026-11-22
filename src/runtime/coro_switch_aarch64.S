@@ -13,7 +13,7 @@
 #endif
 .align 2
 
-// CoroutineContext struct offsets
+//------------------ CoroutineContext struct offsets
 .equ CTX_X19,    0
 .equ CTX_X20,    8
 .equ CTX_X21,    16
@@ -24,8 +24,8 @@
 .equ CTX_X26,    56
 .equ CTX_X27,    64
 .equ CTX_X28,    72
-.equ CTX_FP,     80    // x29
-.equ CTX_LR,     88    // x30
+.equ CTX_FP,     80
+.equ CTX_LR,     88
 .equ CTX_SP,     96
 .equ CTX_D8,     104
 .equ CTX_D9,     112
@@ -38,10 +38,7 @@
 .equ CTX_SIZE,   168
 
 
-//------------------ clx_coro_save(CoroutineContext* ctx)
-// Save all callee-saved registers (x19-x30, sp, d8-d15) into *ctx.
-// Returns normally — the captured return address means a later
-// switch into this context resumes after the original call.
+//------------------ clx_coro_save(CoroutineContext* ctx): save x19-x30, sp, d8-d15; resume after the original call
 #ifdef __APPLE__
 .globl _clx_coro_save
 _clx_coro_save:
@@ -65,9 +62,7 @@ clx_coro_save:
     ret
 
 
-//------------------ clx_coro_switch(CoroutineContext* from, CoroutineContext* to)
-// Save current callee-saved registers to *from, restore from *to,
-// then jump to the restored return address (context switch).
+//------------------ clx_coro_switch(CoroutineContext* from, CoroutineContext* to): save *from, restore *to, jump to it
 #ifdef __APPLE__
 .globl _clx_coro_switch
 _clx_coro_switch:
@@ -76,7 +71,6 @@ _clx_coro_switch:
 .type  clx_coro_switch, %function
 clx_coro_switch:
 #endif
-    // Save current context to [x0]
     stp x19, x20, [x0, #CTX_X19]
     stp x21, x22, [x0, #CTX_X21]
     stp x23, x24, [x0, #CTX_X23]
@@ -90,7 +84,6 @@ clx_coro_switch:
     stp d12, d13, [x0, #CTX_D12]
     stp d14, d15, [x0, #CTX_D14]
 
-    // Restore target context from [x1]
     ldp x19, x20, [x1, #CTX_X19]
     ldp x21, x22, [x1, #CTX_X21]
     ldp x23, x24, [x1, #CTX_X23]
@@ -107,9 +100,7 @@ clx_coro_switch:
     ret
 
 
-//------------------ clx_coro_init(CoroutineContext* ctx, void* stack_top, void* entry)
-// Initialise a fresh context for a new coroutine.
-// Sets sp = stack_top, lr = entry, zeros all other callee-saved slots.
+//------------------ clx_coro_init(CoroutineContext* ctx, void* stack_top, void* entry): sp = stack_top, lr = entry
 #ifdef __APPLE__
 .globl _clx_coro_init
 _clx_coro_init:

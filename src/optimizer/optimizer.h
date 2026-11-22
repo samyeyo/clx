@@ -215,8 +215,7 @@ inline bool yields_number(const ASTContext &ctx, const AnalysisState &state, uin
                 && ctx.nodes[ta.key].type == NodeType::String) {
                 std::string_view mod(ctx.nodes[ta.table].as.ident.name, ctx.nodes[ta.table].as.ident.length);
                 std::string_view key(ctx.nodes[ta.key].as.string.text, ctx.nodes[ta.key].as.string.length);
-                //------------------ direct module call proven numeric by the registry, with the
-                //------------------ same write guards that gate static call lowering
+                //------------------ direct module call proven numeric by the registry, under the static-lowering write guards
                 if (builtin_field_ok(state, mod, key)) {
                     const BuiltinEntry *be = builtin_lookup(mod, key);
                     if (be && be->numeric) {

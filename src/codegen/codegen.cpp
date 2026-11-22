@@ -211,10 +211,7 @@ std::string CodeEmitter::int_flag_expr(uint32_t expr_idx, int depth) {
     }
     if (n.type == NodeType::BinaryOp) {
         int bop = n.as.bin_op.op;
-        //------------------ a bitwise result is always an integer, but its exact int64 form is only
-        //------------------ available when both operands have one: keeping the flag tied to the
-        //------------------ operands keeps int_flag_expr and int_value_expr in agreement, so a float
-        //------------------ operand (e.g. 2^52 | 0) never gets a fabricated zero shadow
+        //------------------ a bitwise result is an integer, but only exact when both operands are: keeps int_flag and int_value in step
         if (bop >= static_cast<int>(BinaryOp::BitAnd) && bop <= static_cast<int>(BinaryOp::Shr))
             return "(" + int_flag_expr(n.as.bin_op.left, depth + 1) + " && "
                 + int_flag_expr(n.as.bin_op.right, depth + 1) + ")";
@@ -227,9 +224,7 @@ std::string CodeEmitter::int_flag_expr(uint32_t expr_idx, int depth) {
     }
     if (n.type == NodeType::UnaryOp && n.as.unary_op.op == static_cast<int>(UnaryOp::Minus))
         return int_flag_expr(n.as.unary_op.expr, depth + 1);
-    //------------------ math.maxinteger/mininteger are always Int64 (stock Lua guarantees the
-    //------------------ constants); huge/pi are floats and stay "false". The global check keeps a
-    //------------------ shadowing local named `math` on the conservative path.
+    //------------------ math.maxinteger/mininteger are Int64, huge/pi are floats; a shadowing local `math` stays conservative
     if (n.type == NodeType::TableAccess) {
         uint32_t tbl_idx = n.as.table_access.table;
         uint32_t key_idx = n.as.table_access.key;
@@ -410,9 +405,7 @@ std::string CodeEmitter::int_value_expr(uint32_t expr_idx, int depth, bool *ok) 
     return "0";
 }
 
-//------------------ numeric_key_expr: preserves the integer subtype of a numeric table key - a
-//------------------ static integer expression emits the exact Int64 directly, a runtime int flag
-//------------------ selects the int64 shadow, and anything else falls back to key_of's float view
+//------------------ numeric_key_expr: preserves the Int64 subtype of a numeric key, else key_of's float view
 std::string CodeEmitter::numeric_key_expr(uint32_t key_idx, std::string_view kd) {
     bool ok = false;
     std::string iv = int_value_expr(key_idx, 0, &ok);
@@ -426,11 +419,7 @@ std::string CodeEmitter::numeric_key_expr(uint32_t key_idx, std::string_view kd)
     return "clx::key_of(" + std::string(kd) + ")";
 }
 
-//------------------ unboxed_arg_ok: true when an argument's double, int-flag and int-shadow are
-//------------------ all exact without boxing: integer/number literals, unboxed native locals/params
-//------------------ with exact runtime flags, integer counters, and arithmetic over such. Anything
-//------------------ else (table reads, calls, boxed locals, varargs) can hide an Int64 behind a false
-//------------------ flag, so it stays on the boxed path. Depth-bounded like int_flag_expr.
+//------------------ unboxed_arg_ok: argument whose double, int-flag and int-shadow are exact without boxing
 bool CodeEmitter::unboxed_arg_ok(uint32_t arg_idx, int depth) {
     if (depth > 24 || arg_idx >= ctx.nodes.size())
         return false;
