@@ -136,7 +136,8 @@ inline const BuiltinConst *builtin_const_lookup(std::string_view module, std::st
 }
 
 //------------------ kStdModules: std module globals known to the registry (write-scan coverage)
-inline constexpr std::string_view kStdModules[] = { "math", "string", "table", "os", "_G" };
+inline constexpr std::string_view kStdModules[] = { "math", "string", "table", "os", "io", "utf8", "coroutine",
+    "debug", "package", "base", "_G" };
 
 //------------------ is_std_module_name: name is a std module known to the registry
 inline bool is_std_module_name(std::string_view name) {

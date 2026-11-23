@@ -180,6 +180,7 @@ LValue create_thread(LState *L, const LValue &func, double stack_size) {
     uint8_t prev_age_th = recycled ? t->age : AGE_YOUNG;
 #if defined(_WIN32)
     bool pooled_suspended = recycled && t->status == THREAD_SUSPENDED && t->fiber_started;
+    bool pooled_tail_yield = pooled_suspended && t->yield_tail;
 #endif
     if (t) {
         L->free_threads = static_cast<LThread *>(t->next);
@@ -193,6 +194,7 @@ LValue create_thread(LState *L, const LValue &func, double stack_size) {
     t->yield_args = MultiValue();
     t->has_error = false;
     t->close_requested = false;
+    t->yield_tail = false;
     t->self_close = false;
     t->closing = false;
     t->close_error = false;
@@ -215,8 +217,9 @@ LValue create_thread(LState *L, const LValue &func, double stack_size) {
         if (t->fiber) {
             L->free_fiber_threads--;
             t->pre_unwind = pooled_suspended;
-            //------------------ a pooled suspended fiber resumes its old body, so a close is requested to unwind it to a known point
-            if (pooled_suspended)
+            //------------------ a pooled suspended fiber resumes its old body, so a close is requested to unwind it to a known point;
+            //------------------ a tail yield owes nothing but its return, and the trampoline loop discards that result anyway
+            if (pooled_suspended && !pooled_tail_yield)
                 t->close_requested = true;
         } else {
             t->fiber = CreateFiber(static_cast<SIZE_T>(stack_size), fiber_trampoline, t);
@@ -334,6 +337,9 @@ MultiValue yield(LState *L, const LValue *args, size_t count) {
     caller->status = THREAD_RUNNING;
 
     coro_switch_to(t, caller);
+
+    //------------------ the tail-yield proof belongs to that suspension only: a later one from a native call owes a close
+    t->yield_tail = false;
 
     if (t->close_requested) {
         t->close_requested = false;

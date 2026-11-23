@@ -84,10 +84,13 @@ private:
         int line;
         bool is_method;
         bool name_short;
+        bool is_tail;
     };
 
     std::vector<CallSiteEntry> call_sites;
     std::map<uint64_t, uint32_t> call_site_ids;
+    //------------------ close_guard_funcs: per-function memo of list_has_close_guard for the current function body
+    std::map<uint32_t, bool> close_guard_funcs;
     std::string call_site_table();
     bool is_local(std::string_view name, bool &out_is_boxed, std::string_view &out_cpp_name);
 
@@ -116,7 +119,10 @@ private:
     bool var_reassigned_non_number(std::string_view name, uint32_t block_idx, uint32_t exclude_value_node = 0xFFFFFFFF);
 
     //------------------ emit_call_site: emits one static CallSite descriptor and returns its address expression
-    std::string emit_call_site(int line, bool is_method, bool name_short);
+    std::string emit_call_site(int line, bool is_method, bool name_short, bool is_tail = false);
+
+    //------------------ func_has_close_guard: true when the current body may run a __close before a tail return completes
+    bool func_has_close_guard();
 
     //------------------ emit_node: dispatches to the emitXxx method matching node's type
     void emit_node(uint32_t node_idx);

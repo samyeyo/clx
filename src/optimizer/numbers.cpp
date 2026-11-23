@@ -752,6 +752,9 @@ void pass_numeric_params(const ASTContext &ctx, AnalysisState &state, PassScratc
                                             ctx.nodes[arg_nid].as.ident.name, ctx.nodes[arg_nid].as.ident.length);
                                         std::string callee_pn(cparams[ai]);
                                         bool callee_numeric = state.param_numbers[ci].count(callee_pn) > 0;
+                                        //------------------ only a callee param proven unable to take a number keeps the caller's boxed:
+                                        //------------------ a callee merely not proven yet may be established on a later round
+                                        bool callee_boxed = blocked_params.count({ ci, callee_pn }) > 0;
                                         for (auto &fp : fparams) {
                                             if (fp != arg_nm)
                                                 continue;
@@ -761,7 +764,7 @@ void pass_numeric_params(const ASTContext &ctx, AnalysisState &state, PassScratc
                                                     state.param_numbers[ni].insert(std::string(arg_nm));
                                                     np_changed = true;
                                                 }
-                                            } else {
+                                            } else if (callee_boxed) {
                                                 blocked_params.insert({ ni, std::string(arg_nm) });
                                                 if (state.param_numbers[ni].erase(std::string(arg_nm)) > 0)
                                                     np_changed = true;

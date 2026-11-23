@@ -274,12 +274,12 @@ void CodeEmitter::emitForStatement(const ASTNode &node, uint32_t node_idx) {
         if (bn.type == NodeType::TableAccess) {
             uint32_t tbl = bn.as.table_access.table;
             uint32_t key = bn.as.table_access.key;
-            //------------------ only a known builtin function field is hoisted: any other global field can be reassigned by the body
             if (tbl < ctx.nodes.size() && key < ctx.nodes.size() && ctx.nodes[tbl].type == NodeType::Identifier
                 && ctx.nodes[tbl].as.ident.is_global && ctx.nodes[key].type == NodeType::String) {
                 std::string_view _m(ctx.nodes[tbl].as.ident.name, ctx.nodes[tbl].as.ident.length);
                 std::string_view _f(ctx.nodes[key].as.string.text, ctx.nodes[key].as.string.length);
-                if (builtin_field_ok(state, _m, _f) && lookup_builtin(_m, _f))
+                //------------------ a std module field never written in this file cannot change under the loop: hoist the lookup
+                if (builtin_field_ok(state, _m, _f) && is_std_module_name(_m))
                     _invariant_lookups.push_back(bn_idx);
             }
             self(self, tbl);

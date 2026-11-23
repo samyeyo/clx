@@ -1407,6 +1407,8 @@ struct LThread : public LHeader {
     size_t stack_bytes = 0;
     bool fiber_started = false;
     bool pre_unwind = false;
+    //------------------ yield_tail: the last yield ran as a return value, so resuming this body again only returns it
+    bool yield_tail = false;
     //---------- started: true once the thread has been resumed at least once in its current incarnation
     bool started = false;
     //---------- yield_count: how often this thread continued after a yield; lua_callk/lua_pcallk diff it across a call to detect one
@@ -1442,6 +1444,8 @@ struct CallSite {
     int line;
     bool is_method;
     bool name_short;
+    //------------------ is_tail: the call is its enclosing function's return value, so nothing runs after it returns
+    bool is_tail = false;
 };
 
 inline const CallSite *default_call_site() {
@@ -4015,11 +4019,13 @@ CLX_INLINE_HOT double sync_int_view(double d, int64_t exact, bool flag) {
     return flag ? static_cast<double>(exact) : d;
 }
 
-//------------------ presize_hint: element count from a loop bound; a descending limit presizes to zero
+//------------------ presize_hint: element count from a loop bound; a descending limit presizes to zero and an
+//------------------ absurd bound is capped, since a hint may not pay for storage the loop never fills
 CLX_INLINE size_t presize_hint(double n) {
+    constexpr double kMaxPresize = 16777216.0;
     if (!(n > 0.0))
         return 0;
-    return (n > 1048576.0) ? static_cast<size_t>(1048576) : static_cast<size_t>(n);
+    return (n > kMaxPresize) ? static_cast<size_t>(kMaxPresize) : static_cast<size_t>(n);
 }
 
 //------------------ package module (package.cpp); package_searchpath resolves module names against path templates

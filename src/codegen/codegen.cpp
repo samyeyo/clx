@@ -459,17 +459,84 @@ bool CodeEmitter::unboxed_arg_ok(uint32_t arg_idx, int depth) {
     return false;
 }
 
+//------------------ list_has_close_guard: whether a statement list holds a to-be-closed local or a generic-for state
+static bool list_has_close_guard(const ASTContext &ctx, uint32_t block_idx) {
+    if (block_idx == 0xFFFFFFFF || block_idx >= ctx.nodes.size())
+        return false;
+    const ASTNode &blk = ctx.nodes[block_idx];
+    if (blk.type != NodeType::Block)
+        return false;
+    for (uint32_t i = 0; i < blk.as.block.count; ++i) {
+        uint32_t si = ctx.block_statements[blk.as.block.first_statement + i];
+        if (si >= ctx.nodes.size())
+            continue;
+        const ASTNode &st = ctx.nodes[si];
+        if (st.type == NodeType::LocalDecl) {
+            for (uint32_t k = 0; k < st.as.local_decl.ident_count; ++k) {
+                uint32_t ii = ctx.block_statements[st.as.local_decl.first_ident + k];
+                if (ii < ctx.nodes.size() && ctx.nodes[ii].type == NodeType::Identifier
+                    && ctx.nodes[ii].as.ident.attr == Attribute::Close)
+                    return true;
+            }
+            continue;
+        }
+        if (st.type == NodeType::GlobalDeclStatement) {
+            if (st.as.global_decl.attr == Attribute::Close)
+                return true;
+            continue;
+        }
+        uint32_t inner = 0xFFFFFFFF;
+        switch (st.type) {
+        case NodeType::GenericForStatement:
+            return true;
+        case NodeType::IfStatement:
+            if (list_has_close_guard(ctx, st.as.if_stmt.then_block)
+                || list_has_close_guard(ctx, st.as.if_stmt.else_block))
+                return true;
+            continue;
+        case NodeType::WhileStatement:
+            inner = st.as.while_stmt.body_block;
+            break;
+        case NodeType::RepeatStatement:
+            inner = st.as.repeat_stmt.body_block;
+            break;
+        case NodeType::ForStatement:
+            inner = st.as.for_stmt.body_block;
+            break;
+        case NodeType::DoStatement:
+            inner = st.as.do_stmt.body_block;
+            break;
+        default:
+            continue;
+        }
+        if (list_has_close_guard(ctx, inner))
+            return true;
+    }
+    return false;
+}
+
+//------------------ func_has_close_guard: memoised guard check for the function body now being emitted
+bool CodeEmitter::func_has_close_guard() {
+    uint32_t body = state.current_func_body;
+    auto it = close_guard_funcs.find(body);
+    if (it != close_guard_funcs.end())
+        return it->second;
+    bool has = list_has_close_guard(ctx, body);
+    close_guard_funcs.emplace(body, has);
+    return has;
+}
+
 //------------------ emit_call_site: interns a (line, flags) descriptor and returns its table address
-std::string CodeEmitter::emit_call_site(int line, bool is_method, bool name_short) {
-    uint64_t key
-        = (static_cast<uint64_t>(static_cast<uint32_t>(line)) << 2) | (is_method ? 1u : 0u) | (name_short ? 2u : 0u);
+std::string CodeEmitter::emit_call_site(int line, bool is_method, bool name_short, bool is_tail) {
+    uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(line)) << 3) | (is_method ? 1u : 0u)
+        | (name_short ? 2u : 0u) | (is_tail ? 4u : 0u);
     auto it = call_site_ids.find(key);
     uint32_t id;
     if (it != call_site_ids.end()) {
         id = it->second;
     } else {
         id = static_cast<uint32_t>(call_sites.size());
-        call_sites.push_back({ line, is_method, name_short });
+        call_sites.push_back({ line, is_method, name_short, is_tail });
         call_site_ids.emplace(key, id);
     }
     return "&_sites[" + std::to_string(id) + "]";
@@ -482,7 +549,7 @@ std::string CodeEmitter::call_site_table() {
     std::string t = "static constexpr clx::CallSite _sites[" + std::to_string(call_sites.size()) + "] = {\n";
     for (const auto &s : call_sites) {
         t += "    { \"" + ctx.filename + "\", " + std::to_string(s.line) + ", " + (s.is_method ? "true" : "false")
-            + ", " + (s.name_short ? "true" : "false") + " },\n";
+            + ", " + (s.name_short ? "true" : "false") + ", " + (s.is_tail ? "true" : "false") + " },\n";
     }
     t += "};\n\n";
     return t;
@@ -492,6 +559,7 @@ std::string CodeEmitter::call_site_table() {
 void CodeEmitter::emit(uint32_t root_node, std::string_view module_name) {
     call_sites.clear();
     call_site_ids.clear();
+    close_guard_funcs.clear();
     state.native_numbers.clear();
     state.string_pool.clear();
     state.table_presize.clear();

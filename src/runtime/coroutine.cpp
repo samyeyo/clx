@@ -39,6 +39,8 @@ clx::MultiValue coroutine_resume(clx::LState *L, const clx::LValue *args, size_t
 
 //------------------ coroutine_yield: yields execution from a coroutine
 clx::MultiValue coroutine_yield(clx::LState *L, const clx::LValue *args, size_t count) {
+    //------------------ the call site is this yield's own, so the compiler's proof that it sits in return position is exact
+    L->running_thread->yield_tail = L->current_site && L->current_site->is_tail;
     return clx::yield(L, args, count);
 }
 

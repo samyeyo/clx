@@ -1311,7 +1311,8 @@ void CodeEmitter::emitReturnStatement(const ASTNode &node, uint32_t node_idx) {
         }
 
         out << "{\n";
-        std::string _cs = emit_call_site(call_node.line, ret_is_method, ret_name_short);
+        //------------------ the call is this function's return value: a yield here leaves nothing but a return to run
+        std::string _cs = emit_call_site(call_node.line, ret_is_method, ret_name_short, !func_has_close_guard());
         bool last_expands = false;
         uint32_t last_arg = 0xFFFFFFFF;
         if (call_node.as.call_expr.arg_count > 0) {

@@ -101,11 +101,11 @@ clx compares well against the reference Lua 5.5 interpreter:
 
 | Script | lua 5.5 | LuaJIT | clx `--fast` |
 |--------|---------|--------|--------------------------|
-| fib.lua | 0.299s (1.00x) | 0.049s (6.10x) | **0.006s (49.83x)** |
-| arraysum.lua | 0.305s (1.00x) | **0.086s (3.55x)** | 0.090s (3.39x) |
-| spectralnorm.lua | 0.328s (1.00x) | 0.021s (15.62x) | **0.019s (17.26x)** |
-| canada.lua | 0.356s (1.00x) | **0.148s (2.41x)** | 0.244s (1.46x) |
-| warmup.lua | 0.008s (1.00x) | 0.006s (1.33x) | **0.004s (2.00x)** |
+| fib.lua | 0.295s (1.00x) | 0.048s (6.15x) | **0.016s (18.44x)** |
+| arraysum.lua | 0.279s (1.00x) | **0.088s (3.17x)** | 0.164s (1.70x) |
+| spectralnorm.lua | 0.310s (1.00x) | **0.016s (19.38x)** | 0.019s (16.32x) |
+| canada.lua | 0.269s (1.00x) | **0.106s (2.54x)** | 0.226s (1.19x) |
+| warmup.lua | 0.004s (1.00x) | 0.003s (1.33x) | **0.002s (2.00x)** |
 
 > Measured on an Intel® Core™ Ultra 5 125U CPU @ 4.30GHz · Linux · GCC 15.2.0 · Average of 10 runs · clx `--fast` built with AVX2 (`CLX_ARCH=avx2`)
 
