@@ -101,13 +101,13 @@ clx compares well against the reference Lua 5.5 interpreter:
 
 | Script | lua 5.5 | LuaJIT | clx `--fast` |
 |--------|---------|--------|--------------------------|
-| fib.lua | 0.295s (1.00x) | 0.048s (6.15x) | **0.016s (18.44x)** |
-| arraysum.lua | 0.279s (1.00x) | **0.088s (3.17x)** | 0.164s (1.70x) |
-| spectralnorm.lua | 0.310s (1.00x) | **0.016s (19.38x)** | 0.019s (16.32x) |
-| canada.lua | 0.269s (1.00x) | **0.106s (2.54x)** | 0.226s (1.19x) |
-| warmup.lua | 0.004s (1.00x) | 0.003s (1.33x) | **0.002s (2.00x)** |
+| fib.lua | 0.330s (1.00x) | 0.061s (5.40x) | **0.020s (16.48x)** |
+| arraysum.lua | 0.333s (1.00x) | **0.097s (3.43x)** | 0.126s (2.64x) |
+| spectralnorm.lua | 0.339s (1.00x) | **0.021s (16.27x)** | 0.022s (15.32x) |
+| canada.lua | 0.337s (1.00x) | **0.128s (2.63x)** | 0.264s (1.27x) |
+| warmup.lua | **0.004s (1.00x)** | 0.008s (0.43x) | 0.005s (0.71x) |
 
-> Measured on an Intel® Core™ Ultra 5 125U CPU @ 4.30GHz · Linux · GCC 15.2.0 · Average of 10 runs · clx `--fast` built with AVX2 (`CLX_ARCH=avx2`)
+> Measured on an Intel® Core™ Ultra 5 125U CPU @ 4.30GHz · Windows 11 + WSL2 (Ubuntu 24.04) · GCC 15.2.0 · Average of 10 runs · clx `--fast` built with the portable baseline (`CLX_ARCH` unset)
 
 > Full benchmarks are available in **[clx benchmarks](./doc/benchmarks.md)**
 
